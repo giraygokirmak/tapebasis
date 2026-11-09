@@ -16,7 +16,7 @@ Modifications:  package namespace rewritten to
                 tapebasis.providers.tradingview.*; the optional proxy
                 layer (proxy_manager and all PROXY_* environment handling) was
                 removed; the upstream server entrypoint (MCP tool
-                registrations, server.py) was NOT vendored — this repository
+                registrations, server.py) was NOT vendored: this repository
                 provides its own tool layer. The upstream core/ services and
                 bundled coinlists are used as-is.
 
@@ -58,7 +58,7 @@ Modifications:  package namespace rewritten to
                 tapebasis.providers.finviz.*; the optional proxy layer
                 (proxy_manager and all PROXY_* environment handling) was
                 removed; the upstream server entrypoint (MCP tool
-                registrations, server.py) was NOT vendored — this repository
+                registrations, server.py) was NOT vendored: this repository
                 provides its own tool layer. The upstream core/ services are
                 used as-is.
 
