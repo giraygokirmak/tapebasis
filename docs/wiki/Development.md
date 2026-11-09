@@ -12,7 +12,7 @@ pip install -e ".[dev]"
 ## Tests
 
 ```bash
-pytest                      # 323 hermetic tests, no network
+pytest                      # the hermetic suite, no network
 pytest -m live              # opt-in: hits real upstreams
 pytest tests/test_reconcile.py -v
 ```
@@ -44,6 +44,7 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_extended_hours.py` | Pre/post session volumes from the scanner row, and the Yahoo-session fallback |
 | `test_server.py` | Tool registration, MCP surface |
 | `test_dockerfile.py` | The deployment contract: `tini` as PID 1, the entrypoint argv, `init: true` in compose |
+| `test_quality_gate.py` | The gate's own documentation checks, against a temporary repository |
 
 `test_upstream_contract.py` is the file to extend when live probing finds a provider behaving
 surprisingly. Every case in it was found by calling the real upstream and getting something the
@@ -180,10 +181,79 @@ A tool that asks a single provider still returns `SINGLE_SOURCE` by construction
 - Velocities and percentages need a sign convention; state it where it is computed.
 - Provider code does not import from the orchestration layer. Keep the dependency one-way.
 
+## Quality gate
+
+A change is finished when the tests are green and the documentation describes
+the new behaviour, in one batch. `scripts/quality-gate.sh` is that rule, and
+`.opencode/plugins/quality-gate/` enforces it: the plugin hooks the `shell`
+tool, notices a `git commit` or `git push`, runs the gate against the working
+tree, and refuses the command while anything is red. The rule is mechanical, so
+it does not depend on anyone remembering to ask.
+
+```bash
+scripts/quality-gate.sh            # tests, documentation, wiki mirror
+scripts/quality-gate.sh --commit   # tests and documentation
+scripts/quality-gate.sh --push     # tests, documentation, wiki mirror
+scripts/quality-gate.sh --tests-only
+scripts/quality-gate.sh --docs-only
+python scripts/quality_gate.py     # documentation checks only, JSON report
+```
+
+The script picks `.venv/bin/python`, then `venv/bin/python`, then the first
+interpreter on `PATH` that can import `pytest`, and stops with a clear message
+when none of them can. Set `TAPEBASIS_PYTHON` when the environment lives
+elsewhere.
+
+A push also mirrors `docs/wiki/` into the wiki repository, so the published pages
+cannot lag behind the repository. The mirror is skipped while `docs/wiki/` is
+identical to the last synced tree, which is recorded in
+`.git/tapebasis-wiki-sync` under the `HEAD:docs/wiki` object name.
+
+`.githooks/pre-commit` and `.githooks/pre-push` run the same script, so a commit
+from a terminal or an IDE is gated too. Install them once per clone with
+`git config core.hooksPath .githooks`; the plugin does that on first use when the
+repository has no setting of its own. The two layers are deliberately
+independent: `--no-verify` skips the hook and not the plugin, and a commit
+arriving from outside OpenCode is seen by the hook and not the plugin.
+
+An opaque script is the one path neither layer parses: a `./deploy.sh` that runs
+`git commit` internally is caught by the hook, because git itself runs it, but
+not by the plugin, which only reads the command string it is given.
+
+### What the gate checks
+
+| Check | Blocks on |
+| --- | --- |
+| `pytest` | Any failing test, collection errors included |
+| `undocumented` | A function or method with no docstring that is not in the frozen baseline |
+| `stale-baseline` | A baseline entry that is documented now, so the baseline only shrinks |
+| `em-dash` | The em dash character in any tracked text file |
+| `wiki-links` | A relative wiki link whose page or `#fragment` does not exist |
+| `doc-with-code` | A changed public signature with no documentation in the same batch |
+| `tool-coverage` | A registered tool the README or the Tools Reference does not name |
+| `tool-count` | An advertised tool count that differs from the registered surface |
+
+`scripts/quality_gate_baseline.json` freezes the docstring debt that predates the
+gate. It is a floor, not a budget: an entry disappears when the function is
+documented, and a function written now must arrive documented.
+
+The checks are tested in `tests/test_quality_gate.py` against a temporary
+repository, so the gate itself cannot regress silently.
+
+### The instruction layer
+
+Three files make the rule legible before the gate has to enforce it:
+
+| File | Role |
+| --- | --- |
+| `AGENTS.md` | The definition of done, in the instructions every session loads |
+| `.opencode/skills/quality-gate/` | The checklist and the per-check reference |
+| `.opencode/agents/doc-auditor.md` | A read-only reviewer for documentation that went stale |
+
 ## Checks before pushing
 
 ```bash
-pytest
+scripts/quality-gate.sh                       # tests and documentation, the gate itself
 python -m pyflakes src/tapebasis tests        # provider code has pre-existing noise
 python -m compileall -q src/tapebasis
 ```
@@ -194,7 +264,7 @@ Two GitHub Actions workflows:
 
 | Workflow | Purpose |
 | --- | --- |
-| `test.yml` | Install on 3.10–3.13, run `pytest`, smoke-test the tool surface |
+| `test.yml` | Install on 3.10–3.13, run `pytest`, run the documentation gate, smoke-test the tool surface |
 | `publish-image.yml` | Build and publish the multi-arch image to `ghcr.io/<owner>/<repo>` |
 
 ## Editing these docs

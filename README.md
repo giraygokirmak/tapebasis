@@ -538,13 +538,19 @@ No proxy configuration exists: every provider reaches its upstream directly.
 
 ```bash
 pip install -e ".[dev]"     # or, with uv: uv venv && uv pip install -e ".[dev]"
-pytest                      # 323 hermetic tests, no network
+pytest                      # the hermetic suite, no network
 pytest -m live              # opt-in: hits real upstreams
+scripts/quality-gate.sh --commit   # tests plus the documentation checks
 ```
 
 Tests mock at the HTTP boundary (`httpx.MockTransport`) and the provider-access boundary, so the
 suite runs offline and deterministically, including the drift-detection tests that corrupt a stored
 baseline and assert the warning reaches a normal tool response.
+
+`scripts/quality-gate.sh` also checks the documentation: an undocumented function, a stale tool
+count, a broken wiki link, an em dash, or a changed public signature with no documentation in the
+same batch all fail it. The OpenCode plugin in `.opencode/plugins/quality-gate/` runs the same
+script before a `git commit` or `git push` and refuses the command while it is red.
 
 ## Layout
 

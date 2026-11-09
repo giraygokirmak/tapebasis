@@ -37,6 +37,9 @@ jobs:
       - name: Run the hermetic suite
         run: .venv/bin/python -m pytest -q
 
+      - name: Run the documentation gate
+        run: .venv/bin/python scripts/quality_gate.py
+
       - name: Smoke-test the tool surface
         run: |
           .venv/bin/python - <<'PY'
