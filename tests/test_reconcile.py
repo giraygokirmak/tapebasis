@@ -246,6 +246,47 @@ def test_merge_carries_yahoo_only_fields():
     assert merged.fields["yh_only"] is DataProvider.YAHOO
 
 
+def test_uncontested_field_comes_from_the_freshest_provider():
+    """``setdefault`` makes the first writer win, so the order has to be newest first.
+
+    This iterated ``reversed(order)`` while claiming the opposite, which let the
+    stalest provider fill every field the spec list did not compare. Live, that
+    served a 4-day-old TradingView sector over a fresh Finviz one.
+    """
+    merged = merge_many(
+        {
+            TRADINGVIEW: {"price": 10.0, "sector": "stale-sector"},
+            FINVIZ: {"price": 10.0, "sector": "fresh-sector"},
+        },
+        (FieldSpec("price", lambda p: p["price"], lambda p: p["price"]),),
+        shapes={
+            TRADINGVIEW: lambda p: {"sector": p["sector"]},
+            FINVIZ: lambda p: {"sector": p["sector"]},
+        },
+        times={
+            TRADINGVIEW: "2026-11-03T20:00:00+00:00",
+            FINVIZ: "2026-11-03T21:00:00+00:00",
+        },
+    )
+    assert merged.chosen == FINVIZ
+    assert merged.data["sector"] == "fresh-sector"
+    assert merged.fields["sector"] is DataProvider.FINVIZ
+
+
+def test_uncontested_field_falls_back_to_the_documented_order_on_a_tie():
+    """With no print-time difference, DEFAULT_ORDER decides, not iteration order."""
+    merged = merge_many(
+        {TRADINGVIEW: {"price": 10.0, "sector": "tv"}, FINVIZ: {"price": 10.0, "sector": "fv"}},
+        (FieldSpec("price", lambda p: p["price"], lambda p: p["price"]),),
+        shapes={
+            TRADINGVIEW: lambda p: {"sector": p["sector"]},
+            FINVIZ: lambda p: {"sector": p["sector"]},
+        },
+    )
+    assert merged.chosen == FINVIZ
+    assert merged.data["sector"] == "fv"
+
+
 # ── pair semantics ──────────────────────────────────────────────────────────
 
 

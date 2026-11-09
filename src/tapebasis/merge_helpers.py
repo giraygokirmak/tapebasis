@@ -52,8 +52,24 @@ def fv_quote_fields(payload: dict[str, Any]) -> dict[str, Any]:
         # ("351.73 -5.64%") and can never be compared with the other provider.
         "week_52_high": lead_float(snapshot.get("52W High")),
         "week_52_low": lead_float(snapshot.get("52W Low")),
+        # Finviz's page does not publish a day open/high/low row in its
+        # snapshot table, so these stay absent rather than being invented: a
+        # spec whose getter returns None is a provider that has nothing to say,
+        # which is different from a provider that said nothing.
         "after_hours_price": after.get("price"),
         "after_hours_change_percent": after.get("change_percent"),
+        # Identity fields the quote payload already carried and the shaper
+        # dropped: the company website and logo were parsed into the payload
+        # and then never reached an agent.
+        "website": payload.get("website"),
+        "logo_url": payload.get("logo_url"),
+        "market_cap_class": payload.get("market_cap_class"),
+        "etf_type": payload.get("etf_type"),
+        # The revenue/expense breakdown and the product/region/segment revenue
+        # split. Finviz ships this as a JSON island on the same page the quote
+        # already fetched, so it costs no extra request; it was previously
+        # dropped before it reached any tool.
+        "income_breakdown": payload.get("income_breakdown"),
         "snapshot": payload.get("snapshot") or {},
         "snapshot_numeric": snapshot,
         "profile": payload.get("profile"),

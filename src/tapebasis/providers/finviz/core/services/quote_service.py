@@ -114,6 +114,153 @@ def _resolved_warning(requested: str, header: dict[str, Any]) -> dict[str, Any] 
     return None
 
 
+#: The three revenue axes finviz publishes under ``revenue``, keyed to the
+#: vocabulary the payload uses. The meaning of each axis is company-specific
+#: (Apple's ``segment`` is geographic, NVIDIA's is operating segments), so the
+#: keys stay as finviz sends them instead of being relabelled into something
+#: that would be wrong for half the market.
+_REVENUE_AXES = ("products_and_services", "regions", "segment")
+
+#: The island's two blocks do not share a scale. ``statement`` publishes
+#: millions (``"478,834.00"`` for Apple's $478.834bn) while ``revenue`` publishes
+#: absolute dollars (``37929000000`` for a $37.929bn product line). Verified
+#: against the page's own ``Sales`` snapshot field across large caps, banks,
+#: foreign filers and sub-million-revenue companies: statement x 1e6 lines up
+#: with it every time, the axis totals line up with the statement. Serving the
+#: raw strings would hand an agent two numbers for the same company that differ
+#: by six orders of magnitude, so the statement is scaled here and the applied
+#: factor is reported alongside.
+_STATEMENT_SCALE = 1_000_000.0
+
+
+def _parse_money(text: Any) -> float | None:
+    """``"1,234.50"`` / ``""`` / ``"-"`` -> float or None.
+
+    The breakdown island formats every amount as a comma-grouped string with no
+    currency symbol and no scaling suffix, so this is deliberately narrower than
+    :func:`coerce_snapshot_value`: a suffix here would be a formatting change
+    worth surfacing, not silently guessing.
+    """
+    if text is None:
+        return None
+    if isinstance(text, (int, float)) and not isinstance(text, bool):
+        return float(text)
+    cleaned = str(text).strip().replace(",", "")
+    if cleaned in {"", "-", "--", "n/a", "N/A"}:
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def shape_income_breakdown(payload: Any) -> dict[str, Any] | None:
+    """Normalise the ``income-breakdown-init-data-0`` island.
+
+    The island carries two things the rest of the quote page does not:
+
+    * ``statement``: the "Revenue & Expenses Breakdown" table, up to two fiscal
+      years of revenue / gross profit / operating income / net income plus the
+      expense lines between them. Bank-shaped filers swap the row set (interest
+      income, loan loss provision, ...) because that is what they report.
+    * ``revenue``: up to three annual revenue axes (product line, geographic
+      region, reported segment). Which axes exist varies by company and some
+      filers have only one.
+
+    Two traps are handled explicitly rather than left to the caller:
+
+    * **Scale.** ``statement`` is published in millions, ``revenue`` in absolute
+      currency units (see :data:`_STATEMENT_SCALE`). The statement is multiplied
+      out so every amount in the response is in the same unit, and
+      ``statement.scale_applied`` states the factor that was used.
+    * **Currency.** ``converted`` is true when finviz FX-converted the axis
+      amounts into the filing currency; ``currency`` and ``unit`` are reported
+      next to the numbers, and ``converted`` stays visible, so a caller never has
+      to assume either.
+
+    Returns ``None`` when the island is absent or holds neither block, so the
+    caller can tell "finviz has no breakdown" from "the breakdown was empty".
+    """
+    if not isinstance(payload, dict):
+        return None
+
+    statement = payload.get("statement")
+    out: dict[str, Any] = {}
+    if isinstance(statement, dict) and isinstance(statement.get("data"), dict):
+        raw_rows = statement["data"]
+        periods = raw_rows.get("Period") or []
+        rows: list[dict[str, Any]] = []
+        for label, values in raw_rows.items():
+            if label == "Period" or not isinstance(values, list):
+                continue
+            amounts = [_parse_money(value) for value in values]
+            rows.append(
+                {
+                    "label": label,
+                    "values": [
+                        None if amount is None else amount * _STATEMENT_SCALE
+                        for amount in amounts
+                    ],
+                }
+            )
+        if periods and rows:
+            out["statement"] = {
+                "currency": statement.get("currency"),
+                # Every amount below is absolute currency units; the source
+                # table is in millions and was multiplied by this factor.
+                "scale_applied": _STATEMENT_SCALE,
+                "periods": list(periods),
+                "rows": rows,
+            }
+
+    revenue = payload.get("revenue")
+    if isinstance(revenue, dict):
+        axes: dict[str, Any] = {}
+        for axis in _REVENUE_AXES:
+            block = revenue.get(axis)
+            if not isinstance(block, dict):
+                continue
+            series: dict[str, dict[str, float | None]] = {}
+            years: list[str] = []
+            for name, points in (block.get("revenues") or {}).items():
+                if not isinstance(points, list):
+                    continue
+                by_year: dict[str, float | None] = {}
+                for point in points:
+                    if not isinstance(point, dict):
+                        continue
+                    year = str(point.get("fiscal_year") or "")
+                    if not year:
+                        continue
+                    by_year[year] = _parse_money(point.get("value"))
+                    if year not in years:
+                        years.append(year)
+                if by_year:
+                    series[str(name)] = by_year
+            if not series:
+                continue
+            axes[axis] = {
+                "unit": block.get("unit"),
+                "converted": block.get("converted"),
+                "series": series,
+            }
+        if axes:
+            # Newest fiscal year first, the same direction finviz's own table
+            # reads, so the two blocks line up without the caller re-sorting.
+            years = sorted(
+                {
+                    year
+                    for axis in axes.values()
+                    for by_year in axis["series"].values()
+                    for year in by_year
+                },
+                reverse=True,
+            )
+            out["revenue"] = {"years": years, "axes": axes}
+
+    return out or None
+
+
 async def get_quote(ticker: str) -> dict[str, Any]:
     """Full overview for one ticker: header + snapshot + profile + peers.
 
@@ -129,6 +276,13 @@ async def get_quote(ticker: str) -> dict[str, Any]:
     snapshot = parse_snapshot(html)
     profile = parse_profile(html)
     peers = parse_peers(html)
+    # The revenue/expense breakdown ships as a JSON island on this same page, so
+    # reading it costs no extra request. It used to be dropped entirely: the
+    # page was fetched, the island was in the HTML, and nothing downstream could
+    # see the segment or geographic revenue split because of it.
+    income_breakdown = shape_income_breakdown(
+        extract_script_json(html, "income-breakdown-init-data-0")
+    )
 
     if not header.get("ticker") or not snapshot["fields"]:
         raise FinvizServiceError(
@@ -147,12 +301,14 @@ async def get_quote(ticker: str) -> dict[str, Any]:
         "industry": header.get("industry"),
         "country": header.get("country"),
         "market_cap_class": header.get("market_cap_class"),
+        "etf_type": header.get("etf_type"),
         "last_close": header.get("last_close"),
         "after_hours": header.get("after_hours"),
         "snapshot": snapshot["fields"],
         "snapshot_numeric": _numbers(snapshot["fields"]),
         "snapshot_pairs": snapshot["pairs"],
         "descriptions": snapshot["descriptions"],
+        "income_breakdown": income_breakdown,
         "profile": profile,
         "peers": peers,
         "source": _stock_url(symbol),
@@ -183,6 +339,12 @@ async def get_snapshot(ticker: str) -> dict[str, Any]:
         "numeric": _numbers(snapshot["fields"]),
         "pairs": snapshot["pairs"],
         "descriptions": snapshot["descriptions"],
+        # Same island, same page: reading it here adds no request and makes the
+        # fundamentals-only tool able to answer "which segment earned the
+        # revenue" instead of only reporting the consolidated total.
+        "income_breakdown": shape_income_breakdown(
+            extract_script_json(html, "income-breakdown-init-data-0")
+        ),
         "field_count": len(snapshot["fields"]),
     }
 
@@ -337,35 +499,29 @@ async def get_dilution(ticker: str) -> dict[str, Any]:
     at the Dilution page, but only for companies whose share count Finviz
     considers dilution-prone: large caps return ``null`` for the island and
     render the *income statement breakdown* instead
-    (``income-breakdown-init-data-0``). Both shapes are handled; the response
-    always carries ``company`` (possibly ``None``) and adds whichever data the
-    tab actually had.
+    (``income-breakdown-init-data-0``).
+
+    That breakdown is not dilution data, and it used to be returned from here
+    anyway, which made a tool named ``stock_dilution`` answer with an income
+    statement and ``model_available: false`` for 29 of 30 tickers. It is now
+    served where it belongs (``stock_quote`` and the Finviz snapshot carry it
+    from the same page), so this function raises ``NO_DATA`` instead of
+    substituting a different dataset.
     """
     symbol = validate_ticker(ticker)
     html = await finviz_client.fetch_html(_stock_url(symbol, tab="di"))
     data = extract_script_json(html, "route-init-data")
-    breakdown = extract_script_json(html, "income-breakdown-init-data-0")
 
     if isinstance(data, dict) and "company" in data:
         data.setdefault("source", _stock_url(symbol, tab="di"))
         data.setdefault("model_available", True)
         return data
 
-    if isinstance(breakdown, dict) and breakdown.get("statement"):
-        return {
-            "ticker": symbol,
-            "company": None,
-            "model_available": False,
-            "note": "finviz did not flag this company as dilution-prone, so the "
-            "Dilution model is empty; the tab's income-statement breakdown is "
-            "returned instead. Run finviz_quote / finviz_snapshot for share "
-            "count and float, or finviz_filings for S-1 / 424B5 offerings.",
-            "income_breakdown": breakdown,
-            "source": _stock_url(symbol, tab="di"),
-        }
-
     raise FinvizServiceError(
         ErrorCode.NO_DATA,
-        f"finviz.com has neither a dilution model nor an income breakdown for {symbol}",
+        f"finviz.com has no dilution model for {symbol}: it only builds one for "
+        "companies whose share count it considers dilution-prone. The tab does "
+        "render an income-statement breakdown, but that is revenue/expense data, "
+        "not dilution; it is served by stock_quote under `income_breakdown`.",
         ticker=symbol,
     )

@@ -240,6 +240,7 @@ readings are not flagged over rounding noise.
 | price | 0.5 % | Same instrument, different print times |
 | change % | 2 % (floor 0.05) | Derived from different reference closes; not judged at all on FX |
 | previous close | 0.5 % | Should be identical; a gap is meaningful |
+| session open/high/low | 0.5 % | Same session, different print moments; open is compared only where both sides publish it |
 | P/E | 2 % | Rounding in the Finviz snapshot |
 | RSI(14) | 5 % (floor 0.5) | Different lookback windows |
 | volume | 1 % | Intraday accumulation timing |
@@ -251,7 +252,8 @@ readings are not flagged over rounding noise.
 Tolerances are per-field in `tools_market._quote_specs()` and at the comparison sites, and are echoed
 back in each `comparisons` row.
 
-Fields marked session-relative (`change_percent`, `previous_close`, `volume`) are governed by three
+Fields marked session-relative (`change_percent`, `previous_close`, `volume`, `day_high`, `day_low`,
+`day_open`) are governed by three
 guards, applied per field, because a day change is measured against the previous close *of the
 session the print belongs to*:
 
@@ -262,9 +264,9 @@ session the print belongs to*:
 | `session_boundary` | US/Eastern date | prints on either side of a session roll, even 30 s apart | a feed that stopped updating inside one session |
 | `max_age_seconds` | 8 h, within one session date | a print that stopped advancing while the clock kept moving | anything across a session boundary, where a quote legitimately ages overnight |
 
-The age ceiling is set on `change_percent` and `volume`, the two fields re-derived from the print.
-`previous_close` does not get it: an old quote does not falsify a previous close, so only the skew
-and session-date guards apply there.
+The age ceiling is set on `change_percent`, `volume` and the session range, the fields re-derived from
+the print. `previous_close` does not get it: an old quote does not falsify a previous close, so only
+the skew and session-date guards apply there.
 
 Readings that fail a guard are reported as *not comparable* rather than as a disagreement: both
 readings stay in `comparisons`, the field is named in `warnings`, and it is never counted as a

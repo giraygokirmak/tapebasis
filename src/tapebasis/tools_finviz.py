@@ -12,7 +12,7 @@ from typing import Any
 
 from . import fv_access
 from .health import FINVIZ, MONITOR
-from .providers_state import DataProvider, envelope, error_code
+from .providers_state import DataProvider, NoDataError, envelope, error_code
 from .reconcile import finalize, single
 from .symbols import strip_exchange, to_finviz
 
@@ -42,6 +42,12 @@ def _single_response(
 
 def _failed(symbol: str, exc: BaseException) -> dict[str, Any]:
     code = error_code(exc)
+    if isinstance(exc, NoDataError):
+        # ``NoDataError`` carries no ``code`` attribute, so ``error_code`` would
+        # report ``PROVIDER_ERROR``. "Finviz answered and had nothing" is not a
+        # provider failure, and an agent reading ``errors`` must be able to tell
+        # the two apart.
+        code = "NO_DATA"
     message = getattr(exc, "message", None) or f"{type(exc).__name__}: {exc}"
     return envelope(
         None,
@@ -227,12 +233,19 @@ async def stock_chart(
 async def stock_dilution(symbol: str) -> dict[str, Any]:
     """Dilution-risk model: share count, float and cash runway (Finviz-only).
 
+    Finviz only builds this model for companies whose share count it considers
+    dilution-prone, so a large cap legitimately has none. When that happens the
+    response is ``NONE`` with the reason, not an income statement wearing the
+    dilution label: the revenue/expense breakdown the same tab renders is
+    served by ``stock_quote`` and ``stock_dilution`` is not the tool for it.
+
     Args:
         symbol: Ticker.
 
     Returns:
-        Envelope labelled ``FINVIZ``; ``model_available`` says whether Finviz
-        flagged the company as dilution-prone.
+        Envelope labelled ``FINVIZ``; ``schema_version`` and ``company``
+        describe the model. ``NONE`` with a stated reason when Finviz has no
+        model for this company.
     """
     ticker = strip_exchange(symbol).upper()
     try:

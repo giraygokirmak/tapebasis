@@ -175,7 +175,14 @@ def _probes() -> list[Probe]:
             description="finviz.com /stock?t=AAPL rendered snapshot table",
             url="https://finviz.com/stock?t=AAPL&ta=1&p=d",
             headers={"User-Agent": BROWSER_UA, "Accept": "text/html,application/xhtml+xml"},
-            markers=("js-snapshot-table",),
+            # Every marker is a field the server now serves, not just page
+            # scaffolding: the snapshot table, the classification chips (sector /
+            # industry / country / exchange) and the revenue-breakdown island.
+            markers=(
+                "js-snapshot-table",
+                "quote-header_category",
+                "income-breakdown-init-data",
+            ),
         ),
         Probe(
             id="finviz.news_api",

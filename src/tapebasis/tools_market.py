@@ -200,9 +200,13 @@ _FX_DAY_CHANGE_REASON = (
 def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]:
     """Fields every provider is asked for, and the tolerance for each.
 
-    Every spec carries a getter for every provider. A missing getter would silently
-    exclude that provider from the comparison, which would make an
-    ``ALL`` label claim coverage the comparison never actually checked.
+    Every spec that a provider *can* answer carries a getter for that provider. A
+    missing getter would silently exclude that provider from the comparison,
+    which would make an ``ALL`` label claim coverage the comparison never
+    actually checked. ``day_open`` is the one exception and it is deliberate:
+    Finviz has no Open row and Bloomberg's page carries it only sometimes, so its
+    spec has getters for the two providers that publish it instead of a getter
+    that reads a field nobody asked for.
 
     ``day_change_comparable=False`` marks the day change as structurally not
     comparable instead of comparing readings that share no baseline. Every
@@ -301,6 +305,47 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
             session_boundary=True,
             max_age_seconds=MAX_SESSION_AGE_SECONDS,
         ),
+        # The session's own high and low. Every price feed here publishes them
+        # and none of the tools did: TradingView returned them on each scanner
+        # row, Yahoo on each chart ``meta``, Bloomberg on its quote page. A
+        # session range is a high-water mark for the day, so it is
+        # session-relative exactly like volume: two prints from different
+        # sessions are two different ranges, not a disagreement.
+        FieldSpec(
+            "day_high",
+            lambda p: p.get("day_high"),
+            lambda p: p.get("day_high"),
+            yh_get=lambda p: p.get("day_high"),
+            bb_get=lambda p: p.get("day_high"),
+            tolerance_pct=0.5,
+            max_skew_seconds=SKEW_LIMIT_SECONDS,
+            session_boundary=True,
+            max_age_seconds=MAX_SESSION_AGE_SECONDS,
+        ),
+        FieldSpec(
+            "day_low",
+            lambda p: p.get("day_low"),
+            lambda p: p.get("day_low"),
+            yh_get=lambda p: p.get("day_low"),
+            bb_get=lambda p: p.get("day_low"),
+            tolerance_pct=0.5,
+            max_skew_seconds=SKEW_LIMIT_SECONDS,
+            session_boundary=True,
+            max_age_seconds=MAX_SESSION_AGE_SECONDS,
+        ),
+        # The open is only reported by TradingView and Yahoo; Finviz's snapshot
+        # has no Open row and Bloomberg's page carries it only sometimes, so
+        # the getters are absent for those two rather than reading ``None``
+        # from a field that was never asked for.
+        FieldSpec(
+            "day_open",
+            lambda p: p.get("day_open"),
+            yh_get=lambda p: p.get("day_open"),
+            tolerance_pct=0.5,
+            max_skew_seconds=SKEW_LIMIT_SECONDS,
+            session_boundary=True,
+            max_age_seconds=MAX_SESSION_AGE_SECONDS,
+        ),
     )
 
 
@@ -313,8 +358,9 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
     Each provider is asked independently and natively: TradingView's scanner,
     Finviz's quote page, Yahoo's chart API and Bloomberg's quote page, in
     parallel. Nothing proxies another, so the cross-check is real. Price,
-    change, previous close, 52-week range, P/E, RSI and volume are compared
-    field by field; Finviz's deeper fundamentals, the 84-field snapshot, company
+    change, previous close, the session's own open/high/low, the 52-week range,
+    P/E, RSI and volume are compared field by field; Finviz's deeper
+    fundamentals, the 84-field snapshot, the revenue/segment breakdown, company
     profile, peers and after-hours print, ride along, each labelled with the
     provider that supplied it. A field that cannot be shown to describe the same
     observation is reported as ``not_comparable`` rather than as a conflict, and
@@ -426,6 +472,20 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             "industry": payload.get("industry"),
             "dividend_yield": payload.get("dividends_yield_current"),
             "eps_ttm": payload.get("earnings_per_share_basic_ttm"),
+            # The scanner returns the session's own open/high/low on every
+            # quote request. They were requested and then dropped, so the day
+            # range had to be inferred from another provider or lost.
+            "day_open": payload.get("open"),
+            "day_high": payload.get("high"),
+            "day_low": payload.get("low"),
+            # ``update_mode`` is the scanner's own statement of how fresh this
+            # feed is (``delayed_streaming_900`` = 15 minutes, ``streaming`` =
+            # live). Without it a caller cannot tell a delayed read from a live
+            # one, which is exactly the distinction Bloomberg's
+            # ``exchange_delay`` already exposes for its leg.
+            "feed_mode": payload.get("update_mode"),
+            "instrument_type": payload.get("type"),
+            "instrument_subtype": payload.get("subtype"),
         }
 
     def fv_norm(payload: dict[str, Any]) -> dict[str, Any]:
@@ -446,10 +506,20 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             "previous_close": payload.get("previous_close"),
             "week_52_high": payload.get("52w_high"),
             "week_52_low": payload.get("52w_low"),
+            # Yahoo reports the session volume in ``meta.regularMarketVolume``
+            # and it was being dropped here, so ``volume`` was compared across
+            # three providers while a fourth one had already been asked and
+            # answered. Read it so the comparison covers every provider that
+            # actually has the field.
+            "volume": payload.get("volume"),
+            "day_open": payload.get("day_open"),
+            "day_high": payload.get("day_high"),
+            "day_low": payload.get("day_low"),
             "currency": payload.get("currency"),
             "exchange": payload.get("exchange"),
             "market_state": payload.get("market_state"),
             "price_timestamp": payload.get("market_time"),
+            "company": payload.get("company"),
         }
 
     def bb_norm(payload: dict[str, Any]) -> dict[str, Any]:
@@ -458,13 +528,21 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         # repeated here: an extra ``price_timestamp`` would be a competing
         # timestamp in the payload.
         week_52 = payload.get("week_52_range") or [None, None]
+        # ``dayRange`` is Bloomberg's ``[low, high]`` pair. Splitting it here is
+        # what lets its session range join the same comparison the other three
+        # legs feed; without it the field arrived in every shaped payload and
+        # stopped there.
+        day_range = payload.get("day_range") or [None, None]
         return {
             "price": payload.get("price"),
             "change_percent": payload.get("change_percent"),
             "previous_close": payload.get("previous_close"),
             "week_52_low": week_52[0] if len(week_52) > 0 else None,
             "week_52_high": week_52[1] if len(week_52) > 1 else None,
+            "day_low": day_range[0] if len(day_range) > 0 else None,
+            "day_high": day_range[1] if len(day_range) > 1 else None,
             "pe_ratio": payload.get("pe_ratio"),
+            "eps_ttm": payload.get("eps"),
             "volume": payload.get("volume"),
             "currency": payload.get("currency"),
             "exchange": payload.get("exchange"),
@@ -1439,8 +1517,13 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
         return {
             "premarket_close": row.get("premarket_close"),
             "premarket_change": row.get("premarket_change"),
+            # The scanner returns the size of each extended session too. It was
+            # requested on every quote and never read, so a pre-market print
+            # arrived with no way to tell a liquid session from a single lot.
+            "premarket_volume": row.get("premarket_volume"),
             "postmarket_close": row.get("postmarket_close"),
             "postmarket_change": row.get("postmarket_change"),
+            "postmarket_volume": row.get("postmarket_volume"),
             "regular_close": row.get("close"),
         }
 
@@ -1475,21 +1558,31 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
         "symbol": ticker,
         "pre_market": yh.get("pre_market")
         or (
-            {"price": tv.get("premarket_close"), "change_pct": tv.get("premarket_change")}
+            {
+                "price": tv.get("premarket_close"),
+                "change_pct": tv.get("premarket_change"),
+                "volume": tv.get("premarket_volume"),
+            }
             if tv.get("premarket_close") is not None
             else None
         ),
         "regular": yh.get("regular") or {"price": tv.get("regular_close")},
         "post_market": yh.get("post_market")
         or (
-            {"price": tv.get("postmarket_close"), "change_pct": tv.get("postmarket_change")}
+            {
+                "price": tv.get("postmarket_close"),
+                "change_pct": tv.get("postmarket_change"),
+                "volume": tv.get("postmarket_volume"),
+            }
             if tv.get("postmarket_close") is not None
             else None
         ),
         "finviz_after_hours": fv_after,
         "finviz_last_close": (fv_quote.get("last_close") or {}).get("price"),
         "tradingview_premarket_close": tv.get("premarket_close"),
+        "tradingview_premarket_volume": tv.get("premarket_volume"),
         "tradingview_postmarket_close": tv.get("postmarket_close"),
+        "tradingview_postmarket_volume": tv.get("postmarket_volume"),
         "after_hours_readings": {p: v for p, v in readings.items() if v is not None},
         "after_hours_comparison": comparison,
         "resolutions": resolved["resolutions"],

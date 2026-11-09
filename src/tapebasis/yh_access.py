@@ -139,6 +139,13 @@ def _format_quote(symbol: str, result: dict[str, Any]) -> dict[str, Any]:
         or meta.get("earningsTimestampStart"),
         "52w_high": meta.get("fiftyTwoWeekHigh"),
         "52w_low": meta.get("fiftyTwoWeekLow"),
+        # The session's own range. These were always in ``meta`` and were never
+        # shaped, so the day's high/low arrived in every request and was thrown
+        # away before any tool could see it. ``regularMarketOpen`` is absent on
+        # some symbols and some ranges, hence the optional read.
+        "day_open": meta.get("regularMarketOpen"),
+        "day_high": meta.get("regularMarketDayHigh"),
+        "day_low": meta.get("regularMarketDayLow"),
         "volume": meta.get("regularMarketVolume"),
         "company": meta.get("shortName") or meta.get("longName"),
         "quote_stale": _quote_is_stale(result),

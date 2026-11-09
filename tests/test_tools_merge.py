@@ -422,3 +422,117 @@ async def test_prices_ask_bloomberg_and_keep_the_delay_visible(fake_providers, m
     ]
     assert row["exchange_delay"] == "15 Minutes"
     assert row["comparisons"]["price"]["values"]["BLOOMBERG"] == pytest.approx(331.9)
+
+# ── session range and feed mode: data that arrived and was dropped ───────────
+
+
+@pytest.mark.asyncio
+async def test_quote_compares_the_session_range_from_every_provider(fake_providers):
+    """Day high/low arrive on every leg; they must reach the comparison, not stop.
+
+    TradingView returns them on each scanner row, Yahoo in each chart ``meta``,
+    Bloomberg in its ``dayRange`` pair. Finviz has no Open/High/Low row at all,
+    so it is absent by capability rather than by omission.
+    """
+    fake_providers["bb"] = _bloomberg_quote()
+    result = await tools_market.stock_quote("AAPL")
+    rows = {r["field"]: r for r in result["comparisons"]}
+
+    for field in ("day_high", "day_low"):
+        row = rows[field]
+        assert row["match"] is True
+        assert set(row["values"]) == {
+            "TRADINGVIEW",
+            "YAHOO",
+            "BLOOMBERG",
+        }
+        assert "FINVIZ" not in row["values"]
+    assert rows["day_high"]["values"]["TRADINGVIEW"] == pytest.approx(338.0)
+    assert rows["day_low"]["values"]["BLOOMBERG"] == pytest.approx(330.5)
+    assert result["data"]["day_high"] == pytest.approx(338.0)
+    assert result["data"]["day_low"] == pytest.approx(330.5)
+
+
+@pytest.mark.asyncio
+async def test_day_open_is_compared_only_where_both_sides_report_it(fake_providers):
+    """Two providers publish the open; the other two have no field to compare."""
+    result = await tools_market.stock_quote("AAPL")
+    row = next(r for r in result["comparisons"] if r["field"] == "day_open")
+    assert set(row["values"]) == {"TRADINGVIEW", "YAHOO"}
+    assert row["match"] is True
+    assert result["data"]["day_open"] == pytest.approx(337.1)
+
+
+@pytest.mark.asyncio
+async def test_yahoo_volume_joins_the_comparison(fake_providers):
+    """Yahoo's volume was downloaded and dropped, so the field was 3-way at best."""
+    fake_providers["bb"] = _bloomberg_quote()
+    result = await tools_market.stock_quote("AAPL")
+    row = next(r for r in result["comparisons"] if r["field"] == "volume")
+    assert set(row["values"]) == {
+        "TRADINGVIEW",
+        "FINVIZ",
+        "YAHOO",
+        "BLOOMBERG",
+    }
+    assert row["values"]["YAHOO"] == 63160515
+    assert row["match"] is True
+
+
+@pytest.mark.asyncio
+async def test_yahoo_volume_disagreement_is_reported(fake_providers):
+    """Reading the fourth provider only counts if it can also contradict."""
+    fake_providers["yh"]["volume"] = 1
+    result = await tools_market.stock_quote("AAPL")
+    row = next(r for r in result["comparisons"] if r["field"] == "volume")
+    assert row["match"] is False
+    assert any("volume" in w for w in result["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_tradingview_states_its_own_feed_delay(fake_providers):
+    """``update_mode`` says whether the scanner feed is live or delayed."""
+    result = await tools_market.stock_quote("AAPL")
+    assert result["data"]["feed_mode"] == "delayed_streaming_900"
+    assert result["data"]["instrument_type"] == "stock"
+    assert result["data"]["instrument_subtype"] == "common"
+    # It rides along labelled with the provider that shaped it, not as ALL.
+    assert result["fields"]["feed_mode"] == "TRADINGVIEW"
+
+
+@pytest.mark.asyncio
+async def test_finviz_identity_fields_survive_the_shaper(fake_providers):
+    """website/logo_url/market_cap_class were parsed then dropped by the shaper."""
+    fake_providers["fv"].update(
+        {
+            "website": "http://www.apple.com",
+            "logo_url": "https://logo.finviz.com/AAPL.svg",
+            "market_cap_class": "Mega",
+            "etf_type": None,
+        }
+    )
+    result = await tools_market.stock_quote("AAPL")
+    assert result["data"]["website"] == "http://www.apple.com"
+    assert result["data"]["logo_url"] == "https://logo.finviz.com/AAPL.svg"
+    assert result["data"]["market_cap_class"] == "Mega"
+
+
+@pytest.mark.asyncio
+async def test_quote_carries_the_income_breakdown_finviz_already_downloaded(
+    fake_providers,
+):
+    """The breakdown island is on the same page the quote fetched."""
+    fake_providers["fv"]["income_breakdown"] = {
+        "statement": {
+            "currency": "USD",
+            "scale_applied": 1_000_000.0,
+            "periods": ["2026FY"],
+            "rows": [{"label": "Total Revenue", "values": [478_834_000_000.0]}],
+        },
+        "revenue": {"years": ["2026"], "axes": {}},
+    }
+    result = await tools_market.stock_quote("AAPL")
+    breakdown = result["data"]["income_breakdown"]
+    assert breakdown["statement"]["scale_applied"] == 1_000_000.0
+    assert result["fields"]["income_breakdown"] == "FINVIZ"
+

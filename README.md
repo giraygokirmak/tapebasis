@@ -162,7 +162,7 @@ labelled, not hidden.
 
 | Tool | Providers | Fields cross-checked |
 | --- | --- | --- |
-| `stock_quote` | all four | price, change %, previous close, 52-w high/low, P/E, RSI(14), volume |
+| `stock_quote` | all four | price, change %, previous close, volume, session open/high/low, 52-w high/low, P/E, RSI(14) |
 | `stock_prices` | all | price and change % per ticker (per-row `data_provider`) |
 | `stock_screener` | TradingView + Finviz | per-row price for the tickers both return |
 | `market_indices` | all | S&P 500, Dow, Nasdaq Composite, Russell 2000, VIX levels |
@@ -325,7 +325,7 @@ the provider code paths**, so a provider can't hide a break by catching its own 
 | Probe | Provider | Asserts |
 | --- | --- | --- |
 | `finviz.indices_api` | FINVIZ | `DJI`, `SPX`, `COMP` keys present |
-| `finviz.quote_html` | FINVIZ | `js-snapshot-table` marker still in the rendered page |
+| `finviz.quote_html` | FINVIZ | the snapshot table, the classification chips and the revenue-breakdown island are still in the rendered page |
 | `finviz.news_api` | FINVIZ | `html` key present |
 | `tradingview.scanner_api` | TRADINGVIEW | `totalCount` and `data[0].d` present |
 | `tradingview.symbol_search` | TRADINGVIEW | symbol search still returns `symbols` |
@@ -493,7 +493,7 @@ No proxy configuration exists: every provider reaches its upstream directly.
 
 ```bash
 pip install -e ".[dev]"     # or, with uv: uv venv && uv pip install -e ".[dev]"
-pytest                      # 233 hermetic tests, no network
+pytest                      # 275 hermetic tests, no network
 pytest -m live              # opt-in: hits real upstreams
 ```
 

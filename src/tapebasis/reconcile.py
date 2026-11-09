@@ -772,7 +772,11 @@ def merge_many(
 
     # Everything a provider shaped but the spec list did not cover, freshest
     # provider first so its own extras are not overwritten by a stale provider.
-    for provider in reversed(order):
+    # ``setdefault`` means the first writer wins, so this iterates ``order``
+    # (chosen first) rather than its reverse: reversing it let the *stalest*
+    # provider fill every uncontested field, which is how a fresh Finviz
+    # industry ended up replaced by a stale TradingView one.
+    for provider in order:
         shape = (shapes or {}).get(provider)
         if not shape:
             continue

@@ -19,16 +19,39 @@ Quote plus fundamentals snapshot for any instrument class, equity, index, FX, co
 | | |
 | --- | --- |
 | Providers | TradingView scanner · Finviz quote page · Yahoo chart API · Bloomberg quote page |
-| Compared | price, change %, previous close, volume, 52-week high/low, P/E, RSI(14) |
-| Tolerances | price/prev-close/52w 0.5 % · change % 2 % · P/E 2 % · RSI 5 % · volume 1 % |
-| Observation guards | price, change %, previous close, volume: `max_skew_seconds = 900` and same US/Eastern session date; change % and volume also carry an 8 h age ceiling |
+| Compared | price, change %, previous close, volume, session open/high/low, 52-week high/low, P/E, RSI(14) |
+| Tolerances | price/prev-close/52-week/session range 0.5 % · change % 2 % · P/E 2 % · RSI 5 % · volume 1 % |
+| Observation guards | price, change %, previous close, volume, session high/low/open: `max_skew_seconds = 900` and same US/Eastern session date; change %, volume and the session range also carry an 8 h age ceiling |
 | Declared delay | Bloomberg's 15-minute equity/index delay is itself a comparability boundary: a pair that far apart is `not_comparable`, with the delay named |
 | Never compared | change % on FX, where no shared previous close exists (reported from every provider) |
 
 Each compared field resolves to one value, the newest print, while every reading stays in
 `comparisons`. Finviz-only material rides along, labelled per field in `fields`: the 84-field
-fundamentals snapshot, company profile, peers, and the after-hours print. `resolutions` records the
-ticker each provider was asked for.
+fundamentals snapshot, company profile, peers, the after-hours print, the classification chips
+(`sector`, `industry`, `country`, `market_cap_class`, `exchange`, `etf_type`) and the
+`income_breakdown` island. `resolutions` records the ticker each provider was asked for.
+
+`day_open` comes from TradingView and Yahoo only: Finviz has no Open row and Bloomberg's page carries
+one only sometimes, so the field is compared where both sides publish it rather than against a
+provider that never had it. `feed_mode` (`streaming`, `delayed_streaming_900`) states the scanner's own
+delay, the same fact Bloomberg's `exchange_delay` reports for its leg.
+
+### `income_breakdown`
+
+Finviz ships the "Revenue & Expenses Breakdown" table and the product / region / segment revenue split
+as a JSON island on the quote page the tool already fetched, so reading it costs no extra request.
+
+`statement` holds up to two fiscal years of revenue, gross profit, operating income, net income and
+the expense lines between them. Its amounts are published in millions and are scaled to absolute
+currency units here; `statement.scale_applied` states the factor, and `statement.currency` the unit.
+Bank filers swap the row set (interest income, loan loss provision, non-interest expense) and have no
+`Total Revenue` row, which is served as it arrives.
+
+`revenue.axes` holds up to three annual series: `products_and_services`, `regions` and `segment`. Which
+exist varies by company, and their meaning is company-specific (Apple's `segment` is geographic,
+NVIDIA's is operating segments), so the keys stay as Finviz sends them. Each axis carries `unit` and
+`converted`; `converted: true` means Finviz FX-converted the amounts into the filing currency. An ETF
+has no island at all, so the field is `null` and the quote is unaffected.
 
 Because symbols are resolved per provider, `XAUUSD` reaches `OANDA:XAUUSD` on TradingView and
 `XAUUSD:CUR` on Bloomberg, is correctly reported as not carried by Yahoo and Finviz, and the response
@@ -128,7 +151,8 @@ from TradingView's calendar). The two are not the same fact and are never confla
 Pre-/post-market price from every independent source that publishes one: TradingView's
 `premarket_*`/`postmarket_*` scanner columns, Finviz's after-hours print, and Yahoo's 1-minute
 extended-hours candles. The after-hours reading is compared at 0.5 %; each provider's raw reading
-stays in `after_hours_readings`.
+stays in `after_hours_readings`. Each session block carries the session's `volume` when the feed
+reports one, so a pre-market print can be told apart from a single lot.
 
 ### `technical_analysis`
 
@@ -185,7 +209,7 @@ those legs are marked `NOT_ATTEMPTED`, which is **not** an error and is excluded
 | `stock_peers` | Peer-group companies | No provider has a curated peer list |
 | `stock_why_moving` | Narrative explainer for a price move | Finviz editorial feed |
 | `stock_chart` | Rendered PNG candlestick chart | TradingView produces text analysis, not images |
-| `stock_dilution` | Dilution risk model (share count, float, cash runway) | Finviz dilution dataset |
+| `stock_dilution` | Dilution risk model (share count, float, cash runway) | Finviz only models dilution-prone companies; others return `NONE` with that reason |
 | `stock_screener_filters` | Finviz screener filter catalogue | Finviz's proprietary filter vocabulary |
 
 ### `market_sentiment`

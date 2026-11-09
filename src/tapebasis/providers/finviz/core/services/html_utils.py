@@ -122,11 +122,17 @@ def _parse_price_block(block: str) -> dict[str, Any]:
 
 _CHIP_KINDS = {
     "sec_": "sector",
+    # Finviz's industry filter is ``industry_<slug>``; the older ``ind_``
+    # spelling is kept because both have appeared in the markup.
     "ind_": "industry",
+    "industry_": "industry",
     "geo_": "country",
     "cap_": "market_cap_class",
     "exch_": "exchange",
     "idx_": "index",
+    # ETFs carry no sector/industry in the usual sense; Finviz tags them with
+    # ``etf_sectype_<kind>`` instead, which is the fund's own classification.
+    "etf_": "etf_type",
 }
 
 
@@ -144,6 +150,7 @@ def parse_quote_header(html: str) -> dict[str, Any]:
         "country": None,
         "market_cap_class": None,
         "exchange": None,
+        "etf_type": None,
     }
 
     ticker_match = re.search(
@@ -190,8 +197,15 @@ def parse_quote_header(html: str) -> dict[str, Any]:
         if len(parsed_blocks) > 1:
             result["after_hours"] = parsed_blocks[1]
 
+    # The classification chips ("Technology", "Consumer Electronics", "USA",
+    # "Mega", "NASD") link to the screener with a ``f=<kind>_<value>`` filter.
+    # Finviz used to emit ``screener?v=111&f=sec_technology`` and now emits
+    # ``/screener/stocks?v=111&f=sec_technology``; the leading slash and the
+    # ``/stocks`` path segment are accepted here so a markup move does not
+    # silently blank out sector, industry, country and exchange again.
     for filter_key, label in re.findall(
-        r'<a href="screener\?v=111&(?:amp;)?f=([^"&]+)" class="quote-header_category"[^>]*>(.*?)</a>',
+        r'<a href="/?screener(?:/[a-z]+)?\?[^"]*?[&;]f=([^"&]+)"[^>]*'
+        r'class="quote-header_category"[^>]*>(.*?)</a>',
         html,
         re.S,
     ):

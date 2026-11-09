@@ -12,7 +12,7 @@ pip install -e ".[dev]"
 ## Tests
 
 ```bash
-pytest                      # 233 hermetic tests, no network
+pytest                      # 275 hermetic tests, no network
 pytest -m live              # opt-in: hits real upstreams
 pytest tests/test_reconcile.py -v
 ```
@@ -38,6 +38,9 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_sentiment.py` | Local scoring: direction, neutrality, determinism, aggregation |
 | `test_sentiment_tool.py` | Token-free path, backend switching, no fabricated scores |
 | `test_bloomberg.py` | Symbol mapping, `print_time` from the intraday series, sentinel rejection, the fourth-leg tie-break, declared-delay comparability, single-source envelope |
+| `test_finviz_breakdown.py` | The `income-breakdown` island (statement scale, bank row sets, `converted` axes, absent/ETF cases) and the classification-chip markup |
+| `test_yahoo_shaping.py` | Yahoo `meta` fields that were previously dropped: session open/high/low, volume, company name |
+| `test_extended_hours.py` | Pre/post session volumes from the scanner row, and the Yahoo-session fallback |
 | `test_server.py` | Tool registration, MCP surface |
 | `test_dockerfile.py` | The deployment contract: `tini` as PID 1, the entrypoint argv, `init: true` in compose |
 
@@ -56,6 +59,9 @@ contract did not expect:
 | Session-relative fields | A pre-market Finviz close against a prior-close Yahoo print produced a false `change_percent` conflict, now `not_comparable` |
 | Snapshot row duplication | Yahoo answers `USDJPY=X` with `meta.symbol: JPY=X`; rows must join on the requested ticker |
 | Unrelated screener universes | Ranking independently gave zero shared rows; Finviz is now asked about exactly TradingView's tickers |
+| Finviz chip URL move | The classification chips moved to `/screener/stocks?v=111&f=...`, which silently blanked `sector`/`industry`/`country`/`exchange` on every quote until the parser accepted both spellings |
+| Finviz breakdown scale | The `income-breakdown` island publishes the statement in millions and the segment axes in absolute units; both are now served in one unit with the applied factor stated |
+| Dilution tool answering with revenue | Finviz renders an income statement on the dilution tab for companies it does not model; 29 of 30 large caps got revenue data instead of a stated "no model" |
 
 The drift tests are worth reading too: they corrupt a stored baseline and assert the warning reaches
 an ordinary tool response, proving the monitor is wired into real responses, not just its own

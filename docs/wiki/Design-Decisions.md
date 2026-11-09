@@ -366,7 +366,8 @@ would be simultaneously too tight for one field and too loose for another.
 **Decision:** a field is compared only when the guards that apply to it pass: a 900 s print-time
 ceiling, equality of the US/Eastern session date, a declared feed delay as a boundary of its own
 (Bloomberg states 15 minutes, see decision 30), and, for the fields re-derived from the print
-(`change_percent`, `volume`), an 8 h absolute age ceiling when a reference clock is available.
+(`change_percent`, `volume`, and the session high/low/open), an 8 h absolute age ceiling when a
+reference clock is available.
 `previous_close` takes the first three only, because an old quote does not falsify a previous close.
 `price` takes the first three as well: two prices minutes apart are two observations, and calling
 their difference a provider conflict blames the feed for the market moving.
@@ -462,6 +463,113 @@ the availability signal.
 visible in `exchange_delay`, `print_time` and any `not_comparable` reason. The `bloomberg_*` tools
 remain single-source calls (`cross_checked: false`, `reconciliation_leg: false`), and the board still
 reports `print_time: null` because it has none.
+
+---
+
+## 31. Data that arrives with the response is shaped, never dropped
+
+**Decision:** if a provider returns a field on a request the server already makes, that field is
+mapped and served, and if it describes the same measurement as another provider's field it joins the
+comparison. A field is only absent because the provider does not publish it, never because nobody
+wrote the mapping.
+
+**Why:** the cheapest data in the system is the data already in the payload. The audit that produced
+this rule found the same failure everywhere: the request was made, the value arrived, the mapping
+stopped short.
+
+| Where | What arrived and was dropped |
+| --- | --- |
+| TradingView scanner | `open`, `high`, `low` (the session range), `premarket_volume`, `postmarket_volume`, `update_mode` (the feed's own delay), `subtype` |
+| Yahoo chart `meta` | `regularMarketDayHigh`, `regularMarketDayLow`, `regularMarketOpen`, `regularMarketVolume`, `shortName` |
+| Finviz quote page | the whole `income-breakdown` JSON island, plus `website`, `logo_url`, `market_cap_class` |
+| Bloomberg quote page | `dayRange` (as a pair, never split into high/low), `earningsPerShare` |
+
+The volume case is the one that shows why this matters beyond tidiness: `volume` was being compared
+across three providers while a fourth had been asked and had answered. A comparison that leaves out an
+answering provider claims more precision than it has. The same applies to the day range, which two
+providers published and no tool exposed.
+
+**Consequence:** `stock_quote` compares `day_open` / `day_high` / `day_low` and Yahoo's `volume` joins
+the four-way check. `feed_mode` states the scanner's own delay (`delayed_streaming_900` vs
+`streaming`), the same distinction Bloomberg's `exchange_delay` already made for its leg. The
+TradingView identity fields (`instrument_type`, `instrument_subtype`) ride along labelled
+`TRADINGVIEW` because only that provider publishes them.
+
+**The corollary:** a provider field that is *not* comparable is still served. `beta`, `eps_ttm` and
+`dividend_yield` stay out of `comparisons` on purpose: measured live they diverge by construction
+(beta 0.67 vs 1.08, dividend yield 0.30% vs 1.06% for the same ticker), so comparing them would
+report a conflict where the providers simply define the metric differently. They are served,
+labelled per provider, and not counted as a cross-check.
+
+---
+
+## 32. The Finviz breakdown island is served at one scale
+
+**Decision:** the `income-breakdown-init-data-0` island is parsed into `income_breakdown` on
+`stock_quote` and on the Finviz snapshot payload every composite tool already fetches, its statement
+amounts are multiplied to absolute currency units, and `statement.scale_applied` states the factor.
+
+**Why:** the island holds two blocks that do not share a unit. `statement` publishes millions
+(`"478,834.00"` for Apple's $478.834bn); `revenue` publishes absolute units (`198083000000` for the
+Americas segment). Serving the strings verbatim would hand an agent two figures for the same company
+six orders of magnitude apart with nothing to say which is which. Verified against the page's own
+`Sales` field across large caps, banks, foreign filers and sub-million-revenue companies: statement x
+1e6 matches every time, and the axis totals match the statement.
+
+Two shapes are preserved rather than normalised into one:
+
+- **Bank filers** swap the row set (interest income, loan loss provision, non-interest expense) and
+  have no `Total Revenue` row. The rows are served as they arrive.
+- **Axes vary by company** (three for Apple, two for ASML and JPM, none for TD), and their meaning is
+  company-specific: Apple's `segment` is geographic, NVIDIA's is operating segments. The keys stay as
+  Finviz sends them instead of being relabelled into something wrong for half the market.
+
+`converted: true` means Finviz FX-converted the axis amounts into the filing currency; `unit`,
+`currency` and `converted` are reported next to the numbers so nothing has to be assumed.
+
+**Consequence:** `income_breakdown` costs no extra request, since the island is in the HTML the quote
+already fetched. An ETF has no island, so the field is `null` and the quote is unaffected.
+
+**Consequence for `stock_dilution`:** that tool used to return this breakdown as a fallback, which
+meant a tool named for dilution answered with revenue data for 29 of 30 large caps. It now returns
+`NONE` with the reason ("Finviz only builds this model for dilution-prone companies") and the
+breakdown is served where it belongs.
+
+---
+
+## 33. A page-markup move is a data outage, not a cosmetic change
+
+**Decision:** parsers accept the markup shapes that mean the same thing, and the health probe pins the
+marker the parser needs.
+
+**Why:** Finviz moved its classification chips from `screener?v=111&f=sec_technology` to
+`/screener/stocks?v=111&f=sec_technology`. The old regex still matched nothing without erroring, so
+`sector`, `industry`, `country`, `market_cap_class` and `exchange` became `null` on every quote and the
+`fields` map simply labelled them as absent. Nothing failed; the data just quietly stopped existing.
+
+**Consequence:** the chip parser accepts both spellings and matches the filter key rather than the
+path. ETFs are recognised as their own classification (`etf_sectype_*` maps to `etf_type`, not to
+`sector`), because calling an ETF's fund type a sector is a wrong answer rather than a missing one.
+
+---
+
+## 34. Uncontested fields are filled freshest-first, same as compared ones
+
+**Decision:** after the compared fields are resolved, any field a provider shaped but the spec list did
+not cover is taken from the provider order that starts with the freshest print.
+
+**Why:** `setdefault` means the first writer wins, and the loop iterated the *reverse* of the
+freshness order while a comment claimed the opposite. Every uncontested field therefore came from the
+stalest provider. On a live quote that served a four-day-old TradingView sector over a fresh Finviz
+one, and it would have quietly overridden Finviz's EPS with Bloomberg's delayed page once Bloomberg's
+`eps` joined the shaped payload.
+
+The compared fields were never affected: they have their own selection. This only decides the fields
+where there is nothing to compare, which is exactly where nobody looks.
+
+**Consequence:** a field only one provider shapes (a company website, an AI summary) is still labelled
+with that provider, and a field several shape but none compare is labelled with the freshest one. Both
+behaviours are pinned by tests.
 
 ---
 

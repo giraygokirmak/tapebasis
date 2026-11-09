@@ -18,7 +18,10 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "name": "stock_quote",
         "capability": "equity / index / FX / commodity / crypto quote + fundamentals",
         "providers": "ALL",
-        "comparison": "price, change %, previous close, volume, 52-week high/low, P/E, RSI(14)",
+        "comparison": (
+            "price, change %, previous close, volume, session open/high/low, "
+            "52-week high/low, P/E, RSI(14)"
+        ),
         "notes": (
             "TradingView's scanner, Finviz's quote page, Yahoo's chart API and "
             "Bloomberg's quote page are each asked natively in parallel, no provider "
@@ -26,8 +29,13 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
             "from whichever provider printed more recently (see `freshness`); every "
             "original stays in `comparisons`. Ties fall back to Finviz, then "
             "TradingView, then Yahoo, then Bloomberg. Finviz-only fields (the 84-field "
-            "snapshot, profile, peers, after-hours) ride along labelled per field in "
-            "`fields`. Symbols are resolved per provider, so XAUUSD becomes "
+            "snapshot, profile, peers, after-hours, and the income/segment breakdown) "
+            "ride along labelled per field in `fields`. The income breakdown is a JSON "
+            "island on the same quote page, so it costs no extra request; its statement "
+            "amounts are scaled to absolute currency units (`statement.scale_applied` "
+            "states the factor) so they share one unit with the segment axes, and "
+            "`statement.currency` / `axes.*.unit` plus `axes.*.converted` say whether "
+            "finviz converted them. Symbols are resolved per provider, so XAUUSD becomes "
             "OANDA:XAUUSD for TradingView, EURUSD:CUR for Bloomberg, and Finviz is told "
             "it does not carry it; see `resolutions`. A price or day change is only "
             "compared when the prints are within 15 minutes and share a US/Eastern "
@@ -123,9 +131,11 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "providers": "ALL",
         "comparison": "after-hours price (0.5% tolerance) across TradingView, Finviz, Yahoo",
         "notes": (
-            "TradingView's scanner exposes premarket_close / postmarket_close fields, Finviz "
-            "the after-hours print on the quote page, and Yahoo full session windows from "
-            "1-minute candles. Every reading stays in `after_hours_readings`."
+            "TradingView's scanner exposes premarket_close / postmarket_close (and their "
+            "session volumes), Finviz the after-hours print on the quote page, and Yahoo "
+            "full session windows from 1-minute candles. Every reading stays in "
+            "`after_hours_readings`; each pre/post block carries its `volume` when the "
+            "feed reports one."
         ),
     },
     {
@@ -182,7 +192,13 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "capability": "dilution risk model (share count, float, cash runway)",
         "providers": "FINVIZ",
         "comparison": "single-source",
-        "notes": "Derived from Finviz's dilution dataset.",
+        "notes": (
+            "Finviz only builds a dilution model for companies whose share count it "
+            "considers dilution-prone; a large cap legitimately returns NONE with that "
+            "reason. The same tab also renders an income-statement breakdown, but that is "
+            "revenue/expense data, not dilution, so it is not substituted here: it is "
+            "served by `stock_quote` under `income_breakdown`."
+        ),
     },
     {
         "name": "stock_screener_filters",
