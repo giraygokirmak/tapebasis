@@ -99,14 +99,16 @@ src/tapebasis/
 
 1. **Check which providers can serve it.** Ask every provider that genuinely can. If only one can
    it is a single-source tool, do not fake a comparison.
-2. **Add an accessor** to `tv_access.py` / `fv_access.py` / `yh_access.py` that returns a normalised
-   shape and raises `ProviderError` on failure. Every accessor must go through
-   `ratelimit.limiter(PROVIDER)` so the new call inherits pacing and cooldown.
+2. **Add an accessor** to `tv_access.py` / `fv_access.py` / `yh_access.py` / `sa_access.py` /
+   `bb_access.py` that returns a normalised shape and raises `ProviderError` on failure. Every
+   accessor must go through `ratelimit.limiter(PROVIDER)` so the new call inherits pacing and
+   cooldown.
 3. **Add shapers** to `merge_helpers.py`, pure `dict → dict`, no I/O.
-4. **Add `FieldSpec`s** with `tv_get`, `fv_get` **and** `yh_get` where the provider can supply the
-   field, plus a tolerance. Mark session-relative fields with `max_skew_seconds`,
+4. **Add `FieldSpec`s** with whichever of `tv_get`, `fv_get`, `yh_get`, `sa_get` and `bb_get` the
+   provider can supply, plus a tolerance. Mark session-relative fields with `max_skew_seconds`,
    `session_boundary=True` and, when the tool can see the clock, `max_age_seconds`.
-5. **Write the tool** in `tools_market.py` using `ask(tv, fv, yh)` + `finalize()`.
+5. **Write the tool** in `tools_market.py` using
+   `ask(tv, fv, yh, sa_fn=sa, bb_fn=bb)` + `finalize()`.
 6. **Register it** in `_TOOLS` and in `catalog.py` with the real provider set.
 7. **Test** with faked providers: all-answer, partial, one-answers, all-fail, a disagreement, and
    a session-skew case.

@@ -6,7 +6,7 @@ Every tool returns the same envelope. Learn it once and every tool is readable.
 
 | `data_provider` | `verification` | Meaning | What an agent should do |
 | --- | --- | --- | --- |
-| `ALL` | `MULTI_SOURCE` | Every provider that was asked answered | Quote the numbers; say how many sources covered them |
+| `ALL` | `MULTI_SOURCE` | Every provider that was asked answered | Quote the numbers; use `providers_answered` to name the providers that covered them |
 | `TRADINGVIEW` | `SINGLE_SOURCE` | Only TradingView answered | Quote, but say it is single-source and not corroborated |
 | `FINVIZ` | `SINGLE_SOURCE` | Only Finviz answered | Same, from the Finviz side |
 | `YAHOO` | `SINGLE_SOURCE` | Only Yahoo Finance answered | Same, from the Yahoo side |
@@ -89,7 +89,7 @@ One row per compared field:
 ```jsonc
 {
   "field": "price",
-  "values": { "TRADINGVIEW": 331.9, "FINVIZ": 332.33, "YAHOO": 331.9 },  // verbatim
+  "values": { "TRADINGVIEW": 331.9, "FINVIZ": 332.33, "YAHOO": 331.9, "SA": 331.9 },  // verbatim
   "match": true,          // null when no pair could be compared
   "diff": 0.43,           // largest absolute gap among comparable pairs
   "diff_pct": 0.1294,     // largest relative gap, %
@@ -116,7 +116,7 @@ Set on a field whose readings cannot be legitimately compared, with the reason:
 ```jsonc
 {
   "field": "change_percent",
-  "values": { "TRADINGVIEW": -1.8976, "FINVIZ": 0.13, "YAHOO": -1.8976 },
+  "values": { "TRADINGVIEW": -1.8976, "FINVIZ": 0.13, "YAHOO": -1.8976, "SA": -1.8976 },
   "match": null,
   "not_comparable": true,
   "pairs": [
@@ -151,6 +151,8 @@ announce that no timestamp existed:
   "tradingview": "2026-11-04T00:59:53+00:00",   // market print time, UTC
   "finviz": "2026-11-04T10:42:00+00:00",
   "yahoo": "2026-11-03T21:00:01+00:00",
+  "sa": "2026-11-03T21:00:01+00:00",
+  "bloomberg": "2026-11-04T10:27:00+00:00",
   "chosen": "FINVIZ",
   "decision": "newest",
   "newest_print": "2026-11-04T10:42:00+00:00",
@@ -168,9 +170,9 @@ instead of parsing `reason`:
 | `no_timestamp` | No provider exposed a parseable print time | - |
 
 Only providers that share the newest instant are tie-break candidates, so a stale provider can never
-win a tie against fresher ones. Ties are broken by the documented order (`FINVIZ`,
-`TRADINGVIEW`, `YAHOO`); with no usable timestamp at all, the value comes from the first provider in
-that order that answered. The order is fixed and stated in `reason`, never implicit.
+win a tie against fresher ones. Ties are broken by the documented order (`FINVIZ`, `TRADINGVIEW`,
+`YAHOO`, `SA`, `BLOOMBERG`); with no usable timestamp at all, the value comes from the first provider
+in that order that answered. The order is fixed and stated in `reason`, never implicit.
 
 ### `resolutions`
 How each provider's ticker was derived for this call:
@@ -182,7 +184,8 @@ How each provider's ticker was derived for this call:
                    "method": "search", "confidence": 0.75, "note": "" },
   "FINVIZ":      { "symbol": "AAPL", "method": "normalise", ... },
   "YAHOO":       { "symbol": "AAPL", "method": "alias", ... },
-  "SA":          { "symbol": "aapl", "method": "mechanical", ... }
+  "SA":          { "symbol": "aapl", "method": "mechanical", ... },
+  "BLOOMBERG":   { "symbol": "AAPL:US", "method": "mechanical", ... }
 }
 ```
 
@@ -313,7 +316,7 @@ is the market moving, not a provider conflict.
       "values": { "TRADINGVIEW": 331.9, "FINVIZ": 332.33, "YAHOO": 331.9, "SA": 331.9, "BLOOMBERG": 332.1 },
       "diff_pct": 0.1294, "chosen": "FINVIZ" },
     { "field": "change_percent", "match": null, "not_comparable": true,
-      "values": { "TRADINGVIEW": -1.8976, "FINVIZ": 0.13, "YAHOO": -1.8976 } }
+      "values": { "TRADINGVIEW": -1.8976, "FINVIZ": 0.13, "YAHOO": -1.8976, "SA": -1.8976 } }
   ],
   "warnings": ["Not cross-checked (no shared basis for comparison): change_percent, previous_close, volume"],
   "degraded": false

@@ -18,19 +18,20 @@
   symbols.resolve()  ──►  one ticker per provider, cached 1 h
       │
       ▼
-  reconcile.ask(tv_fn, fv_fn, yh_fn, bb_fn)  ──►  asyncio.gather, never raises
+  reconcile.ask(tv_fn, fv_fn, yh_fn, sa_fn=sa_fn, bb_fn=bb_fn)  ──►  asyncio.gather, never raises
       │
       ├──► tv_access ──► providers/tradingview/native ──► scanner.tradingview.com
       │                                              └──► data.tradingview.com (ws)
       ├──► fv_access ──► providers/finviz ─────────────► finviz.com (HTML + /api/*)
       ├──► yh_access ──► Yahoo chart API ──────────────► query1.finance.yahoo.com
+      ├──► sa_access ──► StockAnalysis quote API ─────► stockanalysis.com/api/quotes/s/<t>
       └──► bb_access ──► curl_cffi (TLS impersonation) ► bloomberg.com/quote/<id>
 
   tools_bloomberg ──► bb_access (same adapter, one provider asked, so single-source)
       │
       │  every request above goes through ratelimit.limiter(PROVIDER)
       ▼
-  Pair(tv=Attempt, fv=Attempt, yh=Attempt, bb=Attempt)
+  Pair(tv=Attempt, fv=Attempt, yh=Attempt, sa=Attempt, bb=Attempt)
       │
       ▼
   reconcile.finalize() ──► merge_many() ──► comparisons + per-field fields
@@ -192,8 +193,8 @@ judged.
 
 Resolving to a single value needs a tie-break that is defensible, not arbitrary. `freshness.py`
 parses each provider's **print** timestamp, TradingView's `update_time` epoch, Yahoo's
-`regularMarketTime` epoch, Finviz's rendered `"Nov 03 • 3:59 PM ET"`, into UTC and hands the newest
-one to `reconcile.py`.
+`regularMarketTime` epoch, Finviz's rendered `"Nov 03 • 3:59 PM ET"` and StockAnalysis's `ts` epoch
+milliseconds, into UTC and hands the newest one to `reconcile.py`.
 
 Print time, not fetch time: a quote fetched a second ago can still carry yesterday's close, so
 ordering by fetch time would select whichever provider answered last, which says nothing about which

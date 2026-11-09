@@ -38,10 +38,12 @@ scanner's own delay, the same fact Bloomberg's `exchange_delay` reports for its 
 StockAnalysis getter: its quote API carries price, range, volume and the 52-week range, and P/E lives
 on a separate stock page this tool does not fetch.
 
-### `income_breakdown`
+#### `income_breakdown` (a field of `stock_quote`)
 
-Finviz ships the "Revenue & Expenses Breakdown" table and the product / region / segment revenue split
-as a JSON island on the quote page the tool already fetched, so reading it costs no extra request.
+The Finviz "Revenue & Expenses Breakdown" table and the product / region / segment revenue split ship
+as a JSON island on the quote page `stock_quote` already fetched, so reading it costs no extra
+request. It is not a separate tool: it is served inside `stock_quote`'s payload as
+`income_breakdown`, labelled `FINVIZ` per field.
 
 `statement` holds up to two fiscal years of revenue, gross profit, operating income, net income and
 the expense lines between them. Its amounts are published in millions and are scaled to absolute

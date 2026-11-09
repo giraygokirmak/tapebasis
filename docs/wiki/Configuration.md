@@ -25,8 +25,8 @@ See [Health Monitor](Health-Monitor).
 ## Rate limiting (every provider)
 
 Every upstream is undocumented and rate-limited by its owner, so **every** request (TradingView
-scanner, TradingView chart websocket, Finviz HTML/JSON, Yahoo chart API, Bloomberg quote pages) passes
-through a per-provider limiter ([`ratelimit.py`](https://github.com/giraygokirmak/tapebasis/blob/main/src/tapebasis/ratelimit.py)).
+scanner, TradingView chart websocket, Finviz HTML/JSON, Yahoo chart API, StockAnalysis quote API,
+Bloomberg quote pages) passes through a per-provider limiter ([`ratelimit.py`](https://github.com/giraygokirmak/tapebasis/blob/main/src/tapebasis/ratelimit.py)).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -152,6 +152,9 @@ TAPEBASIS_FINVIZ_MIN_INTERVAL=0.35
 TAPEBASIS_FINVIZ_MAX_INFLIGHT=2
 TAPEBASIS_YAHOO_MIN_INTERVAL=1.0
 TAPEBASIS_YAHOO_MAX_INFLIGHT=1
+TAPEBASIS_SA_MIN_INTERVAL=0.5
+TAPEBASIS_SA_MAX_INFLIGHT=2
+TAPEBASIS_SA_CACHE_TTL=20
 TAPEBASIS_BLOOMBERG_MIN_INTERVAL=10.0
 TAPEBASIS_BLOOMBERG_MAX_INFLIGHT=1
 TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE=12.0

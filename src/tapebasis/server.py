@@ -53,8 +53,8 @@ INSTRUCTIONS = (
     "describe different sessions, one is past the staleness ceiling, or the field has no "
     "shared definition at all (an FX day change, since spot FX has no single official "
     "previous close). Symbols are resolved per provider, so `XAUUSD` "
-    "reaches TradingView as OANDA:XAUUSD while Yahoo and Finviz report that they do "
-    "not carry it; `resolutions` records how each ticker was derived.\n\n"
+    "reaches TradingView as OANDA:XAUUSD while Yahoo, Finviz and StockAnalysis report "
+    "that they do not carry it; `resolutions` records how each ticker was derived.\n\n"
     "Per-field provenance is in `fields`, raw side-by-side values in `comparisons`, and "
     "provider failures in `errors`. If `degraded` is true or `warnings` names an upstream "
     "change, relay that warning: the provider health monitor detected an API/schema "
@@ -86,7 +86,7 @@ async def lifespan(_server: FastMCP):
 
 
 mcp = FastMCP(
-    name="Tapebasis, TradingView + Finviz + Yahoo + StockAnalysis (+ Bloomberg single-source)",
+    name="Tapebasis, TradingView + Finviz + Yahoo + StockAnalysis + Bloomberg",
     instructions=INSTRUCTIONS,
     lifespan=lifespan,
 )

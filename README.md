@@ -68,8 +68,8 @@ The same envelope also contains:
 {
   "data_provider": "ALL",
   "verification": "MULTI_SOURCE",        // MULTI_SOURCE | SINGLE_SOURCE | UNAVAILABLE
-  "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO"],   // + "SA" / "BLOOMBERG" when they answer
-  "notice": "Every provider asked answered (TradingView, Finviz and Yahoo Finance). ...",   // names whichever answered
+  "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"],
+  "notice": "Every provider asked answered (TradingView, Finviz, Yahoo Finance, StockAnalysis and Bloomberg). ...",   // names whichever answered
   "data": { ... },                       // the reconciled payload, one value per field
   "fields": { "price": "ALL", "peers": "FINVIZ" },   // per-field provenance
   "freshness": {                         // why `data` holds the value it does
@@ -85,13 +85,13 @@ The same envelope also contains:
   },
   "comparisons": [                       // the actual side-by-side numbers
     { "field": "price",
-      "values": { "TRADINGVIEW": 331.9, "FINVIZ": 332.33, "YAHOO": 331.9, "SA": 331.9 },
+      "values": { "TRADINGVIEW": 331.9, "FINVIZ": 332.33, "YAHOO": 331.9, "SA": 331.9, "BLOOMBERG": 332.1 },
       "match": true, "diff_pct": 0.1294, "tolerance_pct": 0.5,
       "pairs": [ { "between": ["TRADINGVIEW", "FINVIZ"], "match": true, "diff_pct": 0.1294 }, ... ],
       "chosen": "FINVIZ" }
   ],
   "resolutions": { "TRADINGVIEW": { "symbol": "NASDAQ:AAPL", ... }, ... },
-  "sources": { "TRADINGVIEW": "scanner.tradingview.com", "FINVIZ": "...", "YAHOO": "...", "SA": "..." },
+  "sources": { "TRADINGVIEW": "scanner.tradingview.com", "FINVIZ": "...", "YAHOO": "...", "SA": "...", "BLOOMBERG": "..." },
   "errors": [ { "provider": "FINVIZ", "code": "...", "message": "..." } ],
   "warnings": [ "..." ],
   "degraded": false,                     // true when the health monitor saw drift/downtime
@@ -139,13 +139,13 @@ Implementation: [`reconcile.py`](src/tapebasis/reconcile.py) (fan-out + comparis
 
 The same instrument is spelled differently by each upstream, and the differences are not mechanical:
 
-| Instrument | TradingView | Finviz | Yahoo Finance | StockAnalysis |
-| --- | --- | --- | --- | --- |
-| Apple | `NASDAQ:AAPL` | `AAPL` | `AAPL` | `aapl` |
-| Gold (spot) | `OANDA:XAUUSD` | *(not carried)* | *(not carried, `XAUUSD=X` is a 404)* | *(not carried)* |
-| S&P 500 | `SP:SPX` | *(indices feed only)* | `^GSPC` | *(not carried)* |
-| EUR/USD | `FX:EURUSD` | *(not carried)* | `EURUSD=X` | *(not carried)* |
-| Bitcoin | `BITSTAMP:BTCUSD` | *(not carried)* | `BTC-USD` | *(not carried)* |
+| Instrument | TradingView | Finviz | Yahoo Finance | StockAnalysis | Bloomberg |
+| --- | --- | --- | --- | --- | --- |
+| Apple | `NASDAQ:AAPL` | `AAPL` | `AAPL` | `aapl` | `AAPL:US` |
+| Gold (spot) | `OANDA:XAUUSD` | *(not carried)* | *(not carried, `XAUUSD=X` is a 404)* | *(not carried)* | `XAUUSD:CUR` |
+| S&P 500 | `SP:SPX` | *(indices feed only)* | `^GSPC` | *(not carried)* | `SPX:IND` |
+| EUR/USD | `FX:EURUSD` | *(not carried)* | `EURUSD=X` | *(not carried)* | `EURUSD:CUR` |
+| Bitcoin | `BITSTAMP:BTCUSD` | *(not carried)* | `BTC-USD` | *(not carried)* | `XBTUSD:CUR` |
 
 [`symbols.py`](src/tapebasis/symbols.py) resolves each query per provider, caches the answer for an
 hour, and records how it was derived in `resolutions` (`explicit`, `alias`, `search`, `normalise`,
@@ -158,9 +158,9 @@ rules keep it honest:
 - **A missing instrument is not an outage.** `NotApplicable` becomes `NOT_ATTEMPTED`, which is
   excluded from `errors`. "Finviz does not carry spot gold" is a structural fact, not a failure.
 
-XAUUSD, for example, resolves to `OANDA:XAUUSD` for TradingView, `XAUUSD:CUR` for Bloomberg and
-nothing for Finviz and StockAnalysis, so the response is `ALL` over the two that answered, served and
-clearly labelled, not hidden.
+XAUUSD, for example, resolves to `OANDA:XAUUSD` for TradingView, `XAUUSD:CUR` for Bloomberg, and
+nothing for Yahoo, Finviz and StockAnalysis, so the response is `ALL` over the two that answered,
+served and clearly labelled, not hidden.
 
 ---
 
@@ -170,19 +170,23 @@ clearly labelled, not hidden.
 
 | Tool | Providers | Fields cross-checked |
 | --- | --- | --- |
-| `stock_quote` | every provider | price, change %, previous close, volume, session open/high/low, 52-w high/low, P/E, RSI(14) |
-| `stock_prices` | all | price and change % per ticker (per-row `data_provider`) |
+| `stock_quote` | every provider that carries the instrument | price, change %, previous close, volume, session open/high/low, 52-w high/low, P/E, RSI(14) |
+| `stock_prices` | every provider, per ticker (Bloomberg capped by batch) | price and change % per ticker (per-row `data_provider`) |
 | `stock_screener` | TradingView + Finviz | per-row price for the tickers both return |
-| `market_indices` | all | S&P 500, Dow, Nasdaq Composite, Russell 2000, VIX levels |
+| `market_indices` | TradingView + Finviz indices feed + Yahoo | S&P 500, Dow, Nasdaq Composite, Russell 2000, VIX levels |
 | `stock_options_chain` | Finviz + Yahoo (+ TV underlying) | volume per contract, matched by strike; OI when both report it |
-| `stock_earnings` | all | next release date; EPS history |
-| `stock_extended_hours` | all | after-hours / pre-market price |
-| `technical_analysis` | all | price, RSI(14), ATR(14), volume |
-| `stock_news` | all | headline title overlap between the feeds |
+| `stock_earnings` | TradingView + Finviz + Yahoo | next release date; EPS history |
+| `stock_extended_hours` | TradingView + Finviz + Yahoo + StockAnalysis | after-hours / pre-market price |
+| `technical_analysis` | TradingView + Finviz + Yahoo | price, RSI(14), ATR(14), volume |
+| `stock_news` | Finviz + Yahoo (+ TradingView/Marketaux) | headline title overlap between the feeds |
 | `stock_backtest` | TradingView + Yahoo | strategy metrics run twice on two independent OHLCV feeds |
 | `stock_backtest_compare` | TradingView + Yahoo | same, plus whether both feeds pick the same winning strategy |
 | `market_snapshot` | TradingView + Yahoo | indices, major crypto, FX pairs, ETFs |
-| `combined_analysis` | all | underlying price |
+| `combined_analysis` | TradingView + Finviz + Yahoo | underlying price |
+
+A provider absent from a row is absent because it has no endpoint for that capability: StockAnalysis
+carries no index, FX, crypto or foreign listing, and no provider but Finviz publishes a curated peer
+list. Those legs are `NOT_ATTEMPTED`, not errors.
 
 `stock_news`'s TradingView leg is the provider's licensed Marketaux feed and needs
 `MARKETAUX_API_TOKEN`; without it that leg is `NOT_ATTEMPTED` and the response reports the feeds that
@@ -293,10 +297,10 @@ per-provider limiter ([`ratelimit.py`](src/tapebasis/ratelimit.py)):
 | shared cooldown | After a `429` (or a websocket `invalid symbol`) every caller waits an exponentially growing, jittered pause, so one blocked request protects the whole process |
 | TTL cache | Absorbs the duplicate questions an agent naturally asks in one turn |
 
-Yahoo is paced slowest (1 request at a time, 1 s apart) because it starts answering `429` after a
-short burst. TradingView's websocket treats `invalid symbol` / `resolve error` as an IP-scoped block
-rather than a bad ticker, for the same reason. Current limiter state is exposed by
-`tapebasis_health` and `GET /health` under `rate_limits`.
+Yahoo is paced slowly (1 request at a time, 1 s apart) because it starts answering `429` after a short
+burst; Bloomberg is slowest of all (10 s apart). TradingView's websocket treats `invalid symbol` /
+`resolve error` as an IP-scoped block rather than a bad ticker, for the same reason. Current limiter
+state is exposed by `tapebasis_health` and `GET /health` under `rate_limits`.
 
 Defaults are tuned per provider and overridable; see [Configuration](#configuration).
 
@@ -347,7 +351,7 @@ useful.
 
 Every provider depends on things that can move without notice: Finviz's HTML class names and
 unversioned `/api/*` JSON islands, TradingView's scanner POST schema and chart websocket protocol,
-and Yahoo's chart API shape.
+Yahoo's chart API shape, and StockAnalysis's quote API envelope.
 
 The monitor in [`health.py`](src/tapebasis/health.py) probes each upstream **independently of
 the provider code paths**, so a provider can't hide a break by catching its own exception:
@@ -362,6 +366,11 @@ the provider code paths**, so a provider can't hide a break by catching its own 
 | `yahoo.chart_api` | YAHOO | `chart.result[0].meta` / `.timestamp` present |
 | `yahoo.chart_fx` | YAHOO | the `EURUSD=X` resolution path still answers |
 | `yahoo.chart_crypto` | YAHOO | the `BTC-USD` resolution path still answers |
+| `sa.quote_api` | SA | `data.p` present in `/api/quotes/s/aapl` |
+
+Bloomberg has **no probe**, deliberately: its site gates plain HTTP clients on the TLS fingerprint,
+so an `httpx` probe would report `DOWN` on a healthy provider. Its tool response is the availability
+signal, and it still shows up under `rate_limits`.
 
 Each successful probe records a SHA-256 fingerprint of the payload's key paths as a **baseline**
 persisted to `~/.tapebasis/health_state.json`. Later probes compare against it, so a renamed
@@ -471,6 +480,11 @@ Everything is optional. See [`.env.example`](.env.example) for the full list.
 | `TAPEBASIS_FINVIZ_MAX_INFLIGHT` | `2` | Finviz concurrent requests |
 | `TAPEBASIS_YAHOO_MIN_INTERVAL` | `1.0` | Yahoo request spacing (s) |
 | `TAPEBASIS_YAHOO_MAX_INFLIGHT` | `1` | Yahoo concurrent requests |
+| `TAPEBASIS_SA_MIN_INTERVAL` | `0.5` | StockAnalysis request spacing (s) |
+| `TAPEBASIS_SA_MAX_INFLIGHT` | `2` | StockAnalysis concurrent requests |
+| `TAPEBASIS_SA_MAX_RETRIES` | `2` | Retries per StockAnalysis request |
+| `TAPEBASIS_SA_TIMEOUT` | `20` | stockanalysis.com HTTP timeout (s) |
+| `TAPEBASIS_SA_CACHE_TTL` | `20` | Quote cache lifetime (s); the upstream advertises a 3 s shared cache |
 | `TAPEBASIS_BLOOMBERG_MIN_INTERVAL` | `10.0` | Bloomberg request spacing (s); the strictest limiter here |
 | `TAPEBASIS_BLOOMBERG_MAX_INFLIGHT` | `1` | Bloomberg concurrent requests |
 | `TAPEBASIS_BLOOMBERG_MAX_RETRIES` | `1` | Retries per Bloomberg request |
@@ -496,6 +510,7 @@ No proxy configuration exists: every provider reaches its upstream directly.
    TRADINGVIEW -> quote them, but say the figure is single-source and not corroborated.
    FINVIZ      -> same, from the Finviz side.
    YAHOO       -> same, from the Yahoo side.
+   SA          -> same, from the StockAnalysis side; US equities and ETFs only.
    BLOOMBERG   -> same, but find out why in comparisons: a delayed print is
                   reported as not_comparable with the delay named. Quote
                   exchange_delay / print_time before calling a price live.
@@ -569,7 +584,8 @@ records the upstream each leg actually used.
 
 Where a capability exists on only some providers, that is stated rather than simulated: options
 chains come from Finviz and Yahoo (TradingView contributes only the underlying price), backtests run
-twice on TradingView and Yahoo OHLCV, and Finviz is never asked for crypto, FX or commodity quotes.
+twice on TradingView and Yahoo OHLCV, and Finviz and StockAnalysis are never asked for crypto, FX or
+commodity quotes because neither carries them.
 
 ## Disclaimer
 

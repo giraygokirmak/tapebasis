@@ -22,7 +22,8 @@ the other two legs, asked in parallel with the rest. Bloomberg's equity prints a
 so a pair that far apart is reported as not comparable with the delay named instead of being counted
 as disagreement. StockAnalysis covers US equities and ETFs only and serves the same consolidated tape
 Yahoo does, so that pair is weak corroboration. See
-[Bloomberg](#bloomberg-the-leg-that-states-its-delay).
+[Bloomberg](#bloomberg-the-leg-that-states-its-delay) and
+[StockAnalysis](#stockanalysis-the-leg-that-covers-us-equities-and-etfs).
 
 **No tool requires an API key.** Every capability works out of the box; `MARKETAUX_API_TOKEN` only
 upgrades news and sentiment to a licensed feed.
@@ -82,7 +83,7 @@ Every tool result carries exactly one of seven values. It states **coverage**, n
 {
   "data_provider": "ALL",
   "verification": "MULTI_SOURCE",          // MULTI_SOURCE | SINGLE_SOURCE | UNAVAILABLE
-  "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO"],   // + "SA" / "BLOOMBERG" when they answer
+  "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"],   // only those that answered
   "notice": "Every provider asked answered ...",   // sentence to relay to the user
   "data": { ... },                         // the reconciled payload, one value per field
   "fields": { "price": "ALL", "peers": "FINVIZ" }, // per-field provenance
@@ -90,6 +91,7 @@ Every tool result carries exactly one of seven values. It states **coverage**, n
     "tradingview": "2026-11-04T00:59:53+00:00",
     "finviz": "2026-11-04T10:42:00+00:00",
     "yahoo": "2026-11-03T21:00:01+00:00",
+    "sa": "2026-11-03T21:00:01+00:00",         // same consolidated tape as Yahoo
     "bloomberg": "2026-11-04T10:27:00+00:00",  // 15 min behind, so it cannot win
     "chosen": "FINVIZ",
     "decision": "newest",                  // newest | tie | no_timestamp
@@ -97,11 +99,11 @@ Every tool result carries exactly one of seven values. It states **coverage**, n
   },
   "comparisons": [                         // the actual side-by-side numbers
     { "field": "price",
-      "values": { "TRADINGVIEW": 331.9, "FINVIZ": 332.33, "YAHOO": 331.9, "SA": 331.9 },
+      "values": { "TRADINGVIEW": 331.9, "FINVIZ": 332.33, "YAHOO": 331.9, "SA": 331.9, "BLOOMBERG": 332.1 },
       "match": true, "diff_pct": 0.1294, "tolerance_pct": 0.5 }
   ],
   "resolutions": { "TRADINGVIEW": { "symbol": "NASDAQ:AAPL" }, ... },
-  "sources": { "TRADINGVIEW": "scanner.tradingview.com", "FINVIZ": "...", "YAHOO": "..." },
+  "sources": { "TRADINGVIEW": "scanner.tradingview.com", "FINVIZ": "...", "YAHOO": "...", "SA": "...", "BLOOMBERG": "..." },
   "errors": [ { "provider": "FINVIZ", "code": "...", "message": "..." } ],
   "warnings": [ "..." ],
   "degraded": false,                       // true when the health monitor saw drift/downtime
@@ -187,7 +189,7 @@ response is the availability signal. Details: [Design Decisions](Design-Decision
 ## Symbols are resolved per provider
 
 `XAUUSD` is `OANDA:XAUUSD` on TradingView, `^GSPC`-style aliasing for indices, a suffix for Yahoo FX,
-`XAUUSD:CUR` on Bloomberg and simply not carried by Finviz or StockAnalysis. [`symbols.py`](https://github.com/giraygokirmak/tapebasis/blob/main/src/tapebasis/symbols.py)
+`XAUUSD:CUR` on Bloomberg and simply not carried by Yahoo, Finviz or StockAnalysis. [`symbols.py`](https://github.com/giraygokirmak/tapebasis/blob/main/src/tapebasis/symbols.py)
 resolves each query per provider, caches the result for an hour, and records the derivation in
 `resolutions`. A ticker is only returned if the provider can actually quote it, and a missing
 instrument becomes `NOT_ATTEMPTED`: a structural fact, not an error.
@@ -244,7 +246,8 @@ leg used.
 
 Where a capability exists on only some providers, that is stated, not simulated: options chains come
 from Finviz and Yahoo (TradingView contributes only the underlying price), backtests run twice on
-TradingView and Yahoo OHLCV, and Finviz is never asked for crypto, FX or commodity quotes.
+TradingView and Yahoo OHLCV, and Finviz and StockAnalysis are never asked for crypto, FX or commodity
+quotes because neither carries them.
 
 ---
 

@@ -5,7 +5,7 @@ violate by accident.
 
 ---
 
-## 1. Six provider states, not two
+## 1. Seven provider states, not two
 
 **Decision:** `ALL` / `TRADINGVIEW` / `FINVIZ` / `YAHOO` / `SA` / `BLOOMBERG` / `NONE`, never a
 boolean like `verified: true`.
@@ -64,9 +64,9 @@ freshest print is the defensible choice, and `freshness.reason` plus the notice 
 to parse the sentence.
 
 Ties, and cases where no provider reports a usable timestamp, fall back to a fixed documented order
-(`FINVIZ`, `TRADINGVIEW`, `YAHOO`), not to whichever label happened to be first. Only providers that
-share the newest instant are tie-break candidates, so a stale provider can never win against fresher
-ones.
+(`FINVIZ`, `TRADINGVIEW`, `YAHOO`, `SA`, `BLOOMBERG`), not to whichever label happened to be first.
+Only providers that share the newest instant are tie-break candidates, so a stale provider can never
+win against fresher ones.
 
 ---
 

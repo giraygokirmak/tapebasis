@@ -21,10 +21,10 @@ mislabelling this server exists to prevent. So the local path is `FINVIZ`, and
 
 Sentiment is single-source by nature. There is nothing to cross-check a sentiment score against, and
 inventing a second opinion would not make it corroborated. The label names whichever feed supplied
-the headlines, and that is the honest maximum for this capability. Bloomberg is not a candidate
-source here: it publishes no comparable headline sentiment feed. Its quote pages do join the
-cross-check in `stock_quote` / `stock_prices`, but sentiment is a different capability with nothing
-to compare against.
+the headlines, and that is the honest maximum for this capability. Bloomberg and StockAnalysis are
+not candidates here: neither publishes a comparable headline sentiment feed. Their quote pages do join
+the cross-check in `stock_quote` / `stock_prices`, but sentiment is a different capability with
+nothing to compare against.
 
 ## Local scoring
 

@@ -121,14 +121,18 @@ Returns per-probe status, message, fingerprint, and whether the result matches t
 
 ```jsonc
 {
-  "providers": ["TRADINGVIEW", "FINVIZ", "YAHOO"],
+  "providers": { "TRADINGVIEW": "OK", "FINVIZ": "OK", "YAHOO": "OK", "SA": "OK" },
   "degraded": false,
   "issues": [ ... ],
   "rate_limits": {
     "TRADINGVIEW": { "min_interval_s": 0.5, "max_inflight": 2, "cooling_down_s": 0.0,
                      "block_streak": 0, "cached_entries": 12 },
+    "FINVIZ": { "min_interval_s": 0.35, "max_inflight": 2, "cooling_down_s": 0.0,
+                "block_streak": 0, "cached_entries": 9 },
     "YAHOO": { "min_interval_s": 1.0, "max_inflight": 1, "cooling_down_s": 4.7,
                "block_streak": 1, "cached_entries": 3 },
+    "SA": { "min_interval_s": 0.5, "max_inflight": 2, "cooling_down_s": 0.0,
+            "block_streak": 0, "cached_entries": 5 },
     "BLOOMBERG": { "min_interval_s": 10.0, "max_inflight": 1, "cooling_down_s": 0.0,
                    "block_streak": 0, "cached_entries": 1 }
   }

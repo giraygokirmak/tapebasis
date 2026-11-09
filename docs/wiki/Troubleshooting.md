@@ -4,7 +4,7 @@ Symptom → cause → fix.
 
 ---
 
-## `data_provider` is `TRADINGVIEW`, `FINVIZ`, `YAHOO` or `BLOOMBERG`, not `ALL`
+## `data_provider` is `TRADINGVIEW`, `FINVIZ`, `YAHOO`, `SA` or `BLOOMBERG`, not `ALL`
 
 **Cause:** at least one provider failed or timed out for this call, so coverage is incomplete.
 
@@ -204,7 +204,10 @@ explicit valence is the fix. Use a **float**: VADER adds valences arithmetically
 **Cause:** one provider hit its HTTP timeout and the others' data still went out. The fan-out waits
 for every leg, so latency is the slowest one.
 
-Tuning: lower `FINVIZ_TIMEOUT` to fail faster, at the cost of losing slow-but-valid answers.
+Tuning: lower `FINVIZ_TIMEOUT` (default 25 s) or `TAPEBASIS_SA_TIMEOUT` (default 20 s) to fail faster,
+at the cost of losing slow-but-valid answers. Bloomberg's leg is already bounded by
+`TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE` (12 s), so it becomes a stated `TIMEOUT` instead of holding the
+whole response.
 
 ---
 
@@ -292,9 +295,9 @@ derived (`explicit`, `alias`, `search`, `none`).
 | `BRK.B` ↔ `BRK-B` | Normalised automatically |
 | `^GSPC` ↔ `SPX` ↔ `SP:SPX` | Aliased to `SPX` |
 | `RUT` vs `IWM` | Index vs its ETF: **different instruments**, never aliased |
-| `XAUUSD` (spot gold) | TradingView `OANDA:XAUUSD` only. Yahoo has no spot pair (`XAUUSD=X` is a 404) and Finviz and StockAnalysis do not carry it |
-| `BTCUSD` | TradingView `BITSTAMP:BTCUSD`, Yahoo `BTC-USD`; Finviz and StockAnalysis have no crypto |
-| `EURUSD` | TradingView `FX:EURUSD`, Yahoo `EURUSD=X`; Finviz and StockAnalysis have no FX |
+| `XAUUSD` (spot gold) | TradingView `OANDA:XAUUSD` and Bloomberg `XAUUSD:CUR`. Yahoo has no spot pair (`XAUUSD=X` is a 404), and Finviz and StockAnalysis do not carry it |
+| `BTCUSD` | TradingView `BITSTAMP:BTCUSD`, Yahoo `BTC-USD`, Bloomberg `XBTUSD:CUR`; Finviz and StockAnalysis have no crypto |
+| `EURUSD` | TradingView `FX:EURUSD`, Yahoo `EURUSD=X`, Bloomberg `EURUSD:CUR`; Finviz and StockAnalysis have no FX |
 | `SPX` / `DJI` | Finviz has no per-ticker index page (`/stock?t=SPX` is a 404, and `COMP` there is Compass Inc), and StockAnalysis's quote API has no index route. Use `market_indices` |
 | Non-US (`.IS`, `.CA`) | TradingView only, unless Yahoo or Finviz happens to list it; StockAnalysis's quote API is US-only |
 | `BRK-B` | StockAnalysis spells it `brk.b`; the dash is converted mechanically |
