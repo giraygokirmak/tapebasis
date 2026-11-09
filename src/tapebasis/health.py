@@ -2,8 +2,9 @@
 
 Every provider scrapes or calls an undocumented upstream (finviz.com's HTML
 and unversioned JSON islands, TradingView's scanner and symbol search, Yahoo's
-chart API). Any of them can change a path, a JSON key or a status code without
-notice. When that happens, tools start failing or silently returning zeros.
+chart API, stockanalysis.com's quote API). Any of them can change a path, a
+JSON key or a status code without notice. When that happens, tools start
+failing or silently returning zeros.
 
 This module probes each upstream directly, independently of the provider code
 paths, and classifies the result:
@@ -36,9 +37,10 @@ import httpx
 TRADINGVIEW = "TRADINGVIEW"
 FINVIZ = "FINVIZ"
 YAHOO = "YAHOO"
+SA = "SA"
 
 #: Every provider the monitor probes, in display order.
-PROVIDERS: tuple[str, ...] = (TRADINGVIEW, FINVIZ, YAHOO)
+PROVIDERS: tuple[str, ...] = (TRADINGVIEW, FINVIZ, YAHOO, SA)
 
 STATUS_OK = "OK"
 STATUS_DRIFT = "DRIFT"
@@ -152,7 +154,9 @@ def _probes() -> list[Probe]:
     Each probe maps to a concrete place in the provider code:
     ``finviz.core.services.finviz_client`` / ``quote_service`` /
     ``market_service``, ``providers.tradingview.native`` (scanner + chart
-    websocket), and ``yh_access`` (Yahoo chart API).
+    websocket), ``yh_access`` (Yahoo chart API), ``sa_access`` (StockAnalysis
+    quote API) and ``bb_access`` (Bloomberg, which has no probe because it gates
+    on the TLS fingerprint: an httpx probe there would report a false outage).
 
     A probe must exercise the endpoint the provider code actually uses, on the
     provider that uses it. Yahoo used to be probed under TRADINGVIEW because the
@@ -241,6 +245,19 @@ def _probes() -> list[Probe]:
             url="https://query1.finance.yahoo.com/v8/finance/chart/BTC-USD?interval=1d&range=5d",
             headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
             required_keys=("chart.result.0.meta", "chart.result.0.timestamp"),
+        ),
+        # ── StockAnalysis ───────────────────────────────────────────────────
+        Probe(
+            id="sa.quote_api",
+            provider=SA,
+            description="stockanalysis.com quote API (US equities and ETFs)",
+            url="https://stockanalysis.com/api/quotes/s/aapl",
+            headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
+            # ``data.p`` is the price field every shaped reading is built from:
+            # if the route moves or the envelope is renamed, this fires instead
+            # of the leg silently reporting "no price" forever. The sibling
+            # ``status`` is an HTTP-style integer, so it is not part of the path.
+            required_keys=("data.p",),
         ),
     ]
 

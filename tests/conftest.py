@@ -56,6 +56,33 @@ def _no_bloomberg_network(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_stockanalysis_network(monkeypatch):
+    """Fail loudly if any test reaches stockanalysis.com.
+
+    StockAnalysis is now a leg of ``stock_quote``, ``stock_prices`` and
+    ``stock_extended_hours``, so a fixture that forgets to fake it would
+    otherwise spend a live request per quote. Tests that exercise the real
+    transport request this fixture by name and pass the returned original back
+    into ``sa_access._fetch``, so the guard keeps refusing accidental live calls
+    everywhere else without blocking the code under test.
+    """
+    from tapebasis import sa_access
+
+    real_fetch = sa_access._fetch
+
+    async def refuse(path, cache_key):
+        raise AssertionError(
+            f"test attempted a live stockanalysis.com fetch of {path}"
+        )
+
+    monkeypatch.setattr(sa_access, "_fetch", refuse)
+    # The tests that exercise the real transport ask for this fixture by name
+    # and pass the original back in, so the guard never blocks the code under
+    # test while still refusing an accidental live call everywhere else.
+    yield real_fetch
+
+
 @pytest.fixture
 def tv_quote():
     """A TradingView scanner row, as ``native.scan`` returns it."""
@@ -121,6 +148,49 @@ def yh_quote():
         "company": "Apple Inc.",
         "quote_stale": False,
         "source": "Yahoo Finance chart API",
+    }
+
+
+@pytest.fixture
+def sa_quote():
+    """A StockAnalysis shaped quote, as ``sa_access.quote`` returns it.
+
+    Note the tape is the same consolidated one Yahoo serves: price, previous
+    close, day range and the 52-week range are penny-identical to ``yh_quote``
+    on purpose, because that is what the live feeds do. ``price_timestamp`` is
+    already ISO: ``sa_access`` converts the endpoint's epoch milliseconds.
+    """
+    return {
+        "symbol": "AAPL",
+        "requested": "AAPL",
+        "price": 331.9,
+        "change": -6.42,
+        "change_percent": -1.9,
+        "previous_close": 338.32,
+        "day_open": 337.1,
+        "day_high": 338.0,
+        "day_low": 330.5,
+        "volume": 63160515.0,
+        "week_52_high": 351.73,
+        "week_52_low": 243.42,
+        "exchange": "NASDAQ",
+        "market_state": "closed",
+        "session": "post",
+        "price_date": "2026-11-03",
+        "price_timestamp": CLOSE_ISO,
+        "price_timestamp_source": "ts (epoch ms)",
+        "extended_hours": {
+            "session": "Post-market",
+            "price": 329.8,
+            "change": -2.1,
+            "change_percent": -0.63,
+            "previous_close": 331.9,
+            "volume": 120_000.0,
+            "price_timestamp": CLOSE_ISO,
+            "price_date": "2026-11-03",
+        },
+        "has_extended_hours": True,
+        "source": "stockanalysis.com consolidated quote API",
     }
 
 

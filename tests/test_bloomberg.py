@@ -2,7 +2,7 @@
 
 The important properties pinned here:
 
-* Bloomberg is a full fourth leg: it is in ``PROVIDER_ORDER``, so it can
+* Bloomberg is a full leg: it is in ``PROVIDER_ORDER``, so it can
   contribute to ``ALL`` / ``MULTI_SOURCE``, and last in the tie-break order
   because its prints can be structurally older.
 * The print time comes from the intraday series, never from ``lastUpdate``,

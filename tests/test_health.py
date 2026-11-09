@@ -196,7 +196,13 @@ def test_warnings_are_scoped_to_the_provider():
 def test_every_provider_has_its_own_probe():
     """Yahoo used to be probed under TRADINGVIEW; that hid a whole outage."""
     providers = {probe.provider for probe in health._probes()}
-    assert providers == {TRADINGVIEW, FINVIZ, health.YAHOO}
+    assert providers == {TRADINGVIEW, FINVIZ, health.YAHOO, health.SA}
+
+
+def test_stockanalysis_probes_hit_stockanalysis_only():
+    probes = [p for p in health._probes() if p.provider == health.SA]
+    assert probes
+    assert all("stockanalysis.com" in p.url for p in probes)
 
 
 def test_tradingview_probes_hit_tradingview_not_yahoo():
@@ -221,6 +227,24 @@ def test_summary_includes_rate_limit_state():
         ),
     }
     summary = monitor.summary()
-    assert set(summary["providers"]) == {TRADINGVIEW, FINVIZ, health.YAHOO}
+    assert set(summary["providers"]) == {
+        TRADINGVIEW, FINVIZ, health.YAHOO, health.SA,
+    }
     assert "rate_limits" in summary
     assert summary["providers"]["YAHOO"] == "UNKNOWN"
+
+
+def test_stockanalysis_probe_asserts_the_price_field_not_the_status_code():
+    """``status`` is an HTTP-style integer; the price lives at ``data.p``.
+
+    Asserting ``status.data.p`` would report permanent DRIFT on a healthy
+    endpoint, which is worse than no probe: it trains the reader to ignore the
+    warning.
+    """
+    probe = next(p for p in health._probes() if p.id == "sa.quote_api")
+    assert probe.required_keys == ("data.p",)
+    assert probe.provider == health.SA
+    payload = {"status": 200, "data": {"p": 342.37, "cl": 344.17}}
+    assert health._has_key(payload, probe.required_keys[0]) is True
+    # A renamed envelope field is what the probe exists to catch.
+    assert health._has_key({"status": 200, "quote": {"p": 1.0}}, "data.p") is False

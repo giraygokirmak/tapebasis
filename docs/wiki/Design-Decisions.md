@@ -7,13 +7,13 @@ violate by accident.
 
 ## 1. Six provider states, not two
 
-**Decision:** `ALL` / `TRADINGVIEW` / `FINVIZ` / `YAHOO` / `BLOOMBERG` / `NONE`, never a boolean
-like `verified: true`.
+**Decision:** `ALL` / `TRADINGVIEW` / `FINVIZ` / `YAHOO` / `SA` / `BLOOMBERG` / `NONE`, never a
+boolean like `verified: true`.
 
 **Why:** "verified" collapses two different facts: *how many providers answered* and *whether they
 agreed*. A boolean loses the case that matters most: several answered and disagreed. With an explicit
-state per provider plus `comparisons`, that case is visible instead of hidden. Bloomberg was added
-later as a fourth leg with a declared delay, see decision 30.
+state per provider plus `comparisons`, that case is visible instead of hidden. Bloomberg and
+StockAnalysis were added later as further legs with their own properties, see decisions 30 and 35.
 
 **Consequence:** `ALL` means "every provider that was asked answered", not "they agree". Agreement
 lives in `comparisons[].match`. This is documented in several places because it is the single easiest
@@ -156,7 +156,7 @@ wrong answer, not a bad ticker.
 ## 10. Multiple independent legs, no proxying
 
 **Decision:** TradingView, Finviz and Yahoo each hit genuinely different upstreams through their own
-access module.
+access module. Every provider added later (Bloomberg, StockAnalysis) follows the same rule.
 
 **Why:** cross-verification is only meaningful if the sources are independent. An earlier version of
 this server took TradingView's price from Yahoo's chart API: two legs, one upstream wearing two
@@ -413,7 +413,7 @@ warning meaningful.
 
 ---
 
-## 30. Bloomberg is a fourth leg, with its delay as a comparability boundary
+## 30. Bloomberg is a reconciliation leg, with its delay as a comparability boundary
 
 **Decision:** Bloomberg is a full provider: it is in `PROVIDER_ORDER`, `stock_quote` and
 `stock_prices` pass it to `reconcile.ask` in parallel with the others, its readings appear in
@@ -421,7 +421,7 @@ warning meaningful.
 is modelled as a boundary of its own rather than as a tolerance, and it sits last in the documented
 tie-break order.
 
-**Why it is a leg.** Redundancy is the product. An overlapping figure asked of a fourth provider is
+**Why it is a leg.** Redundancy is the product. An overlapping figure asked of another provider is
 one more chance to catch a broken feed, and refusing to ask a provider because its numbers often
 match is a decision made from memory of one afternoon's measurements, not from the data flow. The
 "it is delayed" objection turned out to be solvable: the page's real print time is derivable
@@ -449,7 +449,7 @@ last in `DEFAULT_ORDER` so a delayed page can never win a tie against a live pri
 
 **Cost control.** Its page path is paced at 10 s per request, so `stock_quote` bounds the leg with
 `TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE` (a stated `TIMEOUT` instead of a held response, with the other
-three readings still going out) and `stock_prices` asks it about at most
+readings still going out) and `stock_prices` asks it about at most
 `TAPEBASIS_BLOOMBERG_BATCH_MAX` tickers per call, naming the rest in `warnings`.
 
 **Access constraint:** bloomberg.com gates plain HTTP clients on the TLS fingerprint. `httpx` gets a
@@ -485,13 +485,14 @@ stopped short.
 | Bloomberg quote page | `dayRange` (as a pair, never split into high/low), `earningsPerShare` |
 
 The volume case is the one that shows why this matters beyond tidiness: `volume` was being compared
-across three providers while a fourth had been asked and had answered. A comparison that leaves out an
+across some providers while another had been asked and had answered. A comparison that leaves out an
 answering provider claims more precision than it has. The same applies to the day range, which two
 providers published and no tool exposed.
 
 **Consequence:** `stock_quote` compares `day_open` / `day_high` / `day_low` and Yahoo's `volume` joins
-the four-way check. `feed_mode` states the scanner's own delay (`delayed_streaming_900` vs
-`streaming`), the same distinction Bloomberg's `exchange_delay` already made for its leg. The
+the same cross-check as every other provider. `feed_mode` states the scanner's own delay
+(`delayed_streaming_900` vs `streaming`), the same distinction Bloomberg's `exchange_delay` already
+made for its leg. The
 TradingView identity fields (`instrument_type`, `instrument_subtype`) ride along labelled
 `TRADINGVIEW` because only that provider publishes them.
 
@@ -570,6 +571,57 @@ where there is nothing to compare, which is exactly where nobody looks.
 **Consequence:** a field only one provider shapes (a company website, an AI summary) is still labelled
 with that provider, and a field several shape but none compare is labelled with the freshest one. Both
 behaviours are pinned by tests.
+
+---
+
+## 35. StockAnalysis is the fifth leg, and its coverage boundary is stated
+
+**Decision:** stockanalysis.com is asked in parallel with the other providers on `stock_quote`,
+`stock_prices` and `stock_extended_hours`. Its readings enter `comparisons[].values` and it counts
+toward `ALL` / `providers_answered`. It sits immediately before Bloomberg in both `PROVIDER_ORDER`
+and `DEFAULT_ORDER`.
+
+**Why it is a leg.** The rule this server applies is that every provider which can answer a field is
+asked, in parallel. StockAnalysis can answer price, change, previous close, the session open/high/low,
+the 52-week range and volume for any US equity or ETF, so treating it as a side channel would have
+been the exact asymmetry the rule forbids: a provider with the same data point, fetched anyway,
+left out of the comparison for no reason but that it was added later.
+
+**Why it sits before Bloomberg.** Both orders matter only for display and for the documented
+tie-break. It is a live feed, so it should outrank a leg whose prints can be structurally 15 minutes
+old. But its coverage is the narrowest of the live feeds (US equities and ETFs, no indices, FX,
+crypto or foreign listings), so on an exact print-time tie it should never take precedence over a
+provider that carries the same instrument more broadly. Last-but-one is where both statements hold,
+and it keeps Bloomberg last for the reason decision 30 gives.
+
+**Why a not-carried instrument is not an error.** The quote API has no search endpoint and answers
+`404` for
+every instrument class it does not serve. Sending a guess and treating the `404` as a provider failure
+would blame the leg for a boundary it declares, so `symbols.resolve_sa` reports it up front and the
+attempt is recorded as `NOT_ATTEMPTED`. A `400`/`404` is `NoDataError`; only `401`/`403` or a `5xx`
+is a provider error.
+
+**What is weak, and said out loud.** Its quote surface is the same consolidated tape Yahoo serves:
+measured penny-identical on price, previous close, day range, volume and the 52-week range across
+8 of 8 instruments. Agreement between those two is one tape read twice, not two independent
+witnesses. This follows the Bloomberg precedent and is stated in `providers_state.py`, the server
+instructions, the catalogue and these docs rather than being presented as extra corroboration.
+
+**Deliberate getter gap.** `pe_ratio` has no `sa_get` in `_quote_specs`. The quote API carries no
+fundamentals; P/E lives on the stock page, a second endpoint this tool does not fetch. A getter that
+reads a field nobody asked for would make the comparison look broader than it is, which is worse than
+the gap. `day_open` is the other deliberate gap, for Finviz and Bloomberg.
+
+**Two mechanical facts that would otherwise corrupt a comparison.** `ts` and `ets` are epoch
+**milliseconds**; they are converted in `sa_access`, because passing one through would date a print to
+the year 56828 and let it win every freshness arbitration. And `cl` is the previous close while `pd`
+merely repeats the current price, so reading `pd` as the previous close would make every change
+percentage wrong by the day's move. This is the same shape of bug as Bloomberg's `lastUpdate`
+sentinel in decision 30.
+
+**Consequence:** `stock_quote` can now return every provider label in `providers_answered`, and
+`comparisons[].values` every reading. A symbol StockAnalysis does not carry is `NOT_ATTEMPTED` for
+that leg, never an error and never a silent absence.
 
 ---
 

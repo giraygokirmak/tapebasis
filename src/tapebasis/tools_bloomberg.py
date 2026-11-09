@@ -1,7 +1,7 @@
 """Bloomberg-only tools: one provider answered, and the response says so.
 
 Bloomberg is also a full reconciliation leg: ``stock_quote`` and ``stock_prices``
-ask it in parallel with TradingView, Finviz and Yahoo, and its readings appear
+ask it in parallel with every other provider, and its readings appear
 in their ``comparisons``. These two tools are the other case: a caller asks
 Bloomberg directly, nobody else is queried, so the envelope is labelled
 ``BLOOMBERG`` with ``verification: SINGLE_SOURCE`` and ``cross_checked: false``.

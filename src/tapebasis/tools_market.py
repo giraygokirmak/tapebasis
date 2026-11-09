@@ -1,14 +1,14 @@
 """Multi-source market data tools.
 
 Every tool here asks **every** provider that can serve the fact, TradingView,
-Finviz, Yahoo Finance and Bloomberg, compares the answers, and returns the
-reconciled payload with an explicit ``data_provider`` label. See
+Finviz, Yahoo Finance, StockAnalysis and Bloomberg, compares the answers, and
+returns the reconciled payload with an explicit ``data_provider`` label. See
 :mod:`tapebasis.reconcile` for the rules.
 
 Providers are addressed through :mod:`tapebasis.tv_access`,
-:mod:`tapebasis.fv_access`, :mod:`tapebasis.yh_access` and
-:mod:`tapebasis.bb_access`, which normalise the provider service layers. Nothing
-proxies another provider.
+:mod:`tapebasis.fv_access`, :mod:`tapebasis.yh_access`,
+:mod:`tapebasis.sa_access` and :mod:`tapebasis.bb_access`, which normalise the
+provider service layers. Nothing proxies another provider.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from . import bb_access, fv_access, tv_access, yh_access
+from . import bb_access, fv_access, sa_access, tv_access, yh_access
 from .health import MONITOR
 from .merge_helpers import (
     fv_earnings_fields,
@@ -43,6 +43,7 @@ from .providers_state import (
 from .reconcile import (
     BLOOMBERG,
     FINVIZ,
+    SA,
     TRADINGVIEW,
     YAHOO,
     FieldSpec,
@@ -51,14 +52,15 @@ from .reconcile import (
     finalize,
     providers_in,
 )
-from .symbols import Resolution, resolve, strip_exchange, to_finviz
+from .symbols import Resolution, resolve, resolve_sa, strip_exchange, to_finviz
 
 #: Every provider the market tools ask. They are peers, not fallbacks: a tool
 #: either asks all of them or records ``NOT_ATTEMPTED`` for the ones that have
-#: no endpoint. Bloomberg is the fourth: it is asked in parallel like the rest,
-#: and its known delay is handled by the print-time guards rather than by
-#: keeping it out of the comparison.
-ALL_PROVIDERS = (TRADINGVIEW, FINVIZ, YAHOO, BLOOMBERG)
+#: no endpoint. Bloomberg and StockAnalysis are the other two legs: they are
+#: asked in parallel like the rest, and the known delay of the former and the
+#: US-only coverage of the latter are handled by the print-time guards and the
+#: resolution notes rather than by keeping them out of the comparison.
+ALL_PROVIDERS = (TRADINGVIEW, FINVIZ, YAHOO, SA, BLOOMBERG)
 
 #: Read a numeric environment override without letting a typo crash the import.
 def _env_number(name: str, default: float) -> float:
@@ -136,14 +138,16 @@ async def _symbols_for(symbol: str) -> dict[str, Any]:
         resolve(symbol, YAHOO),
     )
     bb_res = _bloomberg_resolution(symbol)
+    sa_res = resolve_sa(symbol)
     return {
         "query": symbol,
         "ticker": ticker,
         "TRADINGVIEW": tv_res,
         "FINVIZ": fv_res,
         "YAHOO": yh_res,
+        "SA": sa_res,
         "BLOOMBERG": bb_res,
-        "resolutions": _resolution_block(tv_res, fv_res, yh_res, bb_res),
+        "resolutions": _resolution_block(tv_res, fv_res, yh_res, sa_res, bb_res),
     }
 
 
@@ -203,10 +207,12 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
     Every spec that a provider *can* answer carries a getter for that provider. A
     missing getter would silently exclude that provider from the comparison,
     which would make an ``ALL`` label claim coverage the comparison never
-    actually checked. ``day_open`` is the one exception and it is deliberate:
-    Finviz has no Open row and Bloomberg's page carries it only sometimes, so its
-    spec has getters for the two providers that publish it instead of a getter
-    that reads a field nobody asked for.
+    actually checked. Two gaps are deliberate: ``day_open`` has no Finviz or
+    Bloomberg getter (Finviz has no Open row; Bloomberg's page carries it only
+    sometimes), and ``pe_ratio`` has no StockAnalysis getter (its quote API
+    publishes price, range, volume and the 52-week range, not fundamentals; P/E
+    lives on its stock page, a second endpoint that is not fetched here). A
+    getter that reads a field nobody asked for would be worse than the gap.
 
     ``day_change_comparable=False`` marks the day change as structurally not
     comparable instead of comparing readings that share no baseline. Every
@@ -218,6 +224,7 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
             lambda p: p.get("price"),
             lambda p: p.get("price"),
             yh_get=lambda p: p.get("price"),
+            sa_get=lambda p: p.get("price"),
             bb_get=lambda p: p.get("price"),
             tolerance_pct=0.5,
             # A price is only one number if the two prints describe the same
@@ -235,6 +242,7 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
             lambda p: p.get("change_percent"),
             lambda p: p.get("change_percent"),
             yh_get=lambda p: p.get("change_percent"),
+            sa_get=lambda p: p.get("change_percent"),
             bb_get=lambda p: p.get("change_percent"),
             tolerance_pct=2.0,
             absolute_floor=0.05,
@@ -252,6 +260,7 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
             lambda p: p.get("previous_close"),
             lambda p: p.get("previous_close"),
             yh_get=lambda p: p.get("previous_close"),
+            sa_get=lambda p: p.get("previous_close"),
             bb_get=lambda p: p.get("previous_close"),
             tolerance_pct=0.5,
             # The same hazard, one step removed: "previous close" itself rolls
@@ -267,6 +276,7 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
             lambda p: p.get("week_52_high"),
             lambda p: p.get("week_52_high"),
             yh_get=lambda p: p.get("week_52_high"),
+            sa_get=lambda p: p.get("week_52_high"),
             bb_get=lambda p: p.get("week_52_high"),
             tolerance_pct=0.5,
         ),
@@ -275,6 +285,7 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
             lambda p: p.get("week_52_low"),
             lambda p: p.get("week_52_low"),
             yh_get=lambda p: p.get("week_52_low"),
+            sa_get=lambda p: p.get("week_52_low"),
             bb_get=lambda p: p.get("week_52_low"),
             tolerance_pct=0.5,
         ),
@@ -297,6 +308,7 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
             lambda p: p.get("volume"),
             lambda p: p.get("volume"),
             yh_get=lambda p: p.get("volume"),
+            sa_get=lambda p: p.get("volume"),
             bb_get=lambda p: p.get("volume"),
             tolerance_pct=1.0,
             # Volume accumulates through a session; a partial session and a
@@ -307,15 +319,16 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
         ),
         # The session's own high and low. Every price feed here publishes them
         # and none of the tools did: TradingView returned them on each scanner
-        # row, Yahoo on each chart ``meta``, Bloomberg on its quote page. A
-        # session range is a high-water mark for the day, so it is
-        # session-relative exactly like volume: two prints from different
-        # sessions are two different ranges, not a disagreement.
+        # row, Yahoo on each chart ``meta``, StockAnalysis and Bloomberg on
+        # their quote endpoints. A session range is a high-water mark for the
+        # day, so it is session-relative exactly like volume: two prints from
+        # different sessions are two different ranges, not a disagreement.
         FieldSpec(
             "day_high",
             lambda p: p.get("day_high"),
             lambda p: p.get("day_high"),
             yh_get=lambda p: p.get("day_high"),
+            sa_get=lambda p: p.get("day_high"),
             bb_get=lambda p: p.get("day_high"),
             tolerance_pct=0.5,
             max_skew_seconds=SKEW_LIMIT_SECONDS,
@@ -327,20 +340,22 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
             lambda p: p.get("day_low"),
             lambda p: p.get("day_low"),
             yh_get=lambda p: p.get("day_low"),
+            sa_get=lambda p: p.get("day_low"),
             bb_get=lambda p: p.get("day_low"),
             tolerance_pct=0.5,
             max_skew_seconds=SKEW_LIMIT_SECONDS,
             session_boundary=True,
             max_age_seconds=MAX_SESSION_AGE_SECONDS,
         ),
-        # The open is only reported by TradingView and Yahoo; Finviz's snapshot
-        # has no Open row and Bloomberg's page carries it only sometimes, so
-        # the getters are absent for those two rather than reading ``None``
-        # from a field that was never asked for.
+        # The open is reported by TradingView, Yahoo and StockAnalysis; Finviz's
+        # snapshot has no Open row and Bloomberg's page carries it only
+        # sometimes, so the getters are absent for those two rather than reading
+        # ``None`` from a field that was never asked for.
         FieldSpec(
             "day_open",
             lambda p: p.get("day_open"),
             yh_get=lambda p: p.get("day_open"),
+            sa_get=lambda p: p.get("day_open"),
             tolerance_pct=0.5,
             max_skew_seconds=SKEW_LIMIT_SECONDS,
             session_boundary=True,
@@ -356,16 +371,16 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
     """Quote and fundamentals for one instrument, asked of every capable provider.
 
     Each provider is asked independently and natively: TradingView's scanner,
-    Finviz's quote page, Yahoo's chart API and Bloomberg's quote page, in
-    parallel. Nothing proxies another, so the cross-check is real. Price,
-    change, previous close, the session's own open/high/low, the 52-week range,
-    P/E, RSI and volume are compared field by field; Finviz's deeper
-    fundamentals, the 84-field snapshot, the revenue/segment breakdown, company
-    profile, peers and after-hours print, ride along, each labelled with the
-    provider that supplied it. A field that cannot be shown to describe the same
-    observation is reported as ``not_comparable`` rather than as a conflict, and
-    an FX day change is never compared because spot FX has no single official
-    previous close.
+    Finviz's quote page, Yahoo's chart API, StockAnalysis's quote API and
+    Bloomberg's quote page, in parallel. Nothing proxies another, so the
+    cross-check is real. Price, change, previous close, the session's own
+    open/high/low, the 52-week range, P/E, RSI and volume are compared field by
+    field; Finviz's deeper fundamentals, the 84-field snapshot, the
+    revenue/segment breakdown, company profile, peers and after-hours print,
+    ride along, each labelled with the provider that supplied it. A field that
+    cannot be shown to describe the same observation is reported as
+    ``not_comparable`` rather than as a conflict, and an FX day change is never
+    compared because spot FX has no single official previous close.
 
     Bloomberg's prints can be structurally older than a live feed's
     (``exchangeDelay`` is ``15 Minutes`` on equities and indices). That is
@@ -375,10 +390,17 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
     freshness tie-break. ``exchange_delay`` and ``print_time`` ride along so the
     delay is visible.
 
+    StockAnalysis covers US equities and ETFs only. Its quote surface is the
+    same consolidated tape Yahoo serves, so agreement between those two is weak
+    corroboration rather than two independent witnesses; that is stated in the
+    docs and in the single-source notice. Indices, FX, crypto and foreign
+    listings resolve to "not carried" for that leg, which is recorded as
+    ``NOT_ATTEMPTED`` rather than as a failure.
+
     Symbols are resolved dynamically per provider, so ``XAUUSD`` reaches
     TradingView as ``OANDA:XAUUSD``, Yahoo as ``XAUUSD=X``, Bloomberg as
-    ``XAUUSD:CUR``, and Finviz is told it does not carry spot gold (rather than
-    being sent to a 404).
+    ``XAUUSD:CUR``, and Finviz and StockAnalysis are told they do not carry spot
+    gold (rather than being sent to a 404).
 
     Args:
         symbol: Anything the instrument is commonly called (``AAPL``, ``BRK.B``,
@@ -395,6 +417,7 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
     tv_res = resolved["TRADINGVIEW"]
     fv_res = resolved["FINVIZ"]
     yh_res = resolved["YAHOO"]
+    sa_res = resolved["SA"]
     bb_res = resolved["BLOOMBERG"]
 
     async def tv_call() -> dict[str, Any]:
@@ -426,6 +449,16 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         except NoDataError as exc:
             raise NotApplicable(YAHOO, exc.message) from exc
 
+    async def sa_call() -> dict[str, Any]:
+        if not sa_res.found:
+            raise NotApplicable(
+                SA, sa_res.note or f"StockAnalysis does not carry {symbol}"
+            )
+        try:
+            return await sa_access.quote(sa_res.symbol)
+        except NoDataError as exc:
+            raise NotApplicable(SA, exc.message) from exc
+
     async def bb_call() -> dict[str, Any]:
         if not bb_res.found:
             raise NotApplicable(
@@ -450,7 +483,11 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             raise NotApplicable(BLOOMBERG, exc.message) from exc
         return data
 
-    pair = await ask(tv_call, fv_call, yh_call, bb_call)
+    # The last two legs are named rather than positional: both are optional in
+    # ``ask`` and swapping them would mislabel every reading in the response.
+    pair = await ask(
+        tv_call, fv_call, yh_call, bb_fn=bb_call, sa_fn=sa_call
+    )
 
     def tv_norm(payload: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -508,9 +545,9 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             "week_52_low": payload.get("52w_low"),
             # Yahoo reports the session volume in ``meta.regularMarketVolume``
             # and it was being dropped here, so ``volume`` was compared across
-            # three providers while a fourth one had already been asked and
-            # answered. Read it so the comparison covers every provider that
-            # actually has the field.
+            # some providers while another had already been asked and answered.
+            # Read it so the comparison covers every provider that actually has
+            # the field.
             "volume": payload.get("volume"),
             "day_open": payload.get("day_open"),
             "day_high": payload.get("day_high"),
@@ -522,6 +559,34 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             "company": payload.get("company"),
         }
 
+    def sa_norm(payload: dict[str, Any]) -> dict[str, Any]:
+        # StockAnalysis's quote endpoint publishes price, the day session, the
+        # 52-week range and volume. It has no fundamentals on this route, so
+        # ``pe_ratio``/``beta``/``eps`` are not invented here; they live on its
+        # stock page, which ``stock_quote`` does not fetch.
+        return {
+            "price": payload.get("price"),
+            "change_percent": payload.get("change_percent"),
+            "previous_close": payload.get("previous_close"),
+            "week_52_high": payload.get("week_52_high"),
+            "week_52_low": payload.get("week_52_low"),
+            "day_open": payload.get("day_open"),
+            "day_high": payload.get("day_high"),
+            "day_low": payload.get("day_low"),
+            "volume": payload.get("volume"),
+            "exchange": payload.get("exchange"),
+            "market_state": payload.get("market_state"),
+            "price_date": payload.get("price_date"),
+            # ``ts`` is epoch milliseconds; ``sa_access`` converts it to ISO so
+            # it can be ordered against the other providers' print times.
+            "price_timestamp": payload.get("price_timestamp"),
+            # Prefix the key with its provider, like the other non-compared
+            # extras in this payload: a bare ``extended_hours`` would not say
+            # whose print it is.
+            "stockanalysis_extended_hours": payload.get("extended_hours"),
+            "stockanalysis_has_extended_hours": payload.get("has_extended_hours"),
+        }
+
     def bb_norm(payload: dict[str, Any]) -> dict[str, Any]:
         # Bloomberg's print time is already derived from the intraday series by
         # ``bb_access.shape_quote`` and is passed as ``bb_time``, so it is not
@@ -529,8 +594,8 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         # timestamp in the payload.
         week_52 = payload.get("week_52_range") or [None, None]
         # ``dayRange`` is Bloomberg's ``[low, high]`` pair. Splitting it here is
-        # what lets its session range join the same comparison the other three
-        # legs feed; without it the field arrived in every shaped payload and
+        # what lets its session range join the same comparison the other legs
+        # feed; without it the field arrived in every shaped payload and
         # stopped there.
         day_range = payload.get("day_range") or [None, None]
         return {
@@ -556,11 +621,12 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         # FX has no shared previous close, so its day change is reported from
         # every provider but never compared. Everything else is compared.
         specs=_quote_specs(
-            day_change_comparable=not _is_fx(tv_res, fv_res, yh_res, bb_res)
+            day_change_comparable=not _is_fx(tv_res, fv_res, yh_res, sa_res, bb_res)
         ),
         tv_norm=tv_norm,
         fv_norm=fv_norm,
         yh_norm=yh_norm,
+        sa_norm=sa_norm,
         bb_norm=bb_norm,
         # Bloomberg's print time is derived, not read off ``lastUpdate``, so it
         # is passed explicitly rather than picked up from the shaped payload.
@@ -576,6 +642,9 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             YAHOO: f"https://query1.finance.yahoo.com/v8/finance/chart/{yh_res.symbol}"
             if yh_res.found
             else "not carried by Yahoo Finance",
+            SA: f"https://stockanalysis.com/api/quotes/s/{sa_res.symbol}"
+            if sa_res.found
+            else "not carried by StockAnalysis",
             BLOOMBERG: f"https://www.bloomberg.com/quote/{bb_res.symbol}"
             if bb_res.found
             else "no Bloomberg id",
@@ -593,13 +662,13 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
     """Prices for several instruments at once, from every provider that carries them.
 
     Each ticker is resolved per provider and looked up natively: TradingView's
-    scanner, Finviz's screener, Yahoo's chart API, Bloomberg's quote page. The
-    per-row ``data_provider`` says whether that particular ticker was answered by
-    several providers, by one, or by none; ``agrees`` says whether the readings
-    matched. Bloomberg is asked about at most
-    ``TAPEBASIS_BLOOMBERG_BATCH_MAX`` tickers per call (default 4) because its
-    page path is paced at 10 s per request; the rest are reported as skipped in
-    ``warnings`` rather than silently missing.
+    scanner, Finviz's screener, Yahoo's chart API, StockAnalysis's quote API,
+    Bloomberg's quote page. The per-row ``data_provider`` says whether that
+    particular ticker was answered by several providers, by one, or by none;
+    ``agrees`` says whether the readings matched. Bloomberg is asked about at
+    most ``TAPEBASIS_BLOOMBERG_BATCH_MAX`` tickers per call (default 4) because
+    its page path is paced at 10 s per request; the rest are reported as skipped
+    in ``warnings`` rather than silently missing.
 
     Args:
         tickers: Comma-separated symbols, e.g. ``"AAPL,MSFT,XAUUSD"``.
@@ -667,6 +736,31 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
     bb_asked = bb_symbols[:BLOOMBERG_BATCH_MAX]
     bb_skipped = bb_symbols[BLOOMBERG_BATCH_MAX:]
 
+    sa_slugs = [
+        symbol for symbol in requested if resolved[symbol]["SA"].found
+    ]
+
+    async def sa_call() -> dict[str, Any]:
+        if not sa_slugs:
+            raise NotApplicable(
+                SA, "StockAnalysis carries none of these instruments"
+            )
+        rows: dict[str, dict[str, Any]] = {}
+        misses: dict[str, str] = {}
+        for symbol in sa_slugs:
+            try:
+                rows[symbol] = await sa_access.quote(
+                    resolved[symbol]["SA"].symbol
+                )
+            except NoDataError as exc:
+                misses[symbol] = exc.message
+            except Exception as exc:  # noqa: BLE001 - one miss must not sink the batch
+                misses[symbol] = getattr(exc, "message", None) or f"{type(exc).__name__}: {exc}"
+        if not rows:
+            detail = "; ".join(f"{s}: {m}" for s, m in misses.items())
+            raise NotApplicable(SA, f"no StockAnalysis data ({detail})")
+        return {"rows": rows, "misses": misses}
+
     async def bb_call() -> dict[str, Any]:
         if not bb_asked:
             raise NotApplicable(
@@ -694,13 +788,16 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             raise NotApplicable(BLOOMBERG, f"no Bloomberg data ({detail})")
         return {"rows": rows, "misses": misses}
 
-    pair = await ask(tv_call, fv_call, yh_call, bb_call)
+    pair = await ask(
+        tv_call, fv_call, yh_call, bb_fn=bb_call, sa_fn=sa_call
+    )
 
     from .reconcile import DEFAULT_ORDER, _resolved_label, compare_values
 
     tv_rows = (pair.tv.payload or {}).get("rows") or {}
     fv_rows = (pair.fv.payload or {}).get("rows") or {}
     yh_rows = (pair.yh.payload or {}).get("rows") or {}
+    sa_rows = (pair.sa.payload or {}).get("rows") or {}
     bb_rows = (pair.bb.payload or {}).get("rows") or {}
 
     out_rows: list[dict[str, Any]] = []
@@ -711,6 +808,8 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             to_finviz(symbol)
         )
         yh_row = yh_rows.get(symbol)
+        sa_row = sa_rows.get(symbol)
+        sa_miss = ((pair.sa.payload or {}).get("misses") or {}).get(symbol)
         yh_miss = ((pair.yh.payload or {}).get("misses") or {}).get(symbol)
         bb_miss = ((pair.bb.payload or {}).get("misses") or {}).get(symbol)
 
@@ -739,6 +838,14 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
                 "previous_close": yh_row.get("previous_close"),
                 "company": yh_row.get("shortName"),
                 "price_timestamp": yh_row.get("market_time"),
+            }
+        if sa_row:
+            readings[SA] = {
+                "price": sa_row.get("price"),
+                "change_percent": sa_row.get("change_percent"),
+                "previous_close": sa_row.get("previous_close"),
+                "volume": sa_row.get("volume"),
+                "price_timestamp": sa_row.get("price_timestamp"),
             }
         bb_row = bb_rows.get(symbol)
         if bb_row:
@@ -771,6 +878,7 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
                         for p in ALL_PROVIDERS
                     }
                     | ({YAHOO: yh_miss} if yh_miss else {})
+                    | ({SA: sa_miss} if sa_miss else {})
                     | ({BLOOMBERG: bb_miss} if bb_miss else {}),
                 }
             )
@@ -801,7 +909,7 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
                 _FX_DAY_CHANGE_REASON
                 if _is_fx(
                     entry["TRADINGVIEW"], entry["FINVIZ"], entry["YAHOO"],
-                    entry["BLOOMBERG"],
+                    entry["SA"], entry["BLOOMBERG"],
                 )
                 else None
             ),
@@ -878,6 +986,7 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             TRADINGVIEW: "scanner.tradingview.com",
             FINVIZ: "finviz.com/screener/stocks",
             YAHOO: "query1.finance.yahoo.com/v8/finance/chart",
+            SA: "stockanalysis.com/api/quotes/s/<ticker>",
             BLOOMBERG: "bloomberg.com/quote/<id>",
         },
         extra={"symbols": requested},
@@ -1493,8 +1602,10 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
     """Pre-/post-market price for a US stock, cross-checked across providers.
 
     Finviz exposes the after-hours print on the quote page; Yahoo derives
-    pre/regular/post prices from its own 1-minute candles. The after-hours price
-    and change are compared, and every session block is returned.
+    pre/regular/post prices from its own 1-minute candles; TradingView's scanner
+    carries its own pre/post prints; StockAnalysis returns an extended-hours
+    block next to the regular quote. The after-hours price and change are
+    compared, and every session block is returned.
 
     Args:
         symbol: Ticker.
@@ -1537,12 +1648,24 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
             raise NotApplicable(YAHOO, resolved["YAHOO"].note or "no Yahoo symbol")
         return await yh_access.extended_hours(resolved["YAHOO"].symbol)
 
-    pair = await ask(tv_call, fv_call, yh_call)
+    async def sa_call() -> dict[str, Any]:
+        if not resolved["SA"].found:
+            raise NotApplicable(
+                SA, resolved["SA"].note or "StockAnalysis has no quote page"
+            )
+        try:
+            return await sa_access.quote(resolved["SA"].symbol)
+        except NoDataError as exc:
+            raise NotApplicable(SA, exc.message) from exc
+
+    pair = await ask(tv_call, fv_call, yh_call, sa_fn=sa_call)
 
     tv = pair.tv.payload or {}
     fv_quote = pair.fv.payload or {}
     fv_after = fv_quote.get("after_hours") or {}
     yh = pair.yh.payload or {}
+    sa = pair.sa.payload or {}
+    sa_extended = sa.get("extended_hours") or {}
 
     from .reconcile import compare_values
 
@@ -1551,6 +1674,9 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
         FINVIZ: fv_after.get("price"),
         YAHOO: (yh.get("post_market") or {}).get("price")
         or (yh.get("pre_market") or {}).get("price"),
+        # StockAnalysis's extended block names its own session; it is a print,
+        # not a timeline, so it joins the same comparison.
+        SA: sa_extended.get("price"),
     }
     comparison = compare_values(readings, tolerance_pct=0.5)
 
@@ -1583,6 +1709,8 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
         "tradingview_premarket_volume": tv.get("premarket_volume"),
         "tradingview_postmarket_close": tv.get("postmarket_close"),
         "tradingview_postmarket_volume": tv.get("postmarket_volume"),
+        "stockanalysis_extended_hours": sa_extended,
+        "stockanalysis_regular_close": sa.get("price"),
         "after_hours_readings": {p: v for p, v in readings.items() if v is not None},
         "after_hours_comparison": comparison,
         "resolutions": resolved["resolutions"],
@@ -1594,6 +1722,9 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
             TRADINGVIEW: "scanner.tradingview.com pre/post-market fields",
             FINVIZ: f"https://finviz.com/stock?t={resolved['FINVIZ'].symbol or ticker}",
             YAHOO: "Yahoo 1-minute extended-hours candles",
+            SA: f"https://stockanalysis.com/api/quotes/s/{resolved['SA'].symbol}"
+            if resolved["SA"].found
+            else "not carried by StockAnalysis",
         },
         extra={"extended_hours": data},
         data=data,

@@ -161,6 +161,15 @@ LIMITERS: dict[str, ProviderLimiter] = {
         max_inflight=_env_int("TAPEBASIS_YAHOO_MAX_INFLIGHT", 1),
         max_retries=_env_int("TAPEBASIS_YAHOO_MAX_RETRIES", 2),
     ),
+    # StockAnalysis fronts its API with Cloudflare and advertises a 3 s shared
+    # cache, so it tolerates a normal pace; it still punishes a burst from one
+    # IP, and the batch tools fan out over a ticker list.
+    "SA": ProviderLimiter(
+        provider="SA",
+        min_interval=_env_float("TAPEBASIS_SA_MIN_INTERVAL", 0.5),
+        max_inflight=_env_int("TAPEBASIS_SA_MAX_INFLIGHT", 2),
+        max_retries=_env_int("TAPEBASIS_SA_MAX_RETRIES", 2),
+    ),
     # Bloomberg is a reconciliation leg now, and it still has an upstream that
     # punishes bursts. Its HTML path tolerated ~5 requests 10 s apart while its
     # separate API bucket burned after ~10 rapid calls and stayed 403 for

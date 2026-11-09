@@ -178,9 +178,13 @@ shape. Check `docker compose logs` and then [Troubleshooting](Troubleshooting).
 - Bloomberg needs no extra configuration in the image: `curl_cffi` is a normal dependency, and the
   provider paces itself at one request every 10 s. An egress rule that blocks `bloomberg.com` makes
   `bloomberg_*` return `NONE`, and turns the Bloomberg leg of `stock_quote` into a stated error while
-  the other three readings still go out. Because of that pace, `stock_prices` asks it about at most
+  the other readings still go out. Because of that pace, `stock_prices` asks it about at most
   four tickers per call and names the rest in `warnings`; raise
   `TAPEBASIS_BLOOMBERG_BATCH_MAX` only if you accept the extra latency.
+- StockAnalysis needs nothing beyond egress to `stockanalysis.com`; it is plain `httpx`, paced at
+  0.5 s, and has no batch cap. An egress rule that blocks it turns its leg of `stock_quote` /
+  `stock_prices` / `stock_extended_hours` into an ordinary `errors` entry while the other readings
+  still go out.
 
 ## Related
 

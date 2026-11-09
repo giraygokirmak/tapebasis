@@ -1,7 +1,7 @@
 """Typed access to bloomberg.com's public quote pages.
 
-Bloomberg is the fourth reconciliation leg: ``stock_quote`` and ``stock_prices``
-ask it in parallel with TradingView, Finviz and Yahoo, its readings appear in
+Bloomberg is a reconciliation leg: ``stock_quote`` and ``stock_prices`` ask it
+in parallel with every other provider, its readings appear in
 ``comparisons``, and it contributes to ``ALL``. Three properties of the feed are
 handled here rather than hidden by a tolerance:
 

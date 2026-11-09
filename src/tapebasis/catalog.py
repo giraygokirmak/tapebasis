@@ -23,12 +23,14 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
             "52-week high/low, P/E, RSI(14)"
         ),
         "notes": (
-            "TradingView's scanner, Finviz's quote page, Yahoo's chart API and "
-            "Bloomberg's quote page are each asked natively in parallel, no provider "
-            "proxies another. Each compared field resolves to ONE value: the reading "
+            "TradingView's scanner, Finviz's quote page, Yahoo's chart API, "
+            "StockAnalysis's quote API and Bloomberg's quote page are each asked "
+            "natively in parallel, no provider proxies another. Each compared field "
+            "resolves to ONE value: the reading "
             "from whichever provider printed more recently (see `freshness`); every "
             "original stays in `comparisons`. Ties fall back to Finviz, then "
-            "TradingView, then Yahoo, then Bloomberg. Finviz-only fields (the 84-field "
+            "TradingView, then Yahoo, then StockAnalysis, then Bloomberg. Finviz-only "
+            "fields (the 84-field "
             "snapshot, profile, peers, after-hours, and the income/segment breakdown) "
             "ride along labelled per field in `fields`. The income breakdown is a JSON "
             "island on the same quote page, so it costs no extra request; its statement "
@@ -36,13 +38,17 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
             "states the factor) so they share one unit with the segment axes, and "
             "`statement.currency` / `axes.*.unit` plus `axes.*.converted` say whether "
             "finviz converted them. Symbols are resolved per provider, so XAUUSD becomes "
-            "OANDA:XAUUSD for TradingView, EURUSD:CUR for Bloomberg, and Finviz is told "
-            "it does not carry it; see `resolutions`. A price or day change is only "
+            "OANDA:XAUUSD for TradingView, EURUSD:CUR for Bloomberg, and Finviz and "
+            "StockAnalysis are told "
+            "they do not carry it; see `resolutions`. A price or day change is only "
             "compared when the prints are within 15 minutes and share a US/Eastern "
             "session date; otherwise the field is reported as not cross-checked. "
             "Bloomberg's equity prints are 15 minutes delayed, so it often lands in "
             "`not_comparable` rather than in the agreement count: that is the delay "
-            "being stated, not a provider fault. On FX the day change is never "
+            "being stated, not a provider fault. StockAnalysis covers US equities and "
+            "ETFs only and its quote surface is the same consolidated tape Yahoo serves, "
+            "so agreement between those two is weak corroboration rather than two "
+            "independent witnesses. On FX the day change is never "
             "compared: spot FX has no single official previous close."
         ),
     },
@@ -57,9 +63,12 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
             "the others. Multi-source rows also carry `price_source`, whose print the "
             "single `price` came from, plus their own `comparisons` block. An FX day "
             "change is reported but never compared, for the same reason as in "
-            "`stock_quote`. Bloomberg is asked about at most 4 tickers per batch because "
+            "`stock_quote`. StockAnalysis answers US equities and ETFs only, so it is "
+            "recorded as NOT_ATTEMPTED for anything else rather than as a failure. "
+            "Bloomberg is asked about at most 4 tickers per batch because "
             "its page path is paced at 10 s per request; the rest are named in "
-            "`warnings` and are not counted as Bloomberg-answered."
+            "`warnings` and are not counted as Bloomberg-answered. StockAnalysis has no "
+            "such cap: its pacing absorbs a short list."
         ),
     },
     {
@@ -129,13 +138,15 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "name": "stock_extended_hours",
         "capability": "pre-/post-market price",
         "providers": "ALL",
-        "comparison": "after-hours price (0.5% tolerance) across TradingView, Finviz, Yahoo",
+        "comparison": "after-hours price (0.5% tolerance) across TradingView, Finviz, Yahoo, StockAnalysis",
         "notes": (
             "TradingView's scanner exposes premarket_close / postmarket_close (and their "
-            "session volumes), Finviz the after-hours print on the quote page, and Yahoo "
-            "full session windows from 1-minute candles. Every reading stays in "
+            "session volumes), Finviz the after-hours print on the quote page, Yahoo "
+            "full session windows from 1-minute candles, and StockAnalysis an "
+            "extended-hours block next to its regular quote. Every reading stays in "
             "`after_hours_readings`; each pre/post block carries its `volume` when the "
-            "feed reports one."
+            "feed reports one. StockAnalysis's block is also served whole as "
+            "`stockanalysis_extended_hours`."
         ),
     },
     {

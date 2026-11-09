@@ -12,7 +12,7 @@ pip install -e ".[dev]"
 ## Tests
 
 ```bash
-pytest                      # 275 hermetic tests, no network
+pytest                      # 323 hermetic tests, no network
 pytest -m live              # opt-in: hits real upstreams
 pytest tests/test_reconcile.py -v
 ```
@@ -37,7 +37,8 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_health.py` | Probe verdicts, fingerprints, drift detection, `rate_limits` block |
 | `test_sentiment.py` | Local scoring: direction, neutrality, determinism, aggregation |
 | `test_sentiment_tool.py` | Token-free path, backend switching, no fabricated scores |
-| `test_bloomberg.py` | Symbol mapping, `print_time` from the intraday series, sentinel rejection, the fourth-leg tie-break, declared-delay comparability, single-source envelope |
+| `test_bloomberg.py` | Symbol mapping, `print_time` from the intraday series, sentinel rejection, the tie-break, declared-delay comparability, single-source envelope |
+| `test_stockanalysis.py` | Quote shaping (epoch-ms conversion, `cl` vs `pd`, extended block), mechanical plus not-carried resolution, transport status mapping |
 | `test_finviz_breakdown.py` | The `income-breakdown` island (statement scale, bank row sets, `converted` axes, absent/ETF cases) and the classification-chip markup |
 | `test_yahoo_shaping.py` | Yahoo `meta` fields that were previously dropped: session open/high/low, volume, company name |
 | `test_extended_hours.py` | Pre/post session volumes from the scanner row, and the Yahoo-session fallback |
@@ -83,7 +84,8 @@ src/tapebasis/
 ├── tv_access.py          typed access to TradingView's own data
 ├── fv_access.py          typed access to the Finviz provider
 ├── yh_access.py          typed access to the Yahoo Finance provider
-├── bb_access.py          typed access to bloomberg.com (fourth leg, curl_cffi)
+├── bb_access.py          typed access to bloomberg.com (reconciliation leg, curl_cffi)
+├── sa_access.py          typed access to stockanalysis.com (US equities and ETFs)
 ├── catalog.py            tool catalogue (plain data)
 ├── tools_market.py       multi-source tools
 ├── tools_finviz.py       Finviz-only tools
@@ -151,10 +153,15 @@ even though the tool lives in `tools_tradingview.py`.
 A provider that can supply an overlapping field belongs in `PROVIDER_ORDER`, even if its feed has a
 known delay. Add the label to `DataProvider`, `PROVIDER_NAMES`, `PROVIDER_MEANING` and
 `ratelimit.LIMITERS`, add its getter to every `FieldSpec` (a missing getter silently removes it from
-the comparison while `ALL` still claims coverage), and add it to `DEFAULT_ORDER` **last** so it can
-never win a tie. If the feed declares a delay, register it in `reconcile.KNOWN_REPORTING_LAG`: a pair
-that far apart then becomes `not_comparable` with the delay named instead of a false conflict.
-`tools_bloomberg.py` is the worked example, and Design Decisions 30 has the reasoning.
+the comparison while `ALL` still claims coverage), and give it an entry in `DEFAULT_ORDER` and a
+health probe. The position in `DEFAULT_ORDER` is a statement, not a formality: a live feed should
+outrank a delayed one, and a feed with narrow instrument coverage should sit below a broader one. If
+the feed declares a delay, register it in `reconcile.KNOWN_REPORTING_LAG`: a pair that far apart then
+becomes `not_comparable` with the delay named instead of a false conflict.
+
+Two worked examples: `tools_bloomberg.py` / `bb_access.py` for a delayed leg on its own transport
+(Design Decisions 30), and `sa_access.py` for a plain live leg with a coverage boundary and a
+mechanical symbol rule (Design Decisions 35).
 
 A tool that asks a single provider still returns `SINGLE_SOURCE` by construction: use
 `single(provider, value)` / `envelope(provider=DataProvider.<NAME>)` and add `cross_checked: false` /

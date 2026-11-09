@@ -44,14 +44,18 @@ from .providers_state import (
 TRADINGVIEW = "TRADINGVIEW"
 FINVIZ = "FINVIZ"
 YAHOO = "YAHOO"
+SA = "SA"
 BLOOMBERG = "BLOOMBERG"
 
 #: Tie-break order when no provider reports a usable print time, or two report
 #: the identical instant. Fixed and documented rather than "whichever was asked
 #: first", so the same inputs always resolve to the same number. Bloomberg is
 #: last: when its delayed page ties with a live feed on the same instant, the
-#: live feed is the reading to show.
-DEFAULT_ORDER: tuple[str, ...] = (FINVIZ, TRADINGVIEW, YAHOO, BLOOMBERG)
+#: live feed is the reading to show. StockAnalysis sits just before it: it is a
+#: live feed like the others, but its coverage is the narrowest (US equities and
+#: ETFs), so it should never be preferred over a leg that carries the same
+#: instrument more broadly when the two tie.
+DEFAULT_ORDER: tuple[str, ...] = (FINVIZ, TRADINGVIEW, YAHOO, SA, BLOOMBERG)
 
 #: Providers whose prints can be structurally older than a live feed's, with
 #: the delay they declare and the sentence that explains it.
@@ -120,6 +124,10 @@ class Pair:
     @property
     def yh(self) -> Attempt:
         return self._get(YAHOO)
+
+    @property
+    def sa(self) -> Attempt:
+        return self._get(SA)
 
     @property
     def bb(self) -> Attempt:
@@ -216,6 +224,7 @@ async def ask(
     fv_fn: Callable[[], Awaitable[Any]] | None = None,
     yahoo_fn: Callable[[], Awaitable[Any]] | None = None,
     bb_fn: Callable[[], Awaitable[Any]] | None = None,
+    sa_fn: Callable[[], Awaitable[Any]] | None = None,
 ) -> Pair:
     """Run every supplied provider call concurrently.
 
@@ -239,6 +248,7 @@ async def ask(
         (TRADINGVIEW, tv_fn),
         (FINVIZ, fv_fn),
         (YAHOO, yahoo_fn),
+        (SA, sa_fn),
         (BLOOMBERG, bb_fn),
     ]
 
@@ -555,6 +565,7 @@ class FieldSpec:
     absolute_floor: float = 0.0
     yh_get: Callable[[dict[str, Any]], Any] | None = None
     bb_get: Callable[[dict[str, Any]], Any] | None = None
+    sa_get: Callable[[dict[str, Any]], Any] | None = None
     #: When set, readings whose observation times differ by more than this many
     #: seconds are reported as *not comparable* instead of as a disagreement.
     #: Applies to a session-relative field (a day change, a volume) and to a
@@ -588,6 +599,7 @@ class FieldSpec:
             TRADINGVIEW: self.tv_get,
             FINVIZ: self.fv_get,
             YAHOO: self.yh_get,
+            SA: self.sa_get,
             BLOOMBERG: self.bb_get,
         }.get(provider)
         return getter(payload) if getter else None
@@ -890,14 +902,17 @@ def finalize(
     tv_norm: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     fv_norm: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     yh_norm: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    sa_norm: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     bb_norm: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     tv_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     fv_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     yh_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    sa_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     bb_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     tv_time: Any = None,
     fv_time: Any = None,
     yahoo_time: Any = None,
+    sa_time: Any = None,
     bb_time: Any = None,
     now: datetime | None = None,
     sources: dict[str, str] | None = None,
@@ -911,16 +926,16 @@ def finalize(
 ) -> dict[str, Any]:
     """Reconcile attempts and wrap the result in the public envelope.
 
-    ``tv_norm``/``fv_norm``/``yh_norm``/``bb_norm`` map a raw provider payload
-    into the normalised field dict that ``specs`` read from; when given, every
-    remaining normalised field is attached to the output labelled with its
-    source provider.
+    ``tv_norm``/``fv_norm``/``yh_norm``/``sa_norm``/``bb_norm`` map a raw
+    provider payload into the normalised field dict that ``specs`` read from;
+    when given, every remaining normalised field is attached to the output
+    labelled with its source provider.
 
-    ``tv_time``/``fv_time``/``yahoo_time``/``bb_time`` are the **market print**
-    timestamps (not fetch times). When providers answered, every compared field
-    resolves to the freshest provider's reading; all originals stay in
-    ``comparisons``. ``bb_time`` is passed explicitly because Bloomberg's print
-    time is derived from the intraday series, never from ``lastUpdate``.
+    ``tv_time``/``fv_time``/``yahoo_time``/``sa_time``/``bb_time`` are the
+    **market print** timestamps (not fetch times). When providers answered, every
+    compared field resolves to the freshest provider's reading; all originals
+    stay in ``comparisons``. ``bb_time`` is passed explicitly because Bloomberg's
+    print time is derived from the intraday series, never from ``lastUpdate``.
 
     ``now`` is the reference clock for a field's absolute-age ceiling. Pass it
     when the tool can observe the real time: without it the frozen-feed guard is
@@ -937,6 +952,7 @@ def finalize(
         (TRADINGVIEW, pair.tv, tv_norm, tv_shape),
         (FINVIZ, pair.fv, fv_norm, fv_shape),
         (YAHOO, pair.yh, yh_norm, yh_shape),
+        (SA, pair.sa, sa_norm, sa_shape),
         (BLOOMBERG, pair.bb, bb_norm, bb_shape),
     ):
         payload = attempt.payload
@@ -952,6 +968,7 @@ def finalize(
         (TRADINGVIEW, tv_time, payloads.get(TRADINGVIEW)),
         (FINVIZ, fv_time, payloads.get(FINVIZ)),
         (YAHOO, yahoo_time, payloads.get(YAHOO)),
+        (SA, sa_time, payloads.get(SA)),
         (BLOOMBERG, bb_time, payloads.get(BLOOMBERG)),
     ):
         stamp = explicit

@@ -24,7 +24,8 @@ not corroborated. `BLOOMBERG` here means only Bloomberg answered (the `bloomberg
 provider), not that Bloomberg is excluded from `ALL`: in `stock_quote` / `stock_prices` it is a full
 leg, and its failures appear as ordinary `errors` entries. A `TIMEOUT` from that leg is the 15-minute
 delay plus 10 s pacing hitting `TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE`; the other readings are still
-valid; the Bloomberg sections below cover the rest.
+valid; the Bloomberg sections below cover the rest. `SA` behaves the same way: it is a leg, so its
+failure is an ordinary error, while an instrument it does not carry is `NOT_ATTEMPTED`, not a failure.
 
 **Also check `providers_answered`.** `ALL` means every provider that was asked answered, which can be
 only some of them. If a provider is missing from that list and there is no matching `errors` entry,
@@ -81,8 +82,8 @@ rm ~/.tapebasis/health_state.json     # only after fixing the parser
    with no shared definition (FX day change).
 
 **Check `sources` before assuming a bug.** Each label names the upstream that leg actually called:
-TradingView's scanner, finviz.com, query1.finance.yahoo.com and bloomberg.com. A closed market should
-agree to the cent; an intraday read legitimately will not.
+TradingView's scanner, finviz.com, query1.finance.yahoo.com, stockanalysis.com and bloomberg.com. A
+closed market should agree to the cent; an intraday read legitimately will not.
 
 If a mismatch is systematic on one field, the tolerance may be wrong. See
 [Development § Choosing a tolerance](Development#choosing-a-tolerance).
@@ -291,11 +292,12 @@ derived (`explicit`, `alias`, `search`, `none`).
 | `BRK.B` ↔ `BRK-B` | Normalised automatically |
 | `^GSPC` ↔ `SPX` ↔ `SP:SPX` | Aliased to `SPX` |
 | `RUT` vs `IWM` | Index vs its ETF: **different instruments**, never aliased |
-| `XAUUSD` (spot gold) | TradingView `OANDA:XAUUSD` only. Yahoo has no spot pair (`XAUUSD=X` is a 404) and Finviz does not carry it |
-| `BTCUSD` | TradingView `BITSTAMP:BTCUSD`, Yahoo `BTC-USD`; Finviz has no crypto |
-| `EURUSD` | TradingView `FX:EURUSD`, Yahoo `EURUSD=X`; Finviz has no FX |
-| `SPX` / `DJI` | Finviz has no per-ticker index page (`/stock?t=SPX` is a 404, and `COMP` there is Compass Inc). Use `market_indices` |
-| Non-US (`.IS`, `.CA`) | TradingView only, unless Yahoo or Finviz happens to list it |
+| `XAUUSD` (spot gold) | TradingView `OANDA:XAUUSD` only. Yahoo has no spot pair (`XAUUSD=X` is a 404) and Finviz and StockAnalysis do not carry it |
+| `BTCUSD` | TradingView `BITSTAMP:BTCUSD`, Yahoo `BTC-USD`; Finviz and StockAnalysis have no crypto |
+| `EURUSD` | TradingView `FX:EURUSD`, Yahoo `EURUSD=X`; Finviz and StockAnalysis have no FX |
+| `SPX` / `DJI` | Finviz has no per-ticker index page (`/stock?t=SPX` is a 404, and `COMP` there is Compass Inc), and StockAnalysis's quote API has no index route. Use `market_indices` |
+| Non-US (`.IS`, `.CA`) | TradingView only, unless Yahoo or Finviz happens to list it; StockAnalysis's quote API is US-only |
+| `BRK-B` | StockAnalysis spells it `brk.b`; the dash is converted mechanically |
 
 A resolution of `none` is not an outage: it means the provider genuinely has no such instrument, and
 its `note` says so. That is why a `NONE` resolution never appears in `errors`.

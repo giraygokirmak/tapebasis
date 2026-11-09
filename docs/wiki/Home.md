@@ -2,9 +2,9 @@
 
 <img src="https://raw.githubusercontent.com/giraygokirmak/tapebasis/main/docs/logo.svg" alt="Tapebasis" width="300">
 
-**Multiple tapes, one basis.** An MCP server that serves **TradingView**, **Finviz**, **Yahoo Finance**
-and **Bloomberg** market data together, cross-checks every overlapping figure, and labels each
-response with the provider that actually produced it.
+**Multiple tapes, one basis.** An MCP server that serves **TradingView**, **Finviz**, **Yahoo Finance**,
+**StockAnalysis** and **Bloomberg** market data together, cross-checks every overlapping figure, and
+labels each response with the provider that actually produced it.
 
 *Basis* is the finance term for the price difference between two markets quoting the same asset.
 *Tape* is the ticker tape. Tapebasis is the spread between multiple feeds, measured on every call.
@@ -16,11 +16,13 @@ plausible-looking number. And because every provider scrapes or calls an undocum
 background monitor probes every endpoint and reports API/schema drift inside ordinary tool responses.
 
 Each leg is fetched natively: TradingView's own scanner and chart websocket, Finviz's HTML and JSON
-islands, Yahoo's chart API, Bloomberg's quote pages. A provider that quietly proxies another is
-worthless as a cross-check, so none does. Bloomberg is the fourth leg and is asked in parallel with
-the others; its equity prints are exchange-delayed, so a pair that far apart is reported as not
-comparable with the delay named instead of being counted as disagreement. See
-[Bloomberg](#bloomberg-the-fourth-leg-that-states-its-delay).
+islands, Yahoo's chart API, StockAnalysis's quote API, Bloomberg's quote pages. A provider that
+quietly proxies another is worthless as a cross-check, so none does. Bloomberg and StockAnalysis are
+the other two legs, asked in parallel with the rest. Bloomberg's equity prints are exchange-delayed,
+so a pair that far apart is reported as not comparable with the delay named instead of being counted
+as disagreement. StockAnalysis covers US equities and ETFs only and serves the same consolidated tape
+Yahoo does, so that pair is weak corroboration. See
+[Bloomberg](#bloomberg-the-leg-that-states-its-delay).
 
 **No tool requires an API key.** Every capability works out of the box; `MARKETAUX_API_TOKEN` only
 upgrades news and sentiment to a licensed feed.
@@ -37,7 +39,7 @@ asks them all, compares, and tells the agent what it is holding.
 | --- | --- | --- |
 | Every asked provider answers, values agree | `ALL`, `comparisons[].match: true` | confirm the number against independent readings |
 | They answer but diverge | `ALL` + every value in `comparisons` + a warning | show that a disagreement exists |
-| One provider is down | `TRADINGVIEW`/`FINVIZ`/`YAHOO` + "not corroborated" | say the figure is single-source |
+| One provider is down | `TRADINGVIEW`/`FINVIZ`/`YAHOO`/`SA` + "not corroborated" | say the figure is single-source |
 | Only Bloomberg has it | `BLOOMBERG` + `cross_checked: false` | say what is uncorroborated and how stale |
 | All down | `NONE`, no value presented | avoid a stale or invented number |
 | Upstream markup changed | `degraded: true` + a named warning | avoid a silently empty or wrong response |
@@ -64,7 +66,7 @@ asks them all, compares, and tells the agent what it is holding.
 
 ## The `data_provider` contract
 
-Every tool result carries exactly one of six values. It states **coverage**, never agreement:
+Every tool result carries exactly one of seven values. It states **coverage**, never agreement:
 
 | Value | Meaning |
 | --- | --- |
@@ -72,6 +74,7 @@ Every tool result carries exactly one of six values. It states **coverage**, nev
 | `TRADINGVIEW` | Only TradingView answered. Served, but **not** corroborated. |
 | `FINVIZ` | Only Finviz answered. Served, but **not** corroborated. |
 | `YAHOO` | Only Yahoo Finance answered. Served, but **not** corroborated. |
+| `SA` | Only StockAnalysis answered. Served, but **not** corroborated; US equities and ETFs only. |
 | `BLOOMBERG` | Only Bloomberg answered. Served, but **not** corroborated; its quote can be delayed. |
 | `NONE` | No provider could supply it. No value is presented. |
 
@@ -79,7 +82,7 @@ Every tool result carries exactly one of six values. It states **coverage**, nev
 {
   "data_provider": "ALL",
   "verification": "MULTI_SOURCE",          // MULTI_SOURCE | SINGLE_SOURCE | UNAVAILABLE
-  "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO"],   // + "BLOOMBERG" when it answers
+  "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO"],   // + "SA" / "BLOOMBERG" when they answer
   "notice": "Every provider asked answered ...",   // sentence to relay to the user
   "data": { ... },                         // the reconciled payload, one value per field
   "fields": { "price": "ALL", "peers": "FINVIZ" }, // per-field provenance
@@ -94,7 +97,7 @@ Every tool result carries exactly one of six values. It states **coverage**, nev
   },
   "comparisons": [                         // the actual side-by-side numbers
     { "field": "price",
-      "values": { "TRADINGVIEW": 331.9, "FINVIZ": 332.33, "YAHOO": 331.9 },
+      "values": { "TRADINGVIEW": 331.9, "FINVIZ": 332.33, "YAHOO": 331.9, "SA": 331.9 },
       "match": true, "diff_pct": 0.1294, "tolerance_pct": 0.5 }
   ],
   "resolutions": { "TRADINGVIEW": { "symbol": "NASDAQ:AAPL" }, ... },
@@ -108,7 +111,8 @@ Every tool result carries exactly one of six values. It states **coverage**, nev
 
 **One value per compared field, and it is the newest print.** `data` holds a single price: the
 reading whose market print is newest. Ties are broken by the documented default order (`FINVIZ`,
-`TRADINGVIEW`, `YAHOO`, `BLOOMBERG`); Bloomberg is last because its print can be structurally older.
+`TRADINGVIEW`, `YAHOO`, `SA`, `BLOOMBERG`); Bloomberg is last because its print can be structurally
+older, and StockAnalysis sits just before it because its coverage is the narrowest of the live feeds.
 Every original reading stays in `comparisons.values`, and `freshness.decision` states which rule
 applied.
 
@@ -132,7 +136,25 @@ Full detail: [Response Contract](Response-Contract).
 
 ---
 
-## Bloomberg: the fourth leg that states its delay
+## StockAnalysis: the leg that covers US equities and ETFs
+
+StockAnalysis is in `PROVIDER_ORDER`, is asked in parallel by `stock_quote`, `stock_prices` and
+`stock_extended_hours`, and contributes to `ALL` / `providers_answered`. Three properties keep that
+honest instead of inflated:
+
+- it is a US feed: the quote API serves US-listed equities and ETFs and answers `404` for indices,
+  FX, crypto and foreign listings, so anything else resolves to *not carried* and is recorded as
+  `NOT_ATTEMPTED`, never as an error;
+- its price, previous close, session range and 52-week range are the same consolidated tape Yahoo
+  serves, so agreement between those two is one tape read twice, not two witnesses;
+- `ts` is epoch milliseconds, converted to ISO in the access layer so a print is never dated to a
+  century no market trades in.
+
+What it adds is the session open/high/low Finviz does not publish and the extended-hours block from
+the same request (`stockanalysis_extended_hours`). It is paced at `0.5 s`, so a `stock_prices` batch
+needs no cap for it.
+
+## Bloomberg: the leg that states its delay
 
 Bloomberg is in `PROVIDER_ORDER`, is asked in parallel by `stock_quote` and `stock_prices`, and
 contributes to `ALL` / `providers_answered`. Its reading sits in `comparisons[].values` with the rest.
@@ -148,7 +170,7 @@ Three properties keep that honest instead of inflated:
 `lastUpdate` is a session sentinel, not a print time (`2026-11-05T01:00:00.000Z` on a page whose real
 print was `2026-11-04T20:58:00Z`), so `print_time` is taken from the last intraday point and
 `print_time_missing_reason` explains a mismatch. `stock_quote` bounds the leg with a deadline, so a
-blocked page becomes a stated `TIMEOUT` / `UPSTREAM_BLOCKED` error while the other three readings
+blocked page becomes a stated `TIMEOUT` / `UPSTREAM_BLOCKED` error while the other readings
 still go out.
 
 `bloomberg_quote` and `bloomberg_markets` are the single-source case: those tools ask Bloomberg and
@@ -165,7 +187,7 @@ response is the availability signal. Details: [Design Decisions](Design-Decision
 ## Symbols are resolved per provider
 
 `XAUUSD` is `OANDA:XAUUSD` on TradingView, `^GSPC`-style aliasing for indices, a suffix for Yahoo FX,
-`XAUUSD:CUR` on Bloomberg and simply not carried by Finviz. [`symbols.py`](https://github.com/giraygokirmak/tapebasis/blob/main/src/tapebasis/symbols.py)
+`XAUUSD:CUR` on Bloomberg and simply not carried by Finviz or StockAnalysis. [`symbols.py`](https://github.com/giraygokirmak/tapebasis/blob/main/src/tapebasis/symbols.py)
 resolves each query per provider, caches the result for an hour, and records the derivation in
 `resolutions`. A ticker is only returned if the provider can actually quote it, and a missing
 instrument becomes `NOT_ATTEMPTED`: a structural fact, not an error.
@@ -216,8 +238,9 @@ Details: [Getting Started](Getting-Started) · [Docker](Docker).
 
 Every provider is asked for its own data: TradingView from `scanner.tradingview.com` and its chart
 websocket, Finviz from `finviz.com` HTML and JSON islands, Yahoo from `query1.finance.yahoo.com`,
-Bloomberg from `bloomberg.com` quote pages and its market board. Nothing is proxied through another
-provider, and `sources` records the upstream each leg used.
+StockAnalysis from `stockanalysis.com/api/quotes`, Bloomberg from `bloomberg.com` quote pages and its
+market board. Nothing is proxied through another provider, and `sources` records the upstream each
+leg used.
 
 Where a capability exists on only some providers, that is stated, not simulated: options chains come
 from Finviz and Yahoo (TradingView contributes only the underlying price), backtests run twice on

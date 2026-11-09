@@ -2,7 +2,7 @@
 
 Every tool returns the same envelope. Learn it once and every tool is readable.
 
-## The six provider states
+## The seven provider states
 
 | `data_provider` | `verification` | Meaning | What an agent should do |
 | --- | --- | --- | --- |
@@ -10,6 +10,7 @@ Every tool returns the same envelope. Learn it once and every tool is readable.
 | `TRADINGVIEW` | `SINGLE_SOURCE` | Only TradingView answered | Quote, but say it is single-source and not corroborated |
 | `FINVIZ` | `SINGLE_SOURCE` | Only Finviz answered | Same, from the Finviz side |
 | `YAHOO` | `SINGLE_SOURCE` | Only Yahoo Finance answered | Same, from the Yahoo side |
+| `SA` | `SINGLE_SOURCE` | Only StockAnalysis answered | Same; note it covers US equities and ETFs only |
 | `BLOOMBERG` | `SINGLE_SOURCE` | Only Bloomberg answered | Same, but state `exchange_delay` / `print_time` before calling a price live |
 | `NONE` | `UNAVAILABLE` | No provider answered | Say no data is available. Do not invent one. |
 
@@ -25,13 +26,20 @@ serve the field. If TradingView and Yahoo answer and Finviz has no page for the 
 response is `ALL`: every provider *asked* answered. `providers_answered` lists exactly which ones
 contributed, so coverage can be read precisely.
 
-**`ALL` can include Bloomberg.** Bloomberg is the fourth entry in `PROVIDER_ORDER`, so
-`stock_quote` and `stock_prices` ask it in parallel and it is counted in `ALL` /
-`providers_answered`. What it never does is win a comparison it cannot make: its equity and index
+**`ALL` can include Bloomberg and StockAnalysis.** Both are entries in `PROVIDER_ORDER`, so
+`stock_quote` and `stock_prices` ask them in parallel and they are counted in `ALL` /
+`providers_answered`.
+
+What Bloomberg never does is win a comparison it cannot make: its equity and index
 prints are exchange-delayed, so a pair of prints a delay length apart is reported as
 `not_comparable` with the delay named, and it is last in the freshness tie-break so a delayed page
 cannot outrank a live print. Agreement with Yahoo on statics is weak corroboration, not two
 witnesses, which `notice` does not claim otherwise.
+
+StockAnalysis covers US equities and ETFs only, and its quote surface is the same consolidated tape
+Yahoo serves, so that pair is weak corroboration for the same reason. Anything it does not carry
+(indices, FX, crypto, commodities, foreign listings) resolves to *not carried* and is recorded as
+`NOT_ATTEMPTED`, never as an error.
 
 The `bloomberg_*` tools are the single-source case: they ask that one provider, so they return
 `BLOOMBERG` / `SINGLE_SOURCE` plus `cross_checked: false` and `reconciliation_leg: false`.
@@ -39,7 +47,7 @@ The `bloomberg_*` tools are the single-source case: they ask that one provider, 
 ## Fields
 
 ### `data_provider`
-`"ALL" | "TRADINGVIEW" | "FINVIZ" | "YAHOO" | "BLOOMBERG" | "NONE"`. The single most important field
+`"ALL" | "TRADINGVIEW" | "FINVIZ" | "YAHOO" | "SA" | "BLOOMBERG" | "NONE"`. The single most important field
 in the response.
 
 ### `verification`
@@ -173,19 +181,21 @@ How each provider's ticker was derived for this call:
                    "symbol": "NASDAQ:AAPL", "venue": "NASDAQ",
                    "method": "search", "confidence": 0.75, "note": "" },
   "FINVIZ":      { "symbol": "AAPL", "method": "normalise", ... },
-  "YAHOO":       { "symbol": "AAPL", "method": "alias", ... }
+  "YAHOO":       { "symbol": "AAPL", "method": "alias", ... },
+  "SA":          { "symbol": "aapl", "method": "mechanical", ... }
 }
 ```
 
 `method` is one of `explicit` (the caller gave `EXCHANGE:SYMBOL`), `alias` (a documented mechanical
 rule or index table), `search` (the provider's own symbol search, verified against its quote
-endpoint), or `none` (not carried). A `none` resolution carries a `note` explaining why, and becomes
+endpoint), `mechanical` (StockAnalysis has no search endpoint, so its US slug is derived by rule), or
+`none` (not carried). A `none` resolution carries a `note` explaining why, and becomes
 `NOT_ATTEMPTED` rather than an error.
 
 This is the field to read when a symbol behaved unexpectedly. `XAUUSD` shows `OANDA:XAUUSD` for
 TradingView, `XAUUSD:CUR` for Bloomberg (derived mechanically, `method: mechanical`), no Yahoo ticker
-(Yahoo has no spot-gold pair, `XAUUSD=X` is a 404) and a Finviz note saying it carries US equities
-only.
+(Yahoo has no spot-gold pair, `XAUUSD=X` is a 404) and notes from Finviz and StockAnalysis saying
+they carry US equities and ETFs only.
 
 ### `cross_checked` / `reconciliation_leg`
 Present on the `bloomberg_*` tools, both `false`: that call asked a single provider, so its payload
@@ -200,7 +210,8 @@ Where each provider's data actually came from: upstream URL or dataset name.
 { "TRADINGVIEW": "scanner.tradingview.com",
   "FINVIZ": "https://finviz.com/stock?t=AAPL",
   "YAHOO": "query1.finance.yahoo.com chart API",
-  "BLOOMBERG": "https://www.bloomberg.com/quote/AAPL:US" }   // fourth leg and bloomberg_*
+  "SA": "https://stockanalysis.com/api/quotes/s/aapl",
+  "BLOOMBERG": "https://www.bloomberg.com/quote/AAPL:US" }
 ```
 
 This is the honesty field. Each label names the upstream that was actually called, no leg proxies
@@ -291,15 +302,15 @@ is the market moving, not a provider conflict.
 {
   "data_provider": "ALL",
   "verification": "MULTI_SOURCE",
-  "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO", "BLOOMBERG"],
-  "notice": "Every provider asked answered (TradingView, Finviz, Yahoo Finance and Bloomberg). Coverage is ALL; agreement is a separate axis. Compared fields agree within tolerance. The value shown is FINVIZ's because it printed more recently than the other providers'. Not cross-checked, because the providers' readings have no shared basis for comparison: change_percent, previous_close, volume.",
+  "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"],
+  "notice": "Every provider asked answered (TradingView, Finviz, Yahoo Finance, StockAnalysis and Bloomberg). Coverage is ALL; agreement is a separate axis. Compared fields agree within tolerance. The value shown is FINVIZ's because it printed more recently than the other providers'. Not cross-checked, because the providers' readings have no shared basis for comparison: change_percent, previous_close, volume.",
   "data": { "price": 332.33, "change_percent": 0.13, ... },   // one value per field
   "fields": { "price": "ALL", "peers": "FINVIZ", ... },
   "freshness": { "chosen": "FINVIZ", "decision": "newest",
                  "reason": "FINVIZ printed most recently (2026-11-04T10:42:00+00:00)" },
   "comparisons": [
     { "field": "price", "match": true,
-      "values": { "TRADINGVIEW": 331.9, "FINVIZ": 332.33, "YAHOO": 331.9, "BLOOMBERG": 332.1 },
+      "values": { "TRADINGVIEW": 331.9, "FINVIZ": 332.33, "YAHOO": 331.9, "SA": 331.9, "BLOOMBERG": 332.1 },
       "diff_pct": 0.1294, "chosen": "FINVIZ" },
     { "field": "change_percent", "match": null, "not_comparable": true,
       "values": { "TRADINGVIEW": -1.8976, "FINVIZ": 0.13, "YAHOO": -1.8976 } }

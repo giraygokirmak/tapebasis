@@ -61,7 +61,8 @@ src/tapebasis/
 ├── tv_access.py          typed access to TradingView's own data
 ├── fv_access.py          typed access to the Finviz provider
 ├── yh_access.py          typed access to the Yahoo Finance provider
-├── bb_access.py          typed access to bloomberg.com (fourth leg, curl_cffi)
+├── bb_access.py          typed access to bloomberg.com (reconciliation leg, curl_cffi)
+├── sa_access.py          typed access to stockanalysis.com (US equities and ETFs)
 ├── catalog.py            plain-data tool catalogue (providers + comparison strategy)
 ├── tools_market.py       the 9 multi-source market tools
 ├── tools_finviz.py       the 7 Finviz-only tools
@@ -86,6 +87,7 @@ access module and its own upstream:
 | TradingView | `tv_access.py` → `providers/tradingview/native.py` | `scanner.tradingview.com` (quotes, screener), `data.tradingview.com` (chart websocket for OHLCV) |
 | Finviz | `fv_access.py` | `finviz.com` HTML pages and `/api/*` JSON islands |
 | Yahoo Finance | `yh_access.py` | `query1.finance.yahoo.com/v8/finance/chart` |
+| StockAnalysis | `sa_access.py` | `stockanalysis.com/api/quotes/s/<ticker>` |
 | Bloomberg | `bb_access.py` | `bloomberg.com/quote/<id>` and `/markets/rates-bonds`, through `curl_cffi` |
 
 An earlier version of this server had TradingView's price come from Yahoo's chart API. That made the
@@ -110,7 +112,7 @@ keeps the boundary real rather than decorative. It is why the token-free sentime
 
 ### Bloomberg is an adapter with one difference: a declared delay
 
-`bb_access.py` is the fourth reconciliation adapter. It is passed to `reconcile.ask` like the others,
+`bb_access.py` is a reconciliation adapter. It is passed to `reconcile.ask` like the others,
 its label is in `PROVIDER_ORDER`, and its readings appear in `comparisons`. Two things needed handling
 rather than exclusion:
 
@@ -127,7 +129,20 @@ rather than exclusion:
 those responses `cross_checked: false` / `reconciliation_leg: false`. See
 [Design Decisions](Design-Decisions) 30.
 
-### `tv_access.py` / `fv_access.py` / `yh_access.py` are adapters, not wrappers
+### StockAnalysis is a plain adapter, with a coverage boundary
+
+`sa_access.py` needs none of Bloomberg's transport work: `stockanalysis.com` answers plain `httpx`
+and advertises a 3 s shared cache, which the per-provider limiter absorbs with a short TTL. What it
+does need is an honest boundary. The quote API serves US equities and ETFs only and has no search
+endpoint, so `symbols.resolve_sa` is a mechanical rule (lowercase the US ticker, a share class as a
+dot) plus a stated *not carried* for every instrument class the route would 404 on. A 404/400 from the
+route is treated as `NoDataError`, not an outage; only a 401/403 or a 5xx is a provider failure.
+
+Its quote surface is the same consolidated tape Yahoo serves, so the pair is weak corroboration
+rather than two independent witnesses. That is documented instead of being presented as extra
+coverage, following the Bloomberg precedent.
+
+### `tv_access.py` / `fv_access.py` / `yh_access.py` / `sa_access.py` are adapters, not wrappers
 
 The providers return different shapes for the same concept: Finviz uses
 `lastVolume`/`openInterest`/`bidPrice`, Yahoo uses `volume`/`openInterest`/`bid`, TradingView's

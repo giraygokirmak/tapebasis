@@ -18,7 +18,7 @@ Quote plus fundamentals snapshot for any instrument class, equity, index, FX, co
 
 | | |
 | --- | --- |
-| Providers | TradingView scanner · Finviz quote page · Yahoo chart API · Bloomberg quote page |
+| Providers | TradingView scanner · Finviz quote page · Yahoo chart API · StockAnalysis quote API · Bloomberg quote page |
 | Compared | price, change %, previous close, volume, session open/high/low, 52-week high/low, P/E, RSI(14) |
 | Tolerances | price/prev-close/52-week/session range 0.5 % · change % 2 % · P/E 2 % · RSI 5 % · volume 1 % |
 | Observation guards | price, change %, previous close, volume, session high/low/open: `max_skew_seconds = 900` and same US/Eastern session date; change %, volume and the session range also carry an 8 h age ceiling |
@@ -31,10 +31,12 @@ fundamentals snapshot, company profile, peers, the after-hours print, the classi
 (`sector`, `industry`, `country`, `market_cap_class`, `exchange`, `etf_type`) and the
 `income_breakdown` island. `resolutions` records the ticker each provider was asked for.
 
-`day_open` comes from TradingView and Yahoo only: Finviz has no Open row and Bloomberg's page carries
-one only sometimes, so the field is compared where both sides publish it rather than against a
-provider that never had it. `feed_mode` (`streaming`, `delayed_streaming_900`) states the scanner's own
-delay, the same fact Bloomberg's `exchange_delay` reports for its leg.
+`day_open` comes from TradingView, Yahoo and StockAnalysis: Finviz has no Open row and Bloomberg's
+page carries one only sometimes, so the field is compared where both sides publish it rather than
+against a provider that never had it. `feed_mode` (`streaming`, `delayed_streaming_900`) states the
+scanner's own delay, the same fact Bloomberg's `exchange_delay` reports for its leg. `pe_ratio` has no
+StockAnalysis getter: its quote API carries price, range, volume and the 52-week range, and P/E lives
+on a separate stock page this tool does not fetch.
 
 ### `income_breakdown`
 
@@ -54,14 +56,17 @@ NVIDIA's is operating segments), so the keys stay as Finviz sends them. Each axi
 has no island at all, so the field is `null` and the quote is unaffected.
 
 Because symbols are resolved per provider, `XAUUSD` reaches `OANDA:XAUUSD` on TradingView and
-`XAUUSD:CUR` on Bloomberg, is correctly reported as not carried by Yahoo and Finviz, and the response
-is `ALL` over the two that answered rather than `NONE`.
+`XAUUSD:CUR` on Bloomberg, is correctly reported as not carried by Yahoo, Finviz and StockAnalysis,
+and the response is `ALL` over the two that answered rather than `NONE`.
 
-Bloomberg is asked in parallel like the others, so `providers_answered` can hold four labels and
-`comparisons[].values` can hold four readings. Its delayed print is bounded two ways: it is last in
-the freshness tie-break, and a pair a delay length apart is reported as `not_comparable` instead of as
-a disagreement. `exchange_delay` / `print_time` ride along in `data`, so the delay is visible without
-reading the comparison detail.
+Bloomberg and StockAnalysis are asked in parallel like the others, so `providers_answered` can hold
+every label and `comparisons[].values` every reading. Bloomberg's delayed print is bounded two ways:
+it is last in the freshness tie-break, and a pair a delay length apart is reported as
+`not_comparable` instead of as a disagreement. `exchange_delay` / `print_time` ride along in `data`,
+so the delay is visible without reading the comparison detail. StockAnalysis covers US equities and
+ETFs only, so it is `NOT_ATTEMPTED` for indices, FX, crypto, commodities and foreign listings; its
+price surface is the same consolidated tape Yahoo serves, so that pair is weak corroboration. Its
+extended-hours block rides along as `stockanalysis_extended_hours`.
 
 ### `stock_prices`
 
@@ -75,7 +80,9 @@ change is reported but never compared, exactly as in `stock_quote`.
 
 Bloomberg is asked about at most four tickers per call (`TAPEBASIS_BLOOMBERG_BATCH_MAX`), because its
 page path is paced at 10 s per request. The rest are listed in `warnings` and are not counted as
-Bloomberg-answered for those rows: coverage stays truthful per row.
+Bloomberg-answered for those rows: coverage stays truthful per row. StockAnalysis is asked about every
+ticker: its pacing absorbs a short list, so it needs no cap, and a symbol it does not carry is
+recorded as `NOT_ATTEMPTED` for that row.
 
 ### `stock_screener`
 
@@ -149,10 +156,12 @@ from TradingView's calendar). The two are not the same fact and are never confla
 ### `stock_extended_hours`
 
 Pre-/post-market price from every independent source that publishes one: TradingView's
-`premarket_*`/`postmarket_*` scanner columns, Finviz's after-hours print, and Yahoo's 1-minute
-extended-hours candles. The after-hours reading is compared at 0.5 %; each provider's raw reading
-stays in `after_hours_readings`. Each session block carries the session's `volume` when the feed
-reports one, so a pre-market print can be told apart from a single lot.
+`premarket_*`/`postmarket_*` scanner columns, Finviz's after-hours print, Yahoo's 1-minute
+extended-hours candles, and StockAnalysis's extended-hours block. The after-hours reading is compared
+at 0.5 %; each provider's raw reading stays in `after_hours_readings`. Each session block carries the
+session's `volume` when the feed reports one, so a pre-market print can be told apart from a single
+lot. StockAnalysis's block is also served whole as `stockanalysis_extended_hours`, next to
+`stockanalysis_regular_close`.
 
 ### `technical_analysis`
 
@@ -260,7 +269,7 @@ Yahoo. It is the scan/analysis endpoints that are TradingView-only.
 
 These tools ask Bloomberg and nobody else, so their responses are single-source by construction:
 `data_provider: BLOOMBERG`, `cross_checked: false`, `reconciliation_leg: false`. The provider itself
-is a full fourth leg of `stock_quote` / `stock_prices`, where it is asked in parallel and its readings
+is a full leg of `stock_quote` / `stock_prices`, where it is asked in parallel and its readings
 appear in `comparisons`. What these two tools add is Bloomberg's own quote page and its market board.
 
 | Tool | Capability | Notes |

@@ -26,18 +26,19 @@ def _resolved(provider: str, symbol: str | None, *, query: str = "AAPL") -> Reso
 
 
 @pytest.fixture
-def fake_providers(monkeypatch, tv_quote, fv_quote, yh_quote):
-    """Patch all four access layers with deterministic in-memory providers.
+def fake_providers(monkeypatch, tv_quote, fv_quote, yh_quote, sa_quote):
+    """Patch every access layer with deterministic in-memory providers.
 
     ``state["bb"]`` is ``None`` by default: Bloomberg answered, but had no
     quote for the fixture. That records ``NOT_ATTEMPTED`` rather than a
-    failure, so the three-provider assertions stay meaningful; tests that want
-    the fourth leg set it to a payload.
+    failure, so the assertions about the other legs stay meaningful; tests that
+    want the Bloomberg leg set it to a payload. ``state["sa"]`` behaves the
+    same way for StockAnalysis.
     """
-    from tapebasis import bb_access, fv_access, tv_access, yh_access
+    from tapebasis import bb_access, fv_access, sa_access, tv_access, yh_access
     from tapebasis.providers_state import NoDataError
 
-    state = {"tv": tv_quote, "fv": fv_quote, "yh": yh_quote, "bb": None}
+    state = {"tv": tv_quote, "fv": fv_quote, "yh": yh_quote, "bb": None, "sa": None}
 
     async def tv_quote_call(symbol):
         if isinstance(state["tv"], Exception):
@@ -54,6 +55,13 @@ def fake_providers(monkeypatch, tv_quote, fv_quote, yh_quote):
             raise state["yh"]
         return state["yh"]
 
+    async def sa_quote_call(symbol):
+        if state["sa"] is None:
+            raise NoDataError("SA", "StockAnalysis has no quote in this fixture")
+        if isinstance(state["sa"], Exception):
+            raise state["sa"]
+        return state["sa"]
+
     async def bb_quote_call(symbol):
         if state["bb"] is None:
             raise NoDataError("BLOOMBERG", "Bloomberg has no quote in this fixture")
@@ -68,8 +76,14 @@ def fake_providers(monkeypatch, tv_quote, fv_quote, yh_quote):
     monkeypatch.setattr(tv_access, "quote", tv_quote_call)
     monkeypatch.setattr(fv_access, "quote", fv_quote_call)
     monkeypatch.setattr(yh_access, "quote", yh_quote_call)
+    monkeypatch.setattr(sa_access, "quote", sa_quote_call)
     monkeypatch.setattr(bb_access, "quote", bb_quote_call)
     monkeypatch.setattr(tools_market, "resolve", fake_resolve)
+    monkeypatch.setattr(
+        tools_market,
+        "resolve_sa",
+        lambda query, **kwargs: _resolved("SA", "aapl", query=query),
+    )
     return state
 
 
@@ -306,12 +320,12 @@ async def test_every_value_survives_in_comparisons_after_selection(fake_provider
     assert "Providers disagree on: price" in result["warnings"]
 
 
-# ── Bloomberg as the fourth leg ──────────────────────────────────────────────
+# ── Bloomberg as a reconciliation leg ───────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_quote_counts_bloomberg_when_it_answers(fake_providers):
-    """Four providers answered: coverage is ALL and all four are named."""
+    """Bloomberg answered: coverage is ALL and it is named in the list."""
     fake_providers["bb"] = _bloomberg_quote()
     result = await tools_market.stock_quote("AAPL")
     assert result["data_provider"] == "ALL"
@@ -422,6 +436,159 @@ async def test_prices_ask_bloomberg_and_keep_the_delay_visible(fake_providers, m
     ]
     assert row["exchange_delay"] == "15 Minutes"
     assert row["comparisons"]["price"]["values"]["BLOOMBERG"] == pytest.approx(331.9)
+
+# ── StockAnalysis as the fifth leg ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_quote_counts_stockanalysis_when_it_answers(fake_providers):
+    """StockAnalysis is a leg, not a side channel: it names itself in coverage."""
+    fake_providers["sa"] = fake_providers["sa"] or _stockanalysis_quote()
+    result = await tools_market.stock_quote("AAPL")
+    assert result["data_provider"] == "ALL"
+    assert result["providers_answered"] == [
+        "TRADINGVIEW",
+        "FINVIZ",
+        "YAHOO",
+        "SA",
+    ]
+    assert result["errors"] == []
+    price_row = next(c for c in result["comparisons"] if c["field"] == "price")
+    assert price_row["values"]["SA"] == pytest.approx(331.9)
+
+
+@pytest.mark.asyncio
+async def test_stockanalysis_disagreement_is_reported_like_any_other(fake_providers):
+    """The fifth vote counts both ways: a divergent reading is a real conflict."""
+    fake_providers["sa"] = _stockanalysis_quote(price=331.9 * 1.05)
+    result = await tools_market.stock_quote("AAPL")
+    price_row = next(c for c in result["comparisons"] if c["field"] == "price")
+    assert price_row["match"] is False
+    assert "Providers disagree on: price" in result["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_quote_carries_the_stockanalysis_extended_hours_block(fake_providers):
+    fake_providers["sa"] = fake_providers["sa"] or _stockanalysis_quote()
+    result = await tools_market.stock_quote("AAPL")
+    extended = result["data"]["stockanalysis_extended_hours"]
+    assert extended["session"] == "Post-market"
+    assert extended["price"] == pytest.approx(329.8)
+
+
+@pytest.mark.asyncio
+async def test_prices_ask_stockanalysis_and_keep_its_row(fake_providers, monkeypatch):
+    from tapebasis import fv_access, sa_access, tv_access, yh_access
+
+    async def tv_quotes(symbols):
+        return {
+            "AAPL": {
+                "ticker": "NASDAQ:AAPL",
+                "close": 331.9,
+                "change": -1.9,
+                "volume": 63160515,
+                "update_time": "2026-11-03T21:00:01+00:00",
+            }
+        }
+
+    async def fv_rows(symbols):
+        return [
+            {
+                "ticker": "AAPL",
+                "price": 331.9,
+                "change": -1.9,
+                "prevClose": 338.32,
+                "last_update": "2026-11-03T20:59:00+00:00",
+            }
+        ]
+
+    async def yh_quote_call(symbol):
+        return {
+            "price": 331.9,
+            "change_pct": -1.9,
+            "previous_close": 338.32,
+            "market_time": "2026-11-03T21:00:01+00:00",
+            "shortName": "Apple Inc.",
+        }
+
+    async def sa_quote_call(symbol):
+        return _stockanalysis_quote()
+
+    monkeypatch.setattr(tv_access, "quotes", tv_quotes)
+    monkeypatch.setattr(fv_access, "screener_rows", fv_rows)
+    monkeypatch.setattr(yh_access, "quote", yh_quote_call)
+    monkeypatch.setattr(sa_access, "quote", sa_quote_call)
+
+    result = await tools_market.stock_prices("AAPL")
+    row = result["data"][0]
+    assert row["providers_answered"] == ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA"]
+    assert row["comparisons"]["price"]["values"]["SA"] == pytest.approx(331.9)
+
+
+@pytest.mark.asyncio
+async def test_extended_hours_counts_stockanalysis_when_it_answers(
+    fake_providers, monkeypatch
+):
+    from tapebasis import fv_access, tv_access, yh_access
+
+    async def tv_quote_call(symbol):
+        return {**fake_providers["tv"], "postmarket_close": 329.8}
+
+    async def fv_quote_call(symbol):
+        return fake_providers["fv"]
+
+    async def yh_hours(symbol):
+        return None
+
+    monkeypatch.setattr(tv_access, "quote", tv_quote_call)
+    monkeypatch.setattr(fv_access, "quote", fv_quote_call)
+    monkeypatch.setattr(yh_access, "extended_hours", yh_hours)
+    fake_providers["sa"] = _stockanalysis_quote()
+
+    result = await tools_market.stock_extended_hours("AAPL")
+    data = result["data"]
+    assert data["after_hours_readings"]["SA"] == pytest.approx(329.8)
+    assert data["stockanalysis_extended_hours"]["session"] == "Post-market"
+    # The after-hours comparison is a coverage statement over the legs that
+    # actually printed an extended session.
+    assert "SA" in data["after_hours_comparison"]["values"]
+
+
+def _stockanalysis_quote(*, price=331.9, extended_price=329.8):
+    """StockAnalysis's shaped quote, as ``sa_access.quote`` returns it."""
+    return {
+        "symbol": "AAPL",
+        "requested": "AAPL",
+        "price": price,
+        "change": -1.9,
+        "change_percent": -1.9,
+        "previous_close": 338.32,
+        "day_open": 337.1,
+        "day_high": 338.0,
+        "day_low": 330.5,
+        "volume": 63160515.0,
+        "week_52_high": 351.73,
+        "week_52_low": 243.42,
+        "exchange": "NASDAQ",
+        "market_state": "closed",
+        "session": "post",
+        "price_date": "2026-11-03",
+        "price_timestamp": "2026-11-03T21:00:01+00:00",
+        "price_timestamp_source": "ts (epoch ms)",
+        "extended_hours": {
+            "session": "Post-market",
+            "price": extended_price,
+            "change": -2.1,
+            "change_percent": -0.63,
+            "previous_close": price,
+            "volume": 120_000.0,
+            "price_timestamp": "2026-11-03T21:00:01+00:00",
+            "price_date": "2026-11-03",
+        },
+        "has_extended_hours": True,
+        "source": "stockanalysis.com consolidated quote API",
+    }
+
 
 # ── session range and feed mode: data that arrived and was dropped ───────────
 
@@ -535,4 +702,3 @@ async def test_quote_carries_the_income_breakdown_finviz_already_downloaded(
     breakdown = result["data"]["income_breakdown"]
     assert breakdown["statement"]["scale_applied"] == 1_000_000.0
     assert result["fields"]["income_breakdown"] == "FINVIZ"
-

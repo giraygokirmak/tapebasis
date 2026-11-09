@@ -39,6 +39,11 @@ through a per-provider limiter ([`ratelimit.py`](https://github.com/giraygokirma
 | `TAPEBASIS_YAHOO_MIN_INTERVAL` | `1.0` | Minimum seconds between Yahoo request starts |
 | `TAPEBASIS_YAHOO_MAX_INFLIGHT` | `1` | Max concurrent Yahoo requests |
 | `TAPEBASIS_YAHOO_MAX_RETRIES` | `2` | Retries per Yahoo request |
+| `TAPEBASIS_SA_MIN_INTERVAL` | `0.5` | Minimum seconds between StockAnalysis request starts |
+| `TAPEBASIS_SA_MAX_INFLIGHT` | `2` | Max concurrent StockAnalysis requests |
+| `TAPEBASIS_SA_MAX_RETRIES` | `2` | Retries per StockAnalysis request |
+| `TAPEBASIS_SA_TIMEOUT` | `20` | stockanalysis.com HTTP timeout (s) |
+| `TAPEBASIS_SA_CACHE_TTL` | `20` | Quote cache lifetime (s); the upstream advertises a 3 s shared cache |
 | `TAPEBASIS_BLOOMBERG_MIN_INTERVAL` | `10.0` | Minimum seconds between Bloomberg request starts |
 | `TAPEBASIS_BLOOMBERG_MAX_INFLIGHT` | `1` | Max concurrent Bloomberg requests |
 | `TAPEBASIS_BLOOMBERG_MAX_RETRIES` | `1` | Retries per Bloomberg request |
@@ -66,8 +71,13 @@ cost of a block that outlasts the burst.
 
 Because that pace is slow, the quote tools bound the cost instead of hiding it:
 `TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE` turns a queued or blocked leg into a stated `TIMEOUT` while the
-other three readings still go out, and `TAPEBASIS_BLOOMBERG_BATCH_MAX` caps how many tickers one
+other readings still go out, and `TAPEBASIS_BLOOMBERG_BATCH_MAX` caps how many tickers one
 `stock_prices` call asks Bloomberg about, naming the rest in `warnings`.
+
+StockAnalysis sits in the middle (`0.5 s`, two at a time): it fronts its API with Cloudflare and
+advertises a 3 s shared cache, so a normal pace is fine, while a burst from one IP is still punished.
+Its quote leg needs no batch cap for that reason, and `TAPEBASIS_SA_CACHE_TTL` absorbs the duplicate
+questions of one agent turn without ever serving a price a live feed would disagree with.
 
 Current limiter state (`min_interval_s`, `max_inflight`, `cooling_down_s`, `block_streak`,
 `cached_entries`) is reported by `tapebasis_health` and `GET /health` under `rate_limits`.
@@ -87,7 +97,7 @@ Finviz's quote data is scraped from rendered HTML, so a short cache keeps prices
 more upstream requests. `FINVIZ_CACHE_TTL=30` is a deliberate middle ground.
 
 `FINVIZ_TIMEOUT=25` is a fail-fast ceiling: the fan-out waits for the slowest leg, so a hanging Finviz
-sets the latency of a response that the other two providers could have answered in a second.
+sets the latency of a response that the other providers could have answered in a second.
 
 ## TradingView provider layer
 

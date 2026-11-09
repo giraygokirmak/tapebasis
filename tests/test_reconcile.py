@@ -200,7 +200,8 @@ def test_merge_three_providers_resolves_to_freshest_print():
 
 def test_default_order_is_documented_and_stable():
     # Bloomberg is last: a delayed page must never outrank a live feed on a tie.
-    assert DEFAULT_ORDER == (FINVIZ, TRADINGVIEW, YAHOO, "BLOOMBERG")
+    # StockAnalysis sits just before it: a live feed, but the narrowest cover.
+    assert DEFAULT_ORDER == (FINVIZ, TRADINGVIEW, YAHOO, "SA", "BLOOMBERG")
     merged = merge_many(
         {FINVIZ: {"price": 10.1}, TRADINGVIEW: {"price": 10.0}, YAHOO: {"price": 10.2}},
         (FieldSpec("price", lambda p: p["price"], lambda p: p["price"]),),

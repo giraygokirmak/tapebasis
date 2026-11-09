@@ -85,8 +85,8 @@ tapebasis_tool_map()           # what is multi-sourced, before calling anything
 {
   "data_provider": "ALL",
   "verification": "MULTI_SOURCE",
-  "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO", "BLOOMBERG"],
-  "notice": "Every provider asked answered (TradingView, Finviz, Yahoo Finance and Bloomberg). Coverage is ALL; agreement is a separate axis. Compared fields agree within tolerance. The value shown is FINVIZ's because it printed more recently than the other providers'.",
+  "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"],
+  "notice": "Every provider asked answered (TradingView, Finviz, Yahoo Finance, StockAnalysis and Bloomberg). Coverage is ALL; agreement is a separate axis. Compared fields agree within tolerance. The value shown is FINVIZ's because it printed more recently than the other providers'.",
   "data": { "price": 332.33, "previous_close": 331.9, ... },
   "fields": { "price": "ALL", "peers": "FINVIZ" },
   "freshness": {
@@ -151,6 +151,7 @@ stock_quote("XAUUSD")
     "TRADINGVIEW": { "symbol": "OANDA:XAUUSD", "method": "search" },
     "FINVIZ": { "symbol": null, "note": "Finviz carries US equities/ETFs only" },
     "YAHOO": { "symbol": null, "note": "Yahoo Finance has no spot gold pair; its nearest series is COMEX gold futures (GC=F), a different instrument, not substituted." },
+    "SA": { "symbol": null, "note": "StockAnalysis's quote API carries US equities and ETFs only" },
     "BLOOMBERG": { "symbol": "XAUUSD:CUR", "method": "mechanical" }
   },
   "errors": []
@@ -158,7 +159,7 @@ stock_quote("XAUUSD")
 ```
 
 Gold is a good demonstration of the rules: the data is served rather than withheld, and the label
-says it is single-source. `errors` is empty because no provider *failed*: two simply do not carry
+says it is single-source. `errors` is empty because no provider *failed*: three simply do not carry
 spot gold, and Yahoo's note refuses to substitute a futures contract for a spot pair. A different
 instrument at a different price is not the same quote. Bloomberg does carry it (`XAUUSD:CUR`), so in
 practice this response is `ALL` over TradingView and Bloomberg, with both readings in `comparisons`.
@@ -190,7 +191,7 @@ bloomberg_markets()
 ```
 
 This tool asks one provider, so the payload is single-source by construction. The provider itself is
-not: `stock_quote` asks Bloomberg in parallel with the other three, and its reading appears in
+not: `stock_quote` asks Bloomberg in parallel with every other provider, and its reading appears in
 `comparisons`. There its declared 15-minute delay is handled openly: a pair a delay length apart is
 reported as `not_comparable` with the reason, and a delayed page never wins a freshness tie. The
 government benchmark curve is the capability no other provider here publishes, which is why the

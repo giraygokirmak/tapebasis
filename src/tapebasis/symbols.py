@@ -14,6 +14,10 @@ Bitcoin       ``BITSTAMP:BTCUSD`` *(none)*     ``BTC-USD``
 Brent         ``NYMEX:BZ1!``      *(none)*     ``BZ=F``
 ============  ==================  ===========  ===============
 
+StockAnalysis addresses only US equities and ETFs (``aapl``, ``brk.b``) and has
+no search endpoint, so it is a mechanical rule plus a stated "not carried" for
+everything else.
+
 A hardcoded table cannot keep up: it needs a row per instrument, per provider,
 and it silently produces a wrong-but-plausible ticker when a row is missing, which is exactly how ``XAUUSD`` became ``NASDAQ:XAUUSD`` and every provider
 returned "no data".
@@ -21,10 +25,12 @@ returned "no data".
 This module resolves dynamically instead:
 
 1. **Explicit wins.** ``OANDA:XAUUSD`` is taken at face value for TradingView;
-   the bare part is then mapped for the other two.
+   the bare part is then mapped for the others.
 2. **Native search.** Each provider is asked with its own symbol-search
    endpoint. TradingView has a documented symbol search, Yahoo has
    ``/v1/finance/search``, Finviz only accepts slugs so it gets a read-probe.
+   StockAnalysis has no quote search at all, so it gets a mechanical rule plus
+   an explicit "not carried" for every instrument class it does not serve.
 3. **Ranked match.** Candidates are scored on exact-symbol match, asset class
    and venue preference. A result must clear a confidence floor, otherwise it
    is not used: guessing is worse than reporting "not found".
@@ -104,7 +110,8 @@ class Resolution:
     venue: str = ""
     description: str = ""
     asset_class: str = ""
-    method: str = "none"        # explicit | search | alias | none
+    # explicit | search | alias | normalise | mechanical | none
+    method: str = "none"
     confidence: float = 0.0
     candidates: list[Candidate] = field(default_factory=list)
     note: str = ""
@@ -599,6 +606,141 @@ def resolve_finviz(query: str, *, asset_class: str = "") -> Resolution:
     )
 
 
+# ── StockAnalysis ────────────────────────────────────────────────────────────
+
+
+#: Instrument classes the StockAnalysis quote API has no route for. Its HTML
+#: pages do cover some of these, but the quote API answers 404/400, so the leg
+#: reports "not carried" instead of spending a request to learn it.
+_SA_NOT_CARRIED_CLASSES = {
+    "index": "StockAnalysis quotes indices on HTML pages only; its quote API is "
+             "US equities and ETFs",
+    "forex": "StockAnalysis has no FX quote endpoint",
+    "currency": "StockAnalysis has no FX quote endpoint",
+    "crypto": "StockAnalysis has no crypto quote endpoint",
+    "commodity": "StockAnalysis has no commodity quote endpoint",
+    "futures": "StockAnalysis has no futures quote endpoint",
+}
+
+#: A foreign listing carries a venue suffix (``VOD.L``, ``SHOP.TO``). The quote
+#: API is US-only, so these are rejected here rather than 404ing later.
+_SA_FOREIGN_SUFFIX = re.compile(
+    r"^[A-Z0-9]{1,6}\."
+    r"(L|TO|V|AX|HK|T|DE|PA|AS|MI|MC|ST|SI|CO|OL|HE|BR|LS|IR|NZ|SA|MX|JO|KL|BK|"
+    r"TA|TW|SS|SZ|KS|KQ|IS|VI|WA|PR|AT|BD|CL|CR|DU|F|HA|JK|KA|NS|BO|NZ|SG|SW)$"
+)
+
+#: Spot metals are quoted as ``XAUUSD`` and end in ``USD`` exactly like a crypto
+#: pair does. They need their own answer, or a caller asking for spot gold is
+#: told the leg has no crypto, which is the wrong reason.
+_SA_METALS = frozenset({"XAU", "XAG", "XPT", "XPD"})
+
+#: Crypto bases that reach this module as ``BTCUSD`` / ``BTCUSDT``. Checked
+#: explicitly rather than by shape, so a metal is not misread as a coin.
+_SA_CRYPTO_BASES = frozenset(
+    {"BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "AVAX", "DOT", "LTC", "LINK",
+     "BNB", "MATIC", "TRX", "SHIB", "UNI", "ATOM", "XLM", "ETC", "FIL", "APT"}
+)
+
+
+def _sa_pair_reason(bare: str) -> str | None:
+    """The not-carried note for a base/quote pair, or ``None`` if it is no pair.
+
+    ``XAUUSD``, ``BTC-USD`` and ``EURUSD`` all look similar and all have
+    different reasons, so the base is classified rather than guessed from the
+    suffix alone.
+    """
+    candidate = bare.replace("-", "").replace("/", "")
+    if candidate.endswith("USDT"):
+        candidate = candidate[:-4]
+    elif candidate.endswith("USD"):
+        candidate = candidate[:-3]
+    else:
+        return None
+    if not candidate or not candidate.isalpha():
+        return None
+    if candidate in _SA_METALS:
+        return _SA_NOT_CARRIED_CLASSES["commodity"]
+    if candidate in _SA_CRYPTO_BASES:
+        return _SA_NOT_CARRIED_CLASSES["crypto"]
+    if "=" in bare or "-USD" in bare:
+        return "StockAnalysis's quote API carries US equities and ETFs only"
+    return _SA_NOT_CARRIED_CLASSES["forex"]
+
+
+def resolve_sa(query: str, *, asset_class: str = "") -> Resolution:
+    """StockAnalysis's ticker for *query*, resolved without a request.
+
+    The quote API has no search endpoint and accepts exactly one spelling: the
+    US ticker, lowercased, with a share class as a dot. So resolution is a
+    mechanical rule plus an honesty check: anything that is not a US equity or
+    ETF is reported as not carried rather than being sent to a route that will
+    answer 404.
+    """
+    raw = query.strip()
+    bare = raw.upper().split(":", 1)[-1].replace(" ", "")
+
+    if asset_class and asset_class.lower() in _SA_NOT_CARRIED_CLASSES:
+        return Resolution(
+            query=query,
+            provider="SA",
+            note=_SA_NOT_CARRIED_CLASSES[asset_class.lower()],
+            asset_class=asset_class,
+        )
+
+    # Index spellings: SPX / ^GSPC / SP:SPX. The quote API has no route for any
+    # of them (all three answer 404 live), and ``COMP`` would be Compass Inc.
+    if bare.startswith("^") or canonical_index(bare):
+        return Resolution(
+            query=query,
+            provider="SA",
+            note=_SA_NOT_CARRIED_CLASSES["index"],
+            asset_class="index",
+        )
+
+    # ``XAUUSD`` is spot gold, not a coin: the reason has to name the right
+    # boundary, so the base is classified instead of trusting the ``USD`` tail.
+    pair_reason = _sa_pair_reason(bare)
+    if pair_reason is not None:
+        return Resolution(query=query, provider="SA", note=pair_reason)
+    # Six all-alpha letters is an FX pair in every other provider's vocabulary
+    # (``USDJPY``, ``GBPEUR``); no US ticker is spelled that way, and the API
+    # would answer 404 for each of them.
+    if re.fullmatch(r"[A-Z]{6}", bare):
+        return Resolution(
+            query=query,
+            provider="SA",
+            note=_SA_NOT_CARRIED_CLASSES["forex"],
+        )
+    if _SA_FOREIGN_SUFFIX.match(bare):
+        return Resolution(
+            query=query,
+            provider="SA",
+            note="StockAnalysis's quote API carries US listings only",
+        )
+    if not bare or not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", bare):
+        return Resolution(
+            query=query,
+            provider="SA",
+            note=f"{bare!r} is not a US ticker",
+        )
+
+    # ``BRK-B`` is Yahoo's spelling of the site's ``BRK.B``.
+    if "-" in bare:
+        head, _, tail = bare.partition("-")
+        if head.isalpha() and tail.isalpha() and len(tail) <= 2:
+            bare = f"{head}.{tail}"
+    return Resolution(
+        query=query,
+        provider="SA",
+        symbol=bare.lower(),
+        method="mechanical",
+        confidence=0.9,
+        asset_class=asset_class or "stock",
+        note="StockAnalysis has no quote search API; the US ticker is lowercased",
+    )
+
+
 # ── Facade ───────────────────────────────────────────────────────────────────
 
 
@@ -623,6 +765,8 @@ async def resolve(
         result = await resolve_yahoo(query, asset_class=asset_class)
     elif provider == "FINVIZ":
         result = resolve_finviz(query, asset_class=asset_class)
+    elif provider == "SA":
+        result = resolve_sa(query, asset_class=asset_class)
     else:
         raise ValueError(f"unknown provider {provider!r}")
 
@@ -636,6 +780,7 @@ async def resolve_all(query: str, *, asset_class: str = "") -> dict[str, Resolut
         resolve(query, "TRADINGVIEW", asset_class=asset_class),
         resolve(query, "FINVIZ", asset_class=asset_class),
         resolve(query, "YAHOO", asset_class=asset_class),
+        resolve(query, "SA", asset_class=asset_class),
     )
     return {r.provider: r for r in results}
 

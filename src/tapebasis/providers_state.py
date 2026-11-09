@@ -10,7 +10,8 @@ Providers are first-class peers, asked in parallel:
 ``TRADINGVIEW``  TradingView's scanner and chart websocket.
 ``FINVIZ``       finviz.com HTML and JSON islands.
 ``YAHOO``        query1.finance.yahoo.com chart API.
-``BLOOMBERG``    bloomberg.com public quote pages, a fourth leg with a known delay.
+``SA``           stockanalysis.com's consolidated quote API, US equities/ETFs.
+``BLOOMBERG``    bloomberg.com public quote pages, a leg with a known delay.
 
 ``ALL`` means **every provider that was asked answered**. It is a statement
 about coverage, not about agreement. Agreement is a separate axis: it lives in
@@ -35,6 +36,15 @@ tolerance:
 Both facts are reported in the payload (``exchange_delay``, ``print_time``,
 ``comparisons[].pairs[].not_comparable``), so an agent can tell a real
 cross-check from a delayed duplicate.
+
+StockAnalysis is a full leg too, on the same terms: asked in parallel on every
+US equity/ETF quote, its readings in ``comparisons``, counted in ``ALL``. Its
+quote surface is the same consolidated tape Yahoo serves, so the two agree
+penny-for-penny by construction rather than by independent measurement; that is
+stated rather than presented as two witnesses. It sits immediately before
+Bloomberg in the documented order: a live feed, but the narrowest coverage (US
+equities and ETFs, no indices, FX, crypto, commodities or foreign listings), so it should not
+outrank a broader feed on a tie.
 """
 from __future__ import annotations
 
@@ -50,6 +60,7 @@ class DataProvider(str, Enum):
     TRADINGVIEW = "TRADINGVIEW"
     FINVIZ = "FINVIZ"
     YAHOO = "YAHOO"
+    SA = "SA"
     BLOOMBERG = "BLOOMBERG"
     NONE = "NONE"
 
@@ -68,15 +79,19 @@ class Verification(str, Enum):
 
 
 #: Every provider label that participates in reconciliation, in display order.
-#: Bloomberg is last because it is the leg whose prints can be structurally
-#: older: order only matters for display and for the documented tie-break.
-PROVIDER_ORDER: tuple[str, ...] = ("TRADINGVIEW", "FINVIZ", "YAHOO", "BLOOMBERG")
+#: Bloomberg and StockAnalysis are last because they are the legs whose
+#: coverage is narrowest or whose prints can be structurally older: order only
+#: matters for display and for the documented tie-break.
+PROVIDER_ORDER: tuple[str, ...] = (
+    "TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"
+)
 
 #: Human-readable name for each provider, used in notices and docs.
 PROVIDER_NAMES: dict[str, str] = {
     "TRADINGVIEW": "TradingView",
     "FINVIZ": "Finviz",
     "YAHOO": "Yahoo Finance",
+    "SA": "StockAnalysis",
     "BLOOMBERG": "Bloomberg",
 }
 
@@ -108,6 +123,13 @@ PROVIDER_MEANING: dict[DataProvider, str] = {
     DataProvider.YAHOO: (
         "Data came from YAHOO only. The other providers did not supply this "
         "field, so the value is single-source and NOT corroborated."
+    ),
+    DataProvider.SA: (
+        "Data came from SA (StockAnalysis) only. The other providers did not "
+        "supply this field, so the value is single-source and NOT corroborated. "
+        "StockAnalysis covers US equities and ETFs; its quote surface is the same "
+        "consolidated tape Yahoo serves, so read agreement between those two as "
+        "weak corroboration, not two independent witnesses."
     ),
     DataProvider.BLOOMBERG: (
         "Data came from BLOOMBERG only. The other providers did not supply this "

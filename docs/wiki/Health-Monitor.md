@@ -2,14 +2,14 @@
 
 Every provider depends on things that can move without notice: Finviz's HTML class names and
 unversioned `/api/*` JSON islands, TradingView's scanner POST schema and chart websocket protocol,
-and Yahoo's chart API shape.
+Yahoo's chart API shape, and StockAnalysis's quote API envelope.
 
 A provider that catches its own exception looks healthy from the outside. So the monitor probes each
 upstream **independently of the provider code paths**: it can fail even when every tool call
 succeeds, and that failure is the signal.
 
-The probe set covers three of the four reconciliation legs (TradingView, Finviz, Yahoo). Bloomberg is
-a leg too, but it cannot be probed, see below.
+The probe set covers every reconciliation leg that can be probed over HTTP: TradingView, Finviz,
+Yahoo and StockAnalysis. Bloomberg is a leg too, but it cannot be probed, see below.
 
 ## Probes
 
@@ -23,6 +23,7 @@ a leg too, but it cannot be probed, see below.
 | `yahoo.chart_api` | YAHOO | `chart.result[0].meta` and `chart.result[0].timestamp` present for an equity |
 | `yahoo.chart_fx` | YAHOO | the FX resolution path still answers (`EURUSD=X`) |
 | `yahoo.chart_crypto` | YAHOO | the crypto resolution path still answers (`BTC-USD`) |
+| `sa.quote_api` | SA | `data.p` present in `/api/quotes/s/aapl` |
 
 Bloomberg has **no probe**, deliberately. Its site gates plain HTTP clients on the TLS fingerprint:
 `httpx` receives a 403 robot page whatever headers it sends, while `curl_cffi` with a specific
