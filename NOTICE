@@ -73,16 +73,18 @@ Upstream license:
 --------------------------------------------------------------------------------
 3. Third-party runtime dependencies
 --------------------------------------------------------------------------------
-Runtime dependencies (mcp, httpx, pandas, tradingview-screener, tradingview-ta,
-feedparser, requests, python-dateutil, vaderSentiment) are not vendored; they
-are installed from PyPI under their own licenses. See each project for details.
+Runtime dependencies (mcp, httpx, curl_cffi, pandas, tradingview-screener,
+tradingview-ta, feedparser, requests, python-dateutil, vaderSentiment) are not
+vendored; they are installed from PyPI under their own licenses. See each
+project for details.
 
 vaderSentiment (MIT, https://github.com/cjhutto/vaderSentiment) ships the
 VADER sentiment lexicon used by tapebasis/sentiment.py for local,
 token-free headline scoring. That module adds its own financial vocabulary on
 top; the base lexicon and scoring algorithm are VADER's.
 
-TradingView, Finviz, Yahoo Finance and Marketaux are trademarks of their
-respective owners. This project is not affiliated with or endorsed by any of
-them. It reads publicly accessible endpoints that they operate; you are
-responsible for complying with their terms of service and rate limits.
+TradingView, Finviz, Yahoo Finance, StockAnalysis, Bloomberg and Marketaux are
+trademarks of their respective owners. This project is not affiliated with or
+endorsed by any of them. It reads publicly accessible endpoints that they
+operate; you are responsible for complying with their terms of service and
+rate limits.
