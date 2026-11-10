@@ -33,6 +33,7 @@ from typing import Any
 import httpx
 
 from ...ratelimit import RateLimited, call, limiter
+from ...symbols import INSTRUMENTS
 
 PROVIDER = "TRADINGVIEW"
 
@@ -221,13 +222,13 @@ async def quote(ticker: str) -> dict[str, Any]:
     return rows[0]
 
 
-#: Canonical index name -> the TradingView ticker that carries it.
+#: Canonical index name -> the TradingView ticker that carries it. Derived
+#: from the instrument registry, so the TradingView spellings of the indices
+#: live in one place only: :data:`tapebasis.symbols.INSTRUMENTS`.
 INDEX_TICKERS: dict[str, str] = {
-    "SPX": "SP:SPX",
-    "DJI": "DJ:DJI",
-    "COMP": "NASDAQ:IXIC",
-    "RUT": "TVC:RUT",
-    "VIX": "TVC:VIX",
+    canonical: str(row["tradingview"])
+    for canonical, row in INSTRUMENTS.items()
+    if row["asset_class"] == "index"
 }
 
 _INDEX_COLUMNS = (

@@ -60,7 +60,11 @@ has no island at all, so the field is `null` and the quote is unaffected.
 
 Because symbols are resolved per provider, `XAUUSD` reaches `OANDA:XAUUSD` on TradingView and
 `XAUUSD:CUR` on Bloomberg, is correctly reported as not carried by Yahoo, Finviz and StockAnalysis,
-and the response is `ALL` over the two that answered rather than `NONE`.
+and the response is `ALL` over the two that answered rather than `NONE`. Indices and commodities
+(gold, silver, WTI, Brent, copper, natural gas, spot and front-month futures) are addressed through
+the instrument registry in `symbols.py`, so `WTI` reaches TradingView as `FX:USOIL`, never as
+`NYSE:WTI` (an equity whose ticker happens to match), and `CL1!` reaches Yahoo as `CL=F` and
+Bloomberg as `CL1:COM`.
 
 Bloomberg and StockAnalysis are asked in parallel like the others, so `providers_answered` can hold
 every label and `comparisons[].values` every reading. Bloomberg's delayed print is bounded two ways:

@@ -308,6 +308,8 @@ derived (`explicit`, `alias`, `search`, `none`).
 | `^GSPC` ↔ `SPX` ↔ `SP:SPX` | Aliased to `SPX` |
 | `RUT` vs `IWM` | Index vs its ETF: **different instruments**, never aliased |
 | `XAUUSD` (spot gold) | TradingView `OANDA:XAUUSD` and Bloomberg `XAUUSD:CUR`. Yahoo has no spot pair (`XAUUSD=X` is a 404), and Finviz and StockAnalysis do not carry it |
+| `WTI` / `BRENT` / `GOLD` / `SILVER` | Registry aliases: `WTI` -> `FX:USOIL` on TradingView (never `NYSE:WTI`, an equity), `GOLD` -> `XAUUSD`, `SILVER` -> `XAGUSD` (`TVC:SILVER` on TradingView) |
+| `CL1!` / `GC=F` (front futures) | Same instrument, both spellings: TradingView `NYMEX:CL1!`, Yahoo `CL=F`, Bloomberg `CL1:COM`. Spot (`USOIL`) and futures (`CL1!`) are separate rows and never compared with each other |
 | `BTCUSD` | TradingView `BITSTAMP:BTCUSD`, Yahoo `BTC-USD`, Bloomberg `XBTUSD:CUR`; Finviz and StockAnalysis have no crypto |
 | `EURUSD` | TradingView `FX:EURUSD`, Yahoo `EURUSD=X`, Bloomberg `EURUSD:CUR`; Finviz and StockAnalysis have no FX |
 | `SPX` / `DJI` | Finviz has no per-ticker index page (`/stock?t=SPX` is a 404, and `COMP` there is Compass Inc), and StockAnalysis's quote API has no index route. Use `market_indices` |

@@ -191,10 +191,13 @@ response is the availability signal. Details: [Design Decisions](Design-Decision
 ## Symbols are resolved per provider
 
 `XAUUSD` is `OANDA:XAUUSD` on TradingView, `^GSPC`-style aliasing for indices, a suffix for Yahoo FX,
-`XAUUSD:CUR` on Bloomberg and simply not carried by Yahoo, Finviz or StockAnalysis. [`symbols.py`](https://github.com/giraygokirmak/tapebasis/blob/main/src/tapebasis/symbols.py)
-resolves each query per provider, caches the result for an hour, and records the derivation in
-`resolutions`. A ticker is only returned if the provider can actually quote it, and a missing
-instrument becomes `NOT_ATTEMPTED`: a structural fact, not an error.
+`XAUUSD:CUR` on Bloomberg and simply not carried by Yahoo, Finviz or StockAnalysis. Indices and
+commodities live in one instrument registry in [`symbols.py`](https://github.com/giraygokirmak/tapebasis/blob/main/src/tapebasis/symbols.py)
+(one row per instrument, one column per provider), so `WTI` reaches TradingView as `FX:USOIL` and
+never as `NYSE:WTI` (an equity whose ticker happens to match) and `CL1!` reaches Yahoo as `CL=F`.
+The module resolves each query per provider, caches the result for an hour, and records the
+derivation in `resolutions`. A ticker is only returned if the provider can actually quote it, and a
+missing instrument becomes `NOT_ATTEMPTED`: a structural fact, not an error.
 
 ---
 

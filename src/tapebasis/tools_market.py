@@ -155,10 +155,25 @@ def _bloomberg_resolution(symbol: str) -> Resolution:
     """Bloomberg's id for *symbol*, resolved without a request.
 
     Bloomberg has no usable anonymous search endpoint and answers a bad id with
-    a bot-wall 403 rather than a 404, so identity is a curated alias table plus
-    a mechanical rule (:func:`tapebasis.bb_access.to_bloomberg`). That is a
-    resolution, just not a searched one, and the ``method`` says so.
+    a bot-wall 403 rather than a 404, so identity is the instrument registry
+    plus a small alias table plus a mechanical rule
+    (:func:`tapebasis.bb_access.to_bloomberg`). A registry row whose Bloomberg
+    cell is ``None`` with a note ("no spot series") is resolved as not carried,
+    so the leg is ``NOT_ATTEMPTED`` with the stated boundary instead of being
+    sent an id that will answer a robot page.
     """
+    from .symbols import instrument_row
+
+    row = instrument_row(symbol)
+    if row is not None and row.get("bloomberg") is None:
+        note = row.get("bloomberg_note") or "not carried by Bloomberg"
+        return Resolution(
+            query=symbol,
+            provider=BLOOMBERG,
+            symbol=None,
+            method="none",
+            note=note,
+        )
     try:
         bloomberg_id = bb_access.to_bloomberg(symbol)
     except Exception as exc:  # noqa: BLE001 - a bad symbol is not a failure here

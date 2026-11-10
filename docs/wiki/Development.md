@@ -32,7 +32,7 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_tools_merge.py` | End-to-end tool contract with faked providers (`ALL` vs single-source, `not_comparable`) |
 | `test_upstream_contract.py` | Regression tests for every upstream behaviour found by live probing (see below) |
 | `test_shapers.py` | Pure payload shapers |
-| `test_symbols.py` | BRK-B ↔ BRK.B, index aliasing, RUT/IWM separation, per-provider `none` resolutions |
+| `test_symbols.py` | BRK-B ↔ BRK.B, the instrument registry (completeness, no colliding spellings), index aliasing, RUT/IWM separation, per-provider `none` resolutions |
 | `test_freshness.py` | Print-time parsing, freshest-print selection, tie and `no_timestamp` handling |
 | `test_health.py` | Probe verdicts, fingerprints, drift detection, `rate_limits` block |
 | `test_sentiment.py` | Local scoring: direction, neutrality, determinism, aggregation |

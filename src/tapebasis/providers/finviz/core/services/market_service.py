@@ -24,12 +24,15 @@ from tapebasis.providers.finviz.core.errors import ErrorCode, FinvizServiceError
 from tapebasis.providers.finviz.core.services import finviz_client
 from tapebasis.providers.finviz.core.services.html_utils import extract_script_json
 from tapebasis.providers.finviz.core.utils.validators import validate_ticker
+from tapebasis.symbols import INSTRUMENTS
 
+#: Finviz index ticker -> display name. Derived from the instrument registry,
+#: so the index names live in one place only.
 INDEX_TICKERS = {
-    "DJI": "Dow Jones Industrial Average",
-    "COMP": "NASDAQ Composite",
-    "SPX": "S&P 500",
-    "IWM": "iShares Russell 2000 ETF",
+    canonical: str(row["name"])
+    for canonical, row in INSTRUMENTS.items()
+    if row["finviz"] is not None and row["asset_class"] == "index"
+    or canonical == "IWM"
 }
 
 

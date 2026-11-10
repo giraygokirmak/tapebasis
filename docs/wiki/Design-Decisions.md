@@ -654,6 +654,33 @@ several providers at once.
 
 ---
 
+## 37. One instrument registry, not five per-provider tables
+
+**Decision:** indices and commodities (gold, silver, WTI, Brent, copper, natural gas; spot and
+front-month futures) are addressed through one registry in `symbols.py`: one row per instrument,
+one column per provider, a `None` cell stating the boundary that provider declares. The per-provider
+copies (`_YAHOO_INDEX_ALIASES`, `TV_INDEX_SYMBOLS`, the index/commodity halves of Bloomberg's alias
+table, `INDEX_SYMBOLS`, `INDEX_TICKERS`) are derived from it or deleted.
+
+**Why:** the same knowledge lived in five tables across four files in three shapes. Adding copper
+meant editing every one; a stale spelling drifted silently. Worse, the dynamic search path is
+*wrong* exactly here: `WTI` resolves to `NYSE:WTI` (W&T Offshore, an equity), `GOLD` to
+`NYSE:GOLD`, `CL` to `NYSE:CL` (Colgate-Palmolive), and TradingView's search offers `TVC:USOIL`,
+which its own scanner cannot quote. A closed set of instruments whose names collide with real
+equities needs a table, and it needs exactly one.
+
+**The registry is addressing, never scope.** A filled cell says which ticker to ask that provider
+for; every provider with a filled cell is still asked in parallel, and the fan-out is unchanged. A
+`None` cell records a boundary the provider itself declares ("no spot pair", "indices feed only"),
+reported as `NOT_ATTEMPTED` with the reason. One row is one instrument: `RUT`/`IWM` and
+`XAUUSD`/`GC1!` stay separate rows, so a spot price is never compared with a futures price.
+
+**Consequence:** a registry row is cheap to audit (tests assert every cell is either a spelling or
+a documented `None`, and that no two rows claim the same provider spelling), and every spelling in
+it was verified against the live upstreams, not copied from another provider's vocabulary.
+
+---
+
 ## Related
 
 - [Architecture](Architecture): how these decisions are implemented

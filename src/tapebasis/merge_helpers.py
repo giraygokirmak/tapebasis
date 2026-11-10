@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from .symbols import canonical_index
+from .symbols import INSTRUMENTS, canonical_index
 from .utils import lead_float, to_float
 
 # ── Quote ────────────────────────────────────────────────────────────────────
@@ -175,13 +175,13 @@ def fv_indices_fields(payload: dict[str, Any]) -> dict[str, Any]:
     return {"indices": out}
 
 
-#: Finviz index ticker -> TradingView/Yahoo snapshot symbol.
-TV_INDEX_SYMBOLS = {
-    "SPX": "^GSPC",
-    "DJI": "^DJI",
-    "COMP": "^IXIC",
-    "RUT": "^RUT",
-    "VIX": "^VIX",
+#: Finviz index ticker -> the Yahoo symbol the TV/Yahoo snapshot carries.
+#: Derived from the instrument registry at import time, so the index spellings
+#: have exactly one home (:data:`tapebasis.symbols.INSTRUMENTS`).
+TV_INDEX_SYMBOLS: dict[str, str] = {
+    canonical: str(row["yahoo"])
+    for canonical, row in INSTRUMENTS.items()
+    if row["asset_class"] == "index"
 }
 
 

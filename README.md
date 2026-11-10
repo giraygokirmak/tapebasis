@@ -146,17 +146,25 @@ The same instrument is spelled differently by each upstream, and the differences
 | Apple | `NASDAQ:AAPL` | `AAPL` | `AAPL` | `aapl` | `AAPL:US` |
 | Gold (spot) | `OANDA:XAUUSD` | *(not carried)* | *(not carried, `XAUUSD=X` is a 404)* | *(not carried)* | `XAUUSD:CUR` |
 | S&P 500 | `SP:SPX` | *(indices feed only)* | `^GSPC` | *(not carried)* | `SPX:IND` |
+| WTI (spot) | `FX:USOIL` | *(not carried)* | *(not carried)* | *(not carried)* | *(no spot page; `CL1:COM` is a future)* |
+| WTI (front future) | `NYMEX:CL1!` | *(not carried)* | `CL=F` | *(not carried)* | `CL1:COM` |
 | EUR/USD | `FX:EURUSD` | *(not carried)* | `EURUSD=X` | *(not carried)* | `EURUSD:CUR` |
 | Bitcoin | `BITSTAMP:BTCUSD` | *(not carried)* | `BTC-USD` | *(not carried)* | `XBTUSD:CUR` |
 
-[`symbols.py`](src/tapebasis/symbols.py) resolves each query per provider, caches the answer for an
-hour, and records how it was derived in `resolutions` (`explicit`, `alias`, `search`, `normalise`,
-`mechanical`, `none`). Two
-rules keep it honest:
+Indices and commodities (gold, silver, WTI, Brent, copper, natural gas, spot and front-month
+futures) live in one instrument registry in
+[`symbols.py`](src/tapebasis/symbols.py): one row per instrument, one column per provider, a
+`None` cell stating the boundary that provider declares. Everything else resolves dynamically per
+provider, is cached for an hour, and is recorded in `resolutions` (`explicit`, `alias`, `search`,
+`normalise`, `mechanical`, `none`). Three rules keep it honest:
 
+- **The registry is addressing, never scope.** A filled cell says which ticker to ask that
+  provider for; every provider with a filled cell is still asked in parallel. A `None` cell is the
+  provider's own declared boundary, reported as `NOT_ATTEMPTED`, not a decision to skip it.
 - **A ticker is only returned if the provider can actually quote it.** TradingView's symbol *search*
   offers `OANDA:BTCUSD`, but its *scanner* has no row for it, resolution verifies against the
-  scanner and picks `BITSTAMP:BTCUSD` instead.
+  scanner and picks `BITSTAMP:BTCUSD` instead. This is also why `WTI` resolves to `FX:USOIL` and
+  not `NYSE:WTI` (W&T Offshore, an equity whose ticker happens to match).
 - **A missing instrument is not an outage.** `NotApplicable` becomes `NOT_ATTEMPTED`, which is
   excluded from `errors`. "Finviz does not carry spot gold" is a structural fact, not a failure.
 

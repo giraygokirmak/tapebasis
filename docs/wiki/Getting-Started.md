@@ -159,11 +159,11 @@ stock_quote("XAUUSD")
       "values": { "TRADINGVIEW": 4042.04, "BLOOMBERG": 4041.87 }, "diff_pct": 0.0042 }
   ],
   "resolutions": {
-    "TRADINGVIEW": { "symbol": "OANDA:XAUUSD", "method": "search" },
+    "TRADINGVIEW": { "symbol": "OANDA:XAUUSD", "method": "alias" },
     "FINVIZ": { "symbol": null, "note": "Finviz carries US equities/ETFs only" },
     "YAHOO": { "symbol": null, "note": "Yahoo Finance has no spot gold pair; its nearest series is COMEX gold futures (GC=F), a different instrument, not substituted." },
     "SA": { "symbol": null, "note": "StockAnalysis's quote API carries US equities and ETFs only" },
-    "BLOOMBERG": { "symbol": "XAUUSD:CUR", "method": "mechanical" }
+    "BLOOMBERG": { "symbol": "XAUUSD:CUR", "method": "alias" }
   },
   "errors": []
 }

@@ -61,51 +61,51 @@ _NEXT_DATA = re.compile(
 #: Suffixes that mean "this already is a Bloomberg id", not "EXCHANGE:TICKER".
 _SUFFIXES = {"US", "IND", "CUR", "COM", "GOV", "INDEX", "EQ"}
 
-#: Canonical name -> Bloomberg id. Curated, because Bloomberg's own search is
-#: not reachable without a session and guessing wrong costs a blocked request.
+#: Extra spellings Bloomberg resolves mechanically but the instrument registry
+#: has no row for (platinum, palladium, Nasdaq-100, foreign indices, bare
+#: commodity roots). The registry rows themselves (indices, commodities, FX
+#: pairs) are answered from :data:`tapebasis.symbols.INSTRUMENTS`, which is the
+#: single home for every spelling; this table only holds what no registry row
+#: covers.
 _ALIASES: dict[str, str] = {
-    # Equity indices
-    "SPX": "SPX:IND",
-    "SP500": "SPX:IND",
-    "GSPC": "SPX:IND",
-    "DJI": "INDU:IND",
-    "DJIA": "INDU:IND",
-    "INDU": "INDU:IND",
-    "COMP": "CCMP:IND",
-    "IXIC": "CCMP:IND",
-    "NASDAQ": "CCMP:IND",
-    "RUT": "RTY:IND",
-    "RUSSELL2000": "RTY:IND",
-    "NDX": "NDX:IND",
-    "VIX": "VIX:IND",
+    # Foreign equity indices (no registry row: this server reports US majors)
     "DAX": "DAX:IND",
     "FTSE": "UKX:IND",
     "UKX": "UKX:IND",
     "NKY": "NKY:IND",
     "NIKKEI": "NKY:IND",
     "HSI": "HSI:IND",
-    # Commodities (generic first future)
-    "CL": "CL1:COM",
-    "CL1": "CL1:COM",
-    "WTI": "CL1:COM",
-    "USOIL": "CL1:COM",
+    # Nasdaq-100 and platinum/palladium spot pairs
+    "NDX": "NDX:IND",
+    "XPTUSD": "XPTUSD:CUR",
+    "XPDUSD": "XPDUSD:CUR",
+    # Bare commodity roots (``GC1!`` is the registry row; ``GC`` alone is not)
     "GC": "GC1:COM",
-    "GC1": "GC1:COM",
-    "GOLD": "GC1:COM",
     "SI": "SI1:COM",
-    "SI1": "SI1:COM",
-    "SILVER": "SI1:COM",
+    "CL": "CL1:COM",
+    "BZ": "BZ1:COM",
     "NG": "NG1:COM",
-    "NG1": "NG1:COM",
     "HG": "HG1:COM",
-    "HG1": "HG1:COM",
-    "COPPER": "HG1:COM",
-    # Precious-metal and crypto pairs quoted as currencies
-    "XAUUSD": "XAUUSD:CUR",
+    # Crypto pairs quoted as currencies
     "XBTUSD": "XBTUSD:CUR",
     "BTC": "XBTUSD:CUR",
     "BTCUSD": "XBTUSD:CUR",
 }
+
+
+def _registry_bloomberg_id(symbol: str) -> str | None:
+    """Bloomberg's id for *symbol* from the instrument registry, or ``None``.
+
+    Imports lazily so :mod:`tapebasis.symbols` (which imports nothing from
+    this module) stays free of a cycle.
+    """
+    from .symbols import instrument_row
+
+    row = instrument_row(symbol)
+    if row is None:
+        return None
+    bloomberg = row.get("bloomberg")
+    return str(bloomberg) if bloomberg else None
 
 
 def to_bloomberg(symbol: str) -> str:
@@ -114,9 +114,12 @@ def to_bloomberg(symbol: str) -> str:
     Bloomberg spells the same instrument differently from every other provider
     (``AAPL:US``, ``SPX:IND``, ``EURUSD:CUR``, ``CL1:COM``), and its quote URL
     returns a 403 robot page rather than a 404 for an id it does not like. So
-    resolution is a curated alias table plus a mechanical rule, never a search:
+    resolution is the instrument registry plus a small alias table plus a
+    mechanical rule, never a search:
 
-    * a known alias wins (``SPX`` -> ``SPX:IND``),
+    * a registry instrument wins (``SPX`` -> ``SPX:IND``, ``XAUUSD`` ->
+      ``XAUUSD:CUR``, ``CL1!`` -> ``CL1:COM``),
+    * a known alias wins (``DAX`` -> ``DAX:IND``),
     * an id that already carries a Bloomberg suffix is kept (``BRK/B:US``),
     * ``EXCHANGE:TICKER`` drops the exchange (``NASDAQ:AAPL`` -> ``AAPL:US``),
     * a six-letter currency pair becomes ``PAIR:CUR`` (``GBPUSD`` -> ``GBPUSD:CUR``),
@@ -130,6 +133,10 @@ def to_bloomberg(symbol: str) -> str:
         raise NoDataError(PROVIDER, "empty symbol")
 
     upper = raw.upper().replace(" ", "")
+    # Registry first: one canonical home for every instrument spelling.
+    registry_id = _registry_bloomberg_id(upper)
+    if registry_id:
+        return registry_id
     alias = _ALIASES.get(upper)
     if alias:
         return alias

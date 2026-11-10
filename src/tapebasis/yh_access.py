@@ -19,6 +19,7 @@ import httpx
 
 from .providers_state import NoDataError, ProviderError
 from .ratelimit import RateLimited, call, limiter
+from .symbols import INSTRUMENTS
 
 PROVIDER = "YAHOO"
 _CHART = "https://query1.finance.yahoo.com/v8/finance/chart"
@@ -258,12 +259,13 @@ async def market_snapshot() -> dict[str, Any]:
 
 #: The index symbols the ``market_indices`` tool compares, keyed to the
 #: canonical short name the other two providers use.
+#: Canonical index name -> the Yahoo chart-API symbol that carries it.
+#: Derived from the instrument registry, so the Yahoo spellings of the indices
+#: live in one place only: :data:`tapebasis.symbols.INSTRUMENTS`.
 INDEX_SYMBOLS: dict[str, str] = {
-    "SPX": "^GSPC",
-    "DJI": "^DJI",
-    "COMP": "^IXIC",
-    "RUT": "^RUT",
-    "VIX": "^VIX",
+    canonical: str(row["yahoo"])
+    for canonical, row in INSTRUMENTS.items()
+    if row["asset_class"] == "index"
 }
 
 

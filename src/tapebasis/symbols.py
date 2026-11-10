@@ -262,6 +262,13 @@ async def _tradingview_quotes(tickers: list[str]) -> set[str]:
 async def resolve_tradingview(query: str, *, asset_class: str = "") -> Resolution:
     """Resolve to an ``EXCHANGE:SYMBOL`` pair TradingView actually quotes."""
     query = query.strip()
+    registered = registry_resolution(query, "TRADINGVIEW")
+    if registered is not None:
+        # The registry's spellings were verified against the scanner, and a
+        # registered query often names an instrument whose bare root also names
+        # a US equity (``WTI`` -> W&T Offshore, ``GOLD`` -> Gold.com). Search
+        # would return the equity as a "match", the table prevents exactly that.
+        return registered
     explicit = ":" in query
     bare = query.split(":", 1)[1].upper() if explicit else query.upper()
 
@@ -409,10 +416,10 @@ _CRYPTO_PAIR = re.compile(
 #: Yahoo's nearest print is COMEX futures (``GC=F``), which is a different
 #: instrument trading at a different price, so substituting it would be a proxy
 #: claim rather than a quote. Reporting "not carried" is the honest answer.
+#: The registered rows (``XAUUSD``, ``XAGUSD``) answer through
+#: :data:`INSTRUMENTS` first; this table now only serves the unregistered
+#: platinum and palladium pairs.
 _YAHOO_UNAVAILABLE: dict[str, str] = {
-    "XAUUSD": "Yahoo Finance has no spot gold pair; its nearest series is COMEX "
-              "gold futures (GC=F), a different instrument, not substituted.",
-    "XAGUSD": "Yahoo Finance has no spot silver pair (its series is SI=F futures).",
     "XPTUSD": "Yahoo Finance has no spot platinum pair.",
     "XPDUSD": "Yahoo Finance has no spot palladium pair.",
 }
@@ -439,11 +446,18 @@ _YAHOO_INDEX_ALIASES: dict[str, str] = {
     "DJI": "^DJI", "DJX": "^DJI", "RUT": "^RUT", "VIX": "^VIX", "NDX": "^NDX",
     "RUT2000": "^RUT",
 }
+#: Kept for spellings the registry does not cover: ``NDX`` (``^NDX``) has no
+#: registry row, and it must still resolve rather than fall to search.
 
 
 async def resolve_yahoo(query: str, *, asset_class: str = "") -> Resolution:
     """Resolve to a Yahoo chart-API symbol."""
     query = query.strip().upper()
+    registered = registry_resolution(query, "YAHOO")
+    if registered is not None:
+        # Carries both directions: the spelling (``GC1!`` -> ``GC=F``) and the
+        # documented boundary (``XAUUSD`` -> none, no spot pair).
+        return registered
     bare = query.split(":", 1)[-1]
     if query.startswith("^"):
         bare = query
@@ -545,6 +559,12 @@ def resolve_finviz(query: str, *, asset_class: str = "") -> Resolution:
     spelling), and anything that is not a US slug is reported as not served
     rather than being sent to a page that will 404.
     """
+    registered = registry_resolution(query, "FINVIZ")
+    if registered is not None:
+        # Registered instruments carry their Finviz boundary in the registry
+        # (``finviz`` cell or ``finviz_note``), stated once, with the index
+        # feed exception below honoured the same way as before.
+        return registered
     bare = query.strip().upper().split(":", 1)[-1]
     if asset_class and asset_class.lower() not in {"stock", "etf", "fund", "equity"}:
         return Resolution(
@@ -677,6 +697,9 @@ def resolve_sa(query: str, *, asset_class: str = "") -> Resolution:
     ETF is reported as not carried rather than being sent to a route that will
     answer 404.
     """
+    registered = registry_resolution(query, "SA")
+    if registered is not None:
+        return registered
     raw = query.strip()
     bare = raw.upper().split(":", 1)[-1].replace(" ", "")
 
@@ -789,6 +812,338 @@ def clear_cache() -> None:
     _CACHE.clear()
 
 
+#: One instrument per row, keyed by its canonical name, one column per
+#: provider. This is the *addressing* layer only: it says which ticker to ask
+#: each provider for, never which providers to ask. Every provider with a
+#: non-``None`` cell is still asked in parallel by the tool layer, exactly as
+#: before; a ``None`` cell records a boundary the provider declares ("no spot
+#: pair", "US equities and ETFs only") so the leg reports ``NOT_ATTEMPTED``
+#: with the reason instead of being sent a ticker that will 404.
+#:
+#: Two rules keep the table honest:
+#:
+#: * a row is one instrument identity. ``RUT`` (the index) and ``IWM`` (its
+#:   tracking ETF), ``XAUUSD`` (spot gold) and ``GC1!`` (its front-month
+#:   future) are different instruments at different price levels and live in
+#:   different rows; they must never be compared.
+#: * a ``None`` cell carries its reason. The table is the single home for the
+#:   "not carried" knowledge that used to live in ``_YAHOO_UNAVAILABLE`` and
+#:   per-provider if-chains.
+#:
+#: Every spelling below was verified against the live upstreams (the scanner
+#: and the chart API), not copied from another provider's vocabulary: TradingView
+#: search offers ``TVC:USOIL`` but its scanner has no row for it, so the quoted
+#: spot series is ``FX:USOIL``. Bare roots that also name US equities
+#: (``NYSE:WTI`` is W&T Offshore, ``NYSE:GOLD`` is Gold.com, ``NYSE:CL`` is
+#: Colgate-Palmolive) must resolve through this table, not through search,
+#: or the dynamic path returns the equity as a "quote" for the commodity.
+INSTRUMENTS: dict[str, dict[str, Any]] = {
+    # ── Equity indices ──────────────────────────────────────────────────
+    "SPX": {
+        "name": "S&P 500", "asset_class": "index",
+        "tradingview": "SP:SPX", "finviz": None,
+        "finviz_note": "Finviz quotes indices only through its indices feed",
+        "yahoo": "^GSPC",
+        "sa": None, "bloomberg": "SPX:IND",
+    },
+    "COMP": {
+        "name": "NASDAQ Composite", "asset_class": "index",
+        "tradingview": "NASDAQ:IXIC", "finviz": None,
+        "finviz_note": "Finviz quotes indices only through its indices feed",
+        "yahoo": "^IXIC",
+        "sa": None, "bloomberg": "CCMP:IND",
+    },
+    "DJI": {
+        "name": "Dow Jones Industrial Average", "asset_class": "index",
+        "tradingview": "DJ:DJI", "finviz": None,
+        "finviz_note": "Finviz quotes indices only through its indices feed",
+        "yahoo": "^DJI",
+        "sa": None, "bloomberg": "INDU:IND",
+    },
+    "RUT": {
+        "name": "Russell 2000", "asset_class": "index",
+        "tradingview": "TVC:RUT", "finviz": None,
+        "finviz_note": "Finviz quotes indices only through its indices feed",
+        "yahoo": "^RUT", "sa": None, "bloomberg": "RTY:IND",
+    },
+    "IWM": {
+        "name": "iShares Russell 2000 ETF", "asset_class": "etf",
+        "tradingview": "AMEX:IWM", "finviz": "IWM", "yahoo": "IWM",
+        "sa": "iwm", "bloomberg": "IWM:US",
+    },
+    "VIX": {
+        "name": "CBOE Volatility Index", "asset_class": "index",
+        "tradingview": "TVC:VIX", "finviz": None,
+        "finviz_note": "Finviz quotes indices only through its indices feed",
+        "yahoo": "^VIX", "sa": None, "bloomberg": "VIX:IND",
+    },
+    # ── Spot commodities ────────────────────────────────────────────────
+    "XAUUSD": {
+        "name": "Gold spot", "asset_class": "commodity",
+        "tradingview": "OANDA:XAUUSD", "finviz": None,
+        "finviz_note": "Finviz carries US equities and ETFs only",
+        "yahoo": None,
+        "yahoo_note": "Yahoo Finance has no spot gold pair; its nearest series "
+                      "is COMEX gold futures (GC=F), a different instrument, "
+                      "not substituted.",
+        "sa": None, "bloomberg": "XAUUSD:CUR",
+    },
+    "XAGUSD": {
+        "name": "Silver spot", "asset_class": "commodity",
+        "tradingview": "TVC:SILVER", "finviz": None,
+        "finviz_note": "Finviz carries US equities and ETFs only",
+        "yahoo": None,
+        "yahoo_note": "Yahoo Finance has no spot silver pair (its series is "
+                      "SI=F futures).",
+        "sa": None, "bloomberg": "XAGUSD:CUR",
+    },
+    "USOIL": {
+        "name": "WTI crude oil spot", "asset_class": "commodity",
+        "tradingview": "FX:USOIL", "finviz": None,
+        "finviz_note": "Finviz carries US equities and ETFs only",
+        "yahoo": None,
+        "yahoo_note": "Yahoo Finance has no WTI spot series (its series is "
+                      "CL=F futures).",
+        "sa": None,
+        # Bloomberg's quote page has no WTI spot series; its generic first
+        # future is the id it publishes on its own commodities board. The
+        # registry states it rather than sending a leg to an id that 403s.
+        "bloomberg": None,
+        "bloomberg_note": "Bloomberg's quote page carries no WTI spot series; "
+                          "its WTI generic future is CL1:COM, a different "
+                          "instrument, not substituted.",
+    },
+    "UKOIL": {
+        "name": "Brent crude oil spot", "asset_class": "commodity",
+        "tradingview": "FX:UKOIL", "finviz": None,
+        "finviz_note": "Finviz carries US equities and ETFs only",
+        "yahoo": None,
+        "yahoo_note": "Yahoo Finance has no Brent spot series (its series is "
+                      "BZ=F futures).",
+        "sa": None,
+        "bloomberg": None,
+        "bloomberg_note": "Bloomberg's quote page carries no Brent spot "
+                          "series; its Brent generic future is BZ1:COM, a "
+                          "different instrument, not substituted.",
+    },
+    # ── Front-month futures (continuous contracts) ──────────────────────
+    "GC1!": {
+        "name": "COMEX gold front-month future", "asset_class": "futures",
+        "tradingview": "COMEX:GC1!", "finviz": None,
+        "finviz_note": "Finviz carries US equities and ETFs only",
+        "yahoo": "GC=F", "sa": None, "bloomberg": "GC1:COM",
+    },
+    "SI1!": {
+        "name": "COMEX silver front-month future", "asset_class": "futures",
+        "tradingview": "COMEX:SI1!", "finviz": None,
+        "finviz_note": "Finviz carries US equities and ETFs only",
+        "yahoo": "SI=F", "sa": None, "bloomberg": "SI1:COM",
+    },
+    "CL1!": {
+        "name": "NYMEX WTI crude front-month future", "asset_class": "futures",
+        "tradingview": "NYMEX:CL1!", "finviz": None,
+        "finviz_note": "Finviz carries US equities and ETFs only",
+        "yahoo": "CL=F", "sa": None, "bloomberg": "CL1:COM",
+    },
+    "BZ1!": {
+        "name": "NYMEX Brent front-month future", "asset_class": "futures",
+        "tradingview": "NYMEX:BZ1!", "finviz": None,
+        "finviz_note": "Finviz carries US equities and ETFs only",
+        "yahoo": "BZ=F", "sa": None, "bloomberg": "BZ1:COM",
+    },    "NG1!": {
+        "name": "NYMEX Henry Hub natural gas front-month future",
+        "asset_class": "futures",
+        "tradingview": "NYMEX:NG1!", "finviz": None,
+        "finviz_note": "Finviz carries US equities and ETFs only",
+        "yahoo": "NG=F", "sa": None, "bloomberg": "NG1:COM",
+    },
+    "HG1!": {
+        "name": "COMEX copper front-month future", "asset_class": "futures",
+        "tradingview": "COMEX:HG1!", "finviz": None,
+        "finviz_note": "Finviz carries US equities and ETFs only",
+        "yahoo": "HG=F", "sa": None, "bloomberg": "HG1:COM",
+    },
+}
+
+#: Provider column -> the reason template for a ``None`` cell. Providers that
+#: mechanically accept any plausible ticker (Finviz, StockAnalysis) get their
+#: boundary stated once here instead of in an if-chain at every call site.
+_DEFAULT_NOT_CARRIED = {
+    "sa": "StockAnalysis's quote API carries US equities and ETFs only",
+    "finviz": "Finviz carries US equities and ETFs only",
+    "yahoo": "Yahoo Finance does not carry this instrument",
+}
+
+#: The reason for a ``None`` cell, by asset class, for providers whose boundary
+#: is stated as a class rather than a missing instrument. Finviz and
+#: StockAnalysis quote US equities and ETFs; their "not carried" answer for an
+#: index or a commodity must name that class, so ``resolutions`` explains why
+#: the leg was not asked.
+_CLASS_NOT_CARRIED = {
+    "index": {
+        "sa": "StockAnalysis quotes indices on HTML pages only; its quote "
+              "API is US equities and ETFs",
+        "finviz": "Finviz quotes indices only through its indices feed, not "
+                  "a per-ticker page",
+    },
+    "commodity": {
+        "sa": "StockAnalysis has no commodity quote endpoint",
+        "finviz": "Finviz carries US equities and ETFs only",
+    },
+    "futures": {
+        "sa": "StockAnalysis has no futures quote endpoint",
+        "finviz": "Finviz carries US equities and ETFs only",
+    },
+    "etf": {
+        "sa": "StockAnalysis's quote API carries US equities and ETFs only",
+        "finviz": "Finviz carries US equities and ETFs only",
+    },
+}
+
+#: Every spelling, from every provider's column, folded onto the canonical
+#: name. A caller can therefore ask with any provider's own vocabulary
+#: (``^GSPC``, ``COMEX:GC1!``, ``CL1:COM``) and still land on the right row.
+#: A Bloomberg class suffix (``IWM:US``, ``XAUUSD:CUR``, ``CL1:COM``) is *not*
+#: a spelling of its own: the class token alone (``US``, ``CUR``, ``COM``,
+#: ``IND``) matches every row, so only the full id is folded, never its tail.
+_INSTRUMENT_LOOKUP: dict[str, str] = {}
+for _canonical, _row in INSTRUMENTS.items():
+    _INSTRUMENT_LOOKUP[_canonical.lower()] = _canonical
+    for _provider in ("tradingview", "finviz", "yahoo", "sa", "bloomberg"):
+        _spelling = _row.get(_provider)
+        if isinstance(_spelling, str) and _spelling:
+            _bare = _spelling.split(":", 1)[-1].lower().lstrip("^").rstrip("!")
+            # Only fold the bare tail when it is longer than a class suffix,
+            # so ``IWM:US`` does not teach the lookup that ``us`` means IWM.
+            if len(_bare) > 3 or _provider == "tradingview":
+                _INSTRUMENT_LOOKUP.setdefault(_bare, _canonical)
+            _INSTRUMENT_LOOKUP.setdefault(_spelling.lower(), _canonical)
+
+#: Spelling aliases a caller plausibly types but no provider column carries.
+#: The value must be a canonical row name.
+_INSTRUMENT_ALIASES: dict[str, str] = {
+    "GSPC": "SPX",
+    "SP500": "SPX",
+    "IXIC": "COMP",
+    "DJIA": "DJI",
+    "INDU": "DJI",
+    "RUSSELL2000": "RUT",
+    "NDX": None,  # no row yet; kept out so it falls through to search
+    "WTI": "USOIL",
+    "BRENT": "UKOIL",
+    "CRUDE": "USOIL",
+    "COPPER": "HG1!",
+    "NATGAS": "NG1!",
+    "NATURALGAS": "NG1!",
+    "GOLD": "XAUUSD",
+    "SILVER": "XAGUSD",
+    "GCF": "GC1!",
+    "SIF": "SI1!",
+    "CLF": "CL1!",
+    "BZF": "BZ1!",
+    "NGF": "NG1!",
+    "HGF": "HG1!",
+}
+
+#: The same aliases, lowercased, so :func:`canonical_instrument` can fold any
+#: caller spelling onto a canonical row with one dictionary lookup.
+_ALIASES_LOWER: dict[str, str | None] = {
+    k.lower(): v for k, v in _INSTRUMENT_ALIASES.items() if v is not None
+}
+
+
+def canonical_instrument(symbol: str) -> str | None:
+    """Map any provider's spelling of a registered instrument to its row key.
+
+    Understands venue prefixes (``COMEX:GC1!``), Yahoo carets (``^GSPC``),
+    Yahoo futures equals (``GC=F``) and Bloomberg class suffixes
+    (``GC1:COM``), because every provider column of every registered row was
+    folded into the lookup. Returns ``None`` for anything unregistered; the
+    dynamic search path then takes over.
+    """
+    key = symbol.strip().lower().replace(" ", "")
+    if not key:
+        return None
+    if key in _INSTRUMENT_LOOKUP:
+        return _INSTRUMENT_LOOKUP[key]
+    if key in _ALIASES_LOWER:
+        return _ALIASES_LOWER[key]
+    if ":" in key:
+        tail = key.split(":", 1)[1]
+        if tail in _INSTRUMENT_LOOKUP:
+            return _INSTRUMENT_LOOKUP[tail]
+        if tail in _ALIASES_LOWER:
+            return _ALIASES_LOWER[tail]
+    return None
+
+
+def instrument_row(symbol: str) -> dict[str, Any] | None:
+    """The registry row for *symbol*, or ``None`` when it is not registered.
+
+    Callers get the row as a plain dict copy, so a caller cannot mutate the
+    registry through it.
+    """
+    canonical = canonical_instrument(symbol)
+    if canonical is None:
+        return None
+    return dict(INSTRUMENTS[canonical])
+
+
+def registry_resolution(query: str, provider: str) -> Resolution | None:
+    """Resolve *query* for *provider* from the instrument registry alone.
+
+    Returns a :class:`Resolution` when the query names a registered
+    instrument, with ``method="alias"`` and the provider's spelling (or the
+    documented reason it is not carried), and ``None`` when the query is not
+    registered, so the caller falls through to the dynamic search path.
+
+    The registry is the addressing layer, not the scope layer: it never
+    decides who is *asked*, only what ticker each leg is asked for. A
+    ``symbol=None`` result states a boundary the provider itself declares.
+    """
+    canonical = canonical_instrument(query)
+    if canonical is None:
+        return None
+    row = INSTRUMENTS[canonical]
+    provider = provider.upper()
+    column = {
+        "TRADINGVIEW": "tradingview",
+        "FINVIZ": "finviz",
+        "YAHOO": "yahoo",
+        "SA": "sa",
+        "BLOOMBERG": "bloomberg",
+    }.get(provider)
+    if column is None:
+        return None
+
+    spelling = row.get(column)
+    note = row.get(f"{column}_note")
+    if spelling is None:
+        reason = (
+            note
+            or _CLASS_NOT_CARRIED.get(str(row.get("asset_class") or ""), {}).get(column)
+            or _DEFAULT_NOT_CARRIED.get(
+                column, "not carried by this provider"
+            )
+        )
+        return Resolution(
+            query=query,
+            provider=provider,
+            note=reason,
+            asset_class=str(row.get("asset_class") or ""),
+        )
+    return Resolution(
+        query=query,
+        provider=provider,
+        symbol=str(spelling),
+        method="alias",
+        confidence=0.95,
+        asset_class=str(row.get("asset_class") or ""),
+        description=str(row.get("name") or ""),
+        note="registry alias",
+    )
+
+
 # ── Synchronous helpers ──────────────────────────────────────────────────────
 #
 # Resolution above answers "which ticker does provider X use". The helpers below
@@ -796,44 +1151,38 @@ def clear_cache() -> None:
 # "strip the venue from this label", "which canonical index is this level".
 # They never touch the network, so they are safe to call in a formatting loop.
 #
-# Index spellings still need a table: ``SPX`` / ``SP:SPX`` / ``^GSPC`` are
+# Registered instruments need a table: ``SPX`` / ``SP:SPX`` / ``^GSPC`` are
 # three names for one instrument and no search API will tell you they are the
-# same series. The table is the list of indices this server reports, not a
+# same series. The table is the list of instruments this server reports, not a
 # guess about arbitrary tickers.
 
+#: Kept for compatibility with existing callers and tests: the index subset of
+#: :data:`INSTRUMENTS`, same row shape as before. Derived, never hand-edited;
+#: new index rows belong in :data:`INSTRUMENTS`.
 INDEX_ALIASES: dict[str, dict[str, Any]] = {
-    "SPX": {"yahoo": "^GSPC", "finviz": "SPX", "tradingview": "SP:SPX", "name": "S&P 500"},
-    "COMP": {"yahoo": "^IXIC", "finviz": "COMP", "tradingview": "NASDAQ:IXIC", "name": "NASDAQ Composite"},
-    "DJI": {"yahoo": "^DJI", "finviz": "DJI", "tradingview": "DJ:DJI", "name": "Dow Jones Industrial Average"},
-    # Russell 2000 (the index) and IWM (the tracking ETF) are different
-    # instruments with different price levels; they must never be compared.
-    "RUT": {"yahoo": "^RUT", "finviz": None, "tradingview": "TVC:RUT", "name": "Russell 2000"},
-    "IWM": {"yahoo": "IWM", "finviz": "IWM", "tradingview": "AMEX:IWM", "name": "iShares Russell 2000 ETF"},
-    "VIX": {"yahoo": "^VIX", "finviz": None, "tradingview": "TVC:VIX", "name": "CBOE Volatility Index"},
+    canonical: {
+        "yahoo": row["yahoo"],
+        "finviz": row["finviz"],
+        "tradingview": row["tradingview"],
+        "name": row["name"],
+    }
+    for canonical, row in INSTRUMENTS.items()
+    if row["asset_class"] == "index" or canonical == "IWM"
 }
-
-_INDEX_LOOKUP: dict[str, str] = {}
-for _canonical, _map in INDEX_ALIASES.items():
-    _INDEX_LOOKUP[_canonical.lower()] = _canonical
-    for _spelling in ("yahoo", "finviz", "tradingview"):
-        _value = _map.get(_spelling)
-        if isinstance(_value, str) and _value:
-            _INDEX_LOOKUP.setdefault(_value.lower(), _canonical)
-            _INDEX_LOOKUP.setdefault(_value.lower().lstrip("^"), _canonical)
-
-#: Yahoo-style crypto/FX tickers that Finviz has no equivalent for.
-_NON_EQUITY = re.compile(r"(-USD|=X|^[A-Z]{3,5}USDT$|^\^)", re.IGNORECASE)
 
 
 def canonical_index(symbol: str) -> str | None:
-    """Map any index spelling (``^GSPC``, ``SPX``, ``SP:SPX``) to its short name."""
-    key = symbol.strip().lower()
-    if key in _INDEX_LOOKUP:
-        return _INDEX_LOOKUP[key]
-    if ":" in key:
-        tail = key.split(":", 1)[1]
-        if tail in _INDEX_LOOKUP:
-            return _INDEX_LOOKUP[tail]
+    """Map any index spelling (``^GSPC``, ``SPX``, ``SP:SPX``) to its short name.
+
+    Thin compatibility wrapper over :func:`canonical_instrument`: an index
+    row of the registry answers directly, and an equity/ETF row (``IWM``)
+    returns its own canonical name, preserving the index/ETF separation.
+    """
+    canonical = canonical_instrument(symbol)
+    if canonical is None:
+        return None
+    if INSTRUMENTS[canonical].get("asset_class") in {"index", "etf"}:
+        return canonical
     return None
 
 
@@ -842,12 +1191,29 @@ def strip_exchange(symbol: str) -> str:
     return symbol.split(":", 1)[1] if ":" in symbol else symbol
 
 
+#: Yahoo-style crypto/FX tickers that Finviz has no equivalent for.
+_NON_EQUITY = re.compile(r"(-USD|=X|^[A-Z]{3,5}USDT$|^\^)", re.IGNORECASE)
+
+
 def to_finviz(symbol: str) -> str:
-    """Finviz's spelling for a symbol (``BRK-B`` -> ``BRK.B``, ``SPX`` stays)."""
+    """Finviz's spelling for a symbol (``BRK-B`` -> ``BRK.B``, ``^GSPC`` -> ``SPX``).
+
+    Registered instruments answer from the registry's ``finviz`` cell; the
+    cell folds every provider's spelling onto Finviz's own (``^GSPC`` ->
+    ``SPX``). For index rows whose cell is ``None`` (Finviz serves indices
+    through its indices feed only, and ``/stock?t=SPX`` is a 404), the
+    canonical name is returned: the value is only a comparison key there,
+    never a page URL.
+    """
     raw = strip_exchange(symbol).strip().upper()
-    index = canonical_index(raw)
-    if index and INDEX_ALIASES[index].get("finviz"):
-        return str(INDEX_ALIASES[index]["finviz"])
+    canonical = canonical_instrument(raw)
+    if canonical is not None:
+        spelling = INSTRUMENTS[canonical].get("finviz")
+        if spelling:
+            return str(spelling)
+        if INSTRUMENTS[canonical].get("asset_class") == "index":
+            return canonical
+        return raw
     if raw and "-" in raw and len(raw) <= 7 and not raw.endswith("-USD"):
         head, _, tail = raw.partition("-")
         if head.isalpha() and tail.isalpha() and len(tail) <= 2:
@@ -856,11 +1222,19 @@ def to_finviz(symbol: str) -> str:
 
 
 def to_yahoo(symbol: str) -> str:
-    """Yahoo's spelling for a symbol (``BRK.B`` -> ``BRK-B``, ``SPX`` -> ``^GSPC``)."""
+    """Yahoo's spelling for a symbol (``BRK.B`` -> ``BRK-B``, ``SPX`` -> ``^GSPC``).
+
+    Registered instruments answer from the registry's ``yahoo`` cell, so the
+    index spellings have one home. A registered row whose Yahoo cell is
+    ``None`` (Yahoo has no spot pair for it) keeps the bare spelling: the
+    resolution layer already reports that boundary, this helper must not
+    invent a ticker.
+    """
     raw = strip_exchange(symbol).strip().upper()
-    index = canonical_index(raw)
-    if index:
-        return str(INDEX_ALIASES[index]["yahoo"])
+    canonical = canonical_instrument(raw)
+    if canonical is not None:
+        spelling = INSTRUMENTS[canonical].get("yahoo")
+        return str(spelling) if spelling else raw
     if raw and "." in raw and len(raw) <= 7:
         head, _, tail = raw.partition(".")
         if head.isalpha() and tail.isalpha() and len(tail) <= 2:

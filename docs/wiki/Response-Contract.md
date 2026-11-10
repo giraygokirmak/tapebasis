@@ -217,16 +217,18 @@ How each provider's ticker was derived for this call:
 }
 ```
 
-`method` is one of `explicit` (the caller gave `EXCHANGE:SYMBOL`), `alias` (a documented mechanical
-rule or index table), `search` (the provider's own symbol search, verified against its quote
-endpoint), `mechanical` (StockAnalysis has no search endpoint, so its US slug is derived by rule), or
-`none` (not carried). A `none` resolution carries a `note` explaining why, and becomes
-`NOT_ATTEMPTED` rather than an error.
+`method` is one of `explicit` (the caller gave `EXCHANGE:SYMBOL`), `alias` (the instrument registry:
+indices and commodities carry one row per instrument with one column per provider), `search` (the
+provider's own symbol search, verified against its quote endpoint), `normalise`/`mechanical` (a
+documented spelling rule, used by providers with no search endpoint), or `none` (not carried). A
+`none` resolution carries a `note` explaining why, and becomes `NOT_ATTEMPTED` rather than an error.
 
 This is the field to read when a symbol behaved unexpectedly. `XAUUSD` shows `OANDA:XAUUSD` for
-TradingView, `XAUUSD:CUR` for Bloomberg (derived mechanically, `method: mechanical`), no Yahoo ticker
+TradingView, `XAUUSD:CUR` for Bloomberg (from the registry row, `method: alias`), no Yahoo ticker
 (Yahoo has no spot-gold pair, `XAUUSD=X` is a 404) and notes from Finviz and StockAnalysis saying
-they carry US equities and ETFs only.
+they carry US equities and ETFs only. `WTI` shows `FX:USOIL` for TradingView, never `NYSE:WTI`
+(W&T Offshore, an equity whose ticker happens to match), and `CL1!` shows `GC=F`-style futures
+spellings (`CL=F` for Yahoo, `CL1:COM` for Bloomberg).
 
 ### `cross_checked` / `reconciliation_leg`
 Present on the `bloomberg_*` tools, both `false`: that call asked a single provider, so its payload
