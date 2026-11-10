@@ -88,7 +88,10 @@ tapebasis_tool_map()           # what is multi-sourced, before calling anything
   "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"],
   "notice": "Every provider asked answered (TradingView, Finviz, Yahoo Finance, StockAnalysis and Bloomberg). Coverage is ALL; agreement is a separate axis. Compared fields agree within tolerance. The value shown is FINVIZ's because it printed more recently than the other providers'.",
   "data": { "price": 332.33, "previous_close": 331.9, ... },
-  "fields": { "price": "ALL", "peers": "FINVIZ" },
+  "fields": {
+    "price": { "source": "FINVIZ", "compared": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA"], "agreement": true },
+    "peers": { "source": "FINVIZ", "compared": ["FINVIZ"], "agreement": null }
+  },
   "freshness": {
     "tradingview": "2026-11-04T00:59:53+00:00",
     "finviz": "2026-11-04T10:42:00+00:00",
@@ -124,7 +127,9 @@ Five things to notice:
 2. `data.price` is **one** number. `freshness` explains where it came from: Finviz printed at
    `10:42Z`, TradingView at `00:59:53Z`, Yahoo and StockAnalysis at `21:00:01Z`, so the newest
    reading won. Every raw price is still in `comparisons`.
-3. `fields` shows `peers` came from Finviz alone. Per-field provenance, not a blanket claim.
+3. `fields` shows `price.source` is FINVIZ, the freshest print, cross-checked against four
+   providers that agreed (`compared`), while `peers` came from Finviz alone. Per-field provenance,
+   not a blanket claim: a value is never labelled as a joint product of several providers.
 4. The `warnings` entry is not an error: Finviz is mid-session while the others are at the prior
    close, so the session-relative fields (day change, previous close, volume) were **not** compared.
    Reporting that is more honest than calling it a conflict, or silently implying agreement.

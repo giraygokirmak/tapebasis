@@ -128,15 +128,24 @@ def test_tool_map_enumerates_every_registered_tool():
 
 
 @pytest.mark.asyncio
-async def test_tool_map_is_not_mislabelled_for_bloomberg():
-    """A Bloomberg-only tool must not report ALL as its declared provenance."""
+async def test_tool_map_names_one_source_per_tool():
+    """The map's per-tool provenance is the catalogue's declared provider set.
+
+    ``fields`` there follows the response contract, so each entry names the
+    single provider that backs the tool; the map never presents a tool as a
+    joint product of several providers.
+    """
     from tapebasis.tools_health import tapebasis_tool_map
 
     response = await tapebasis_tool_map()
     fields = response["fields"]
-    assert fields["bloomberg_quote"] == "BLOOMBERG"
-    assert fields["bloomberg_markets"] == "BLOOMBERG"
-    assert fields["stock_quote"] == "ALL"
+    assert fields["bloomberg_quote"] == {
+        "source": "BLOOMBERG",
+        "compared": ["BLOOMBERG"],
+        "agreement": None,
+    }
+    assert fields["bloomberg_markets"]["source"] == "BLOOMBERG"
+    assert fields["stock_quote"]["source"] == "ALL"
     # Bloomberg is a leg of the quote tools, but it has no health probe, and
     # the map says so rather than implying it was probed.
     assert "BLOOMBERG" in response["providers_answered"]

@@ -24,6 +24,7 @@ from typing import Any
 from . import bb_access
 from .health import MONITOR
 from .providers_state import DataProvider, NoDataError, envelope, error_code
+from .reconcile import field_source
 
 #: There is no health probe for Bloomberg: httpx cannot reproduce the TLS
 #: fingerprint that gets past the bot wall, so a probe would report a false
@@ -42,11 +43,20 @@ def _label(
     warnings: list[str] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Wrap a Bloomberg payload in the standard envelope, labelled BLOOMBERG."""
+    """Wrap a Bloomberg payload in the standard envelope, labelled BLOOMBERG.
+
+    Every top-level key of ``data`` is labelled with a field descriptor whose
+    ``source`` is Bloomberg, so the response states per item where each value
+    came from rather than relying on the response-level label alone.
+    """
     MONITOR.ensure_started()
+    fields = None
+    if isinstance(data, dict):
+        fields = {key: field_source(bb_access.PROVIDER, [bb_access.PROVIDER], None) for key in data}
     return envelope(
         data,
         provider=DataProvider.BLOOMBERG,
+        fields=fields,
         sources={bb_access.PROVIDER: source},
         warnings=[_NO_PROBE, *(warnings or [])],
         providers_answered=[bb_access.PROVIDER],

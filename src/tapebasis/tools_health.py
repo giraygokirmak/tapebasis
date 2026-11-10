@@ -5,6 +5,7 @@ from typing import Any
 
 from .health import MONITOR, PROVIDERS
 from .providers_state import DataProvider, envelope, provider_from_answered
+from .reconcile import field_source
 
 READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True}
 
@@ -81,10 +82,11 @@ async def tapebasis_tool_map() -> dict[str, Any]:
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["providers"]] = counts.get(row["providers"], 0) + 1
-    # Per-field provenance is the catalogue's declared provider set, so a
-    # Bloomberg-only tool is not mislabelled ALL in the map that agents read.
-    fields = {
-        str(row["name"]): DataProvider(str(row["providers"]))
+    # A tool's provider set is catalogue metadata, not field provenance, so it
+    # lives under its own key. Putting it in `fields` made the map speak about
+    # tools in the slot every other response reserves for data fields.
+    tool_providers = {
+        str(row["name"]): str(row["providers"])
         for row in rows
         if str(row["providers"]) in DataProvider.__members__
     }
@@ -92,7 +94,8 @@ async def tapebasis_tool_map() -> dict[str, Any]:
         {"tools": rows, "count": len(rows), "by_provider": counts},
         provider=DataProvider.ALL,
         providers_answered=[*PROVIDERS, "BLOOMBERG"],
-        fields=fields,
+        fields={name: field_source(provider, [provider], None)
+                for name, provider in tool_providers.items()},
         warnings=[
             *MONITOR.warnings_for(PROVIDERS),
             "All providers in `providers_answered` are reconciliation legs of at "

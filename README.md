@@ -71,7 +71,9 @@ The same envelope also contains:
   "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"],
   "notice": "Every provider asked answered (TradingView, Finviz, Yahoo Finance, StockAnalysis and Bloomberg). ...",   // names whichever answered
   "data": { ... },                       // the reconciled payload, one value per field
-  "fields": { "price": "ALL", "peers": "FINVIZ" },   // per-field provenance
+  "fields": {                            // per-field provenance, never a joint label
+    "price": { "source": "FINVIZ", "compared": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA"], "agreement": true },
+    "peers": { "source": "FINVIZ", "compared": ["FINVIZ"], "agreement": null } },
   "freshness": {                         // why `data` holds the value it does
     "tradingview": "2026-11-04T00:59:53+00:00",
     "finviz": "2026-11-04T10:42:00+00:00",
@@ -521,7 +523,8 @@ No proxy configuration exists: every provider reaches its upstream directly.
                 provider's figures may be stale or incomplete.
 
 3. Check fields for per-field provenance when the response mixes sources
-   (e.g. price is ALL while peers is FINVIZ).
+   (e.g. price.source is FINVIZ, compared against four providers, while
+   peers.source is FINVIZ alone).
 
 4. Check comparisons when you need to show how far apart the providers are.
    match: true  -> they agree within tolerance.

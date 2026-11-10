@@ -21,7 +21,7 @@ from typing import Any
 from . import fv_access, sentiment, tv_access, yh_access
 from .health import FINVIZ, MONITOR, TRADINGVIEW, YAHOO
 from .providers_state import DataProvider, NotApplicable, ProviderError, envelope, error_code
-from .reconcile import ask, finalize, providers_in, single
+from .reconcile import ask, field_source, finalize, providers_in, single
 from .providers.tradingview.core.services import (
     bitcoin_market_service,
     futures_service,
@@ -55,14 +55,24 @@ def _single_response(
     extra: dict[str, Any] | None = None,
     provider: str = TRADINGVIEW,
 ) -> dict[str, Any]:
+    """Wrap a single-provider payload in the standard envelope.
+
+    Every top-level key of ``data`` is labelled with a field descriptor whose
+    ``source`` is the provider, so the response states per item where each
+    value came from rather than relying on the response-level label alone.
+    """
     MONITOR.ensure_started()
     pair = single(provider, data)
+    fields = None
+    if isinstance(data, dict):
+        fields = {key: field_source(provider, [provider], None) for key in data}
     return finalize(
         pair,
         sources={provider: source},
         warnings=warnings or [],
         data=data,
         provider=DataProvider(provider),
+        fields=fields,
         health_warn=MONITOR.warnings_for((provider,)),
         degraded=any(issue["provider"] == provider for issue in MONITOR.issues()),
         extra=extra,

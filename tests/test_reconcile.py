@@ -21,6 +21,7 @@ from tapebasis.reconcile import (
     compare_numeric,
     compare_symbol,
     compare_values,
+    field_source,
     finalize,
     merge,
     merge_many,
@@ -170,6 +171,101 @@ def test_merge_reports_agreement_and_mismatch():
     }
 
 
+def test_field_source_names_one_provider_and_orders_the_rest():
+    """``field_source`` never collapses coverage into the source label.
+
+    ``source`` is the one provider whose reading went into ``data``;
+    ``compared`` is every provider that supplied a reading, in display order
+    even when passed out of order; ``agreement`` survives unchanged so the
+    caller cannot tell a cross-check (True/False) from a single reading (None).
+    """
+    descriptor = field_source(
+        YAHOO, [YAHOO, TRADINGVIEW, FINVIZ], False
+    )
+    assert descriptor == {
+        "source": YAHOO,
+        "compared": [TRADINGVIEW, FINVIZ, YAHOO],
+        "agreement": False,
+    }
+
+
+def test_field_source_keeps_an_unknown_source_visible():
+    """A source outside PROVIDER_ORDER is still listed, not dropped."""
+    descriptor = field_source("MY_FEED", [], None)
+    assert descriptor == {
+        "source": "MY_FEED",
+        "compared": ["MY_FEED"],
+        "agreement": None,
+    }
+
+
+def test_field_of_a_compared_reading_still_names_one_source():
+    """A cross-checked field never reads as a joint product of every provider.
+
+    Four providers supply a price that agrees within tolerance; the value is
+    still Finviz's print (it is freshest), so ``source`` is FINVIZ alone while
+    ``compared`` names all four and ``agreement`` records the cross-check. The
+    old ``"ALL"`` label hid the first fact behind the second.
+    """
+    from tapebasis.reconcile import SA
+
+    specs = (
+        FieldSpec(
+            "price",
+            lambda p: p["price"],
+            lambda p: p["price"],
+            yh_get=lambda p: p["price"],
+            sa_get=lambda p: p["price"],
+        ),
+    )
+    merged = merge_many(
+        {
+            TRADINGVIEW: {"price": 10.0},
+            FINVIZ: {"price": 10.0},
+            YAHOO: {"price": 10.0},
+            SA: {"price": 10.0},
+        },
+        specs,
+        times={
+            TRADINGVIEW: "2026-11-03T20:00:00+00:00",
+            FINVIZ: "2026-11-03T21:00:00+00:00",
+            YAHOO: "2026-11-03T20:00:00+00:00",
+            SA: "2026-11-03T20:00:00+00:00",
+        },
+    )
+    assert merged.fields["price"] == {
+        "source": FINVIZ,
+        "compared": [TRADINGVIEW, FINVIZ, YAHOO, SA],
+        "agreement": True,
+    }
+    # The envelope serialises the descriptor verbatim: no ALL anywhere.
+    body = finalize(
+        Pair(attempts={}),
+        specs=specs,
+    )
+    assert all(
+        set(entry) == {"source", "compared", "agreement"}
+        for entry in body["fields"].values()
+    )
+
+
+def test_not_comparable_field_reports_null_agreement_not_a_consent():
+    """A field judged not comparable keeps its readings but claims no agreement.
+
+    ``agreement: None`` is the honest value: the readings exist, they were simply
+    not judged, so the response cannot present them as corroborating each other
+    either way.
+    """
+    from tapebasis.reconcile import compare_values
+
+    row = compare_values(
+        {TRADINGVIEW: 1.1, FINVIZ: 1.1},
+        not_comparable_reason="no shared definition",
+    )
+    assert row["match"] is None
+    assert row.get("not_comparable") is True
+
+
 def test_merge_three_providers_resolves_to_freshest_print():
     specs = (
         FieldSpec(
@@ -195,7 +291,15 @@ def test_merge_three_providers_resolves_to_freshest_print():
     assert merged.provider is DataProvider.ALL
     assert merged.chosen == YAHOO
     assert merged.data["price"] == 10.2
-    assert merged.fields["price"] is DataProvider.ALL
+    # The value is Yahoo's print alone. ``source`` says so; ``compared`` carries
+    # the coverage a blanket ALL used to hide, and ``agreement`` the cross-check
+    # result. The three prices differ by more than the default tolerance, so
+    # the field is a reported disagreement, not a joint product.
+    assert merged.fields["price"] == {
+        "source": YAHOO,
+        "compared": [TRADINGVIEW, FINVIZ, YAHOO],
+        "agreement": False,
+    }
 
 
 def test_default_order_is_documented_and_stable():
@@ -215,7 +319,11 @@ def test_merge_falls_back_to_single_provider():
     merged = merge(None, {"price": 10.0}, specs)
     assert merged.provider is DataProvider.FINVIZ
     assert merged.data == {"price": 10.0}
-    assert merged.fields["price"] is DataProvider.FINVIZ
+    assert merged.fields["price"] == {
+        "source": FINVIZ,
+        "compared": [FINVIZ],
+        "agreement": None,
+    }
 
 
 def test_merge_none_when_all_empty():
@@ -233,8 +341,16 @@ def test_merge_keeps_fields_only_one_side_offers():
     )
     assert merged.data["tv_only"] == "x"
     assert merged.data["fv_only"] == "y"
-    assert merged.fields["tv_only"] is DataProvider.TRADINGVIEW
-    assert merged.fields["fv_only"] is DataProvider.FINVIZ
+    assert merged.fields["tv_only"] == {
+        "source": TRADINGVIEW,
+        "compared": [TRADINGVIEW],
+        "agreement": None,
+    }
+    assert merged.fields["fv_only"] == {
+        "source": FINVIZ,
+        "compared": [FINVIZ],
+        "agreement": None,
+    }
 
 
 def test_merge_carries_yahoo_only_fields():
@@ -244,7 +360,11 @@ def test_merge_carries_yahoo_only_fields():
         shapes={YAHOO: lambda p: {"yh_only": p["yh_only"]}},
     )
     assert merged.data["yh_only"] == "z"
-    assert merged.fields["yh_only"] is DataProvider.YAHOO
+    assert merged.fields["yh_only"] == {
+        "source": YAHOO,
+        "compared": [YAHOO],
+        "agreement": None,
+    }
 
 
 def test_uncontested_field_comes_from_the_freshest_provider():
@@ -271,7 +391,11 @@ def test_uncontested_field_comes_from_the_freshest_provider():
     )
     assert merged.chosen == FINVIZ
     assert merged.data["sector"] == "fresh-sector"
-    assert merged.fields["sector"] is DataProvider.FINVIZ
+    assert merged.fields["sector"] == {
+        "source": FINVIZ,
+        "compared": [FINVIZ],
+        "agreement": None,
+    }
 
 
 def test_uncontested_field_falls_back_to_the_documented_order_on_a_tie():

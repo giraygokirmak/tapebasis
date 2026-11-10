@@ -6,7 +6,7 @@ Every tool returns the same envelope. Learn it once and every tool is readable.
 
 | `data_provider` | `verification` | Meaning | What an agent should do |
 | --- | --- | --- | --- |
-| `ALL` | `MULTI_SOURCE` | Every provider that was asked answered | Quote the numbers; use `providers_answered` to name the providers that covered them |
+| `ALL` | `MULTI_SOURCE` | Every provider that was asked answered | Quote the numbers; `fields` names which provider each value came from, `providers_answered` the legs that answered |
 | `TRADINGVIEW` | `SINGLE_SOURCE` | Only TradingView answered | Quote, but say it is single-source and not corroborated |
 | `FINVIZ` | `SINGLE_SOURCE` | Only Finviz answered | Same, from the Finviz side |
 | `YAHOO` | `SINGLE_SOURCE` | Only Yahoo Finance answered | Same, from the Yahoo side |
@@ -20,6 +20,11 @@ Every tool returns the same envelope. Learn it once and every tool is readable.
 **`ALL` does not mean "the values agree".** It means every provider *asked* answered. Agreement is a
 separate axis, reported per field in `comparisons[].match` and summarised in `notice`/`warnings`.
 Providers answering but diverging is still `ALL`, with the conflict named.
+
+**`ALL` never applies to a single value.** `data_provider` describes the call's coverage; each value
+in `data` came from exactly one provider, and `fields.<field>.source` says which. Four providers
+answering means the price was cross-checked four ways, not that `data.price` is a number four
+providers produced together.
 
 **`ALL` does not mean every provider in the catalogue.** A tool asks only the providers that could
 serve the field. If TradingView and Yahoo answer and Finviz has no page for the instrument, that
@@ -74,14 +79,37 @@ agent never has to reconcile several numbers to answer "what is the price", but 
 the choice.
 
 ### `fields`
-Per-field provenance: `{"price": "ALL", "peers": "FINVIZ", "after_hours_price": "FINVIZ"}`.
+Per-field provenance, one descriptor per key in `data`:
 
-Needed because most responses legitimately mix sources. `stock_quote` gets price from every provider
-that quotes it but the fundamentals snapshot, company profile and peer list from Finviz alone, a
-blanket `ALL` on the whole response would overclaim.
+```jsonc
+{
+  "price":  { "source": "FINVIZ",
+              "compared": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA"],
+              "agreement": true },
+  "peers":  { "source": "FINVIZ", "compared": ["FINVIZ"], "agreement": null }
+}
+```
 
-A field is labelled `ALL` when two or more providers supplied it, and with the provider's name when
-only one did.
+`data` holds exactly one value per field, so a field has exactly one `source`: the provider whose
+reading was placed there. **A field is never labelled with more than one provider**, because a value
+sourced from four providers does not exist: the four readings were compared, one was chosen, and
+`source` names the one that was. The earlier `{"price": "ALL"}` spelling collapsed that distinction
+and read as if the number were a joint product of every provider; the descriptor separates the three
+facts that used to be fused:
+
+| Key | Meaning |
+| --- | --- |
+| `source` | The one provider whose reading is in `data`. Never `ALL` |
+| `compared` | Every provider that supplied a reading for this field, in display order. More than one means the field was cross-checked |
+| `agreement` | `true` every comparable pair agreed, `false` a real disagreement, `null` not judged (a single reading, or readings with no shared basis) |
+
+`compared` names who was asked and answered *for this field*; `providers_answered` names who answered
+for the response as a whole. The two differ on any tool whose fields have uneven coverage: a quote
+gets its price from four providers but its peer list from Finviz alone, so `providers_answered` can
+be four names while `fields.peers.compared` is one.
+
+To go one step further: `comparisons[].values` holds every provider's raw reading keyed by label, and
+`sources[fields.<field>.source]` names the upstream that produced the chosen one.
 
 ### `comparisons`
 One row per compared field:
@@ -308,7 +336,10 @@ is the market moving, not a provider conflict.
   "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"],
   "notice": "Every provider asked answered (TradingView, Finviz, Yahoo Finance, StockAnalysis and Bloomberg). Coverage is ALL; agreement is a separate axis. Compared fields agree within tolerance. The value shown is FINVIZ's because it printed more recently than the other providers'. Not cross-checked, because the providers' readings have no shared basis for comparison: change_percent, previous_close, volume.",
   "data": { "price": 332.33, "change_percent": 0.13, ... },   // one value per field
-  "fields": { "price": "ALL", "peers": "FINVIZ", ... },
+  "fields": { "price": { "source": "FINVIZ",
+                          "compared": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"],
+                          "agreement": true },
+              "peers": { "source": "FINVIZ", "compared": ["FINVIZ"], "agreement": null } },
   "freshness": { "chosen": "FINVIZ", "decision": "newest",
                  "reason": "FINVIZ printed most recently (2026-11-04T10:42:00+00:00)" },
   "comparisons": [
@@ -336,7 +367,9 @@ or that they agreed.*
   "verification": "MULTI_SOURCE",
   "notice": "Every provider asked answered ... NOTE: the providers disagree on price; every reading appears in `comparisons` and the response holds a single value. The value shown is TRADINGVIEW's because it printed more recently. The conflict is reported, not silently resolved.",
   "data": { "price": 331.9, ... },          // one value: the newest print
-  "fields": { "price": "ALL", ... },
+  "fields": { "price": { "source": "TRADINGVIEW",
+                          "compared": ["TRADINGVIEW", "FINVIZ"],
+                          "agreement": false } },
   "freshness": { "chosen": "TRADINGVIEW", "decision": "newest",
                  "reason": "TRADINGVIEW printed most recently (2026-11-03T21:00:01+00:00)" },
   "comparisons": [

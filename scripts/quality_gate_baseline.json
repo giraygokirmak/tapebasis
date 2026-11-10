@@ -97,7 +97,6 @@
     "tools_market.py::_et_timestamp_to_iso",
     "tools_tradingview.py::_failed",
     "tools_tradingview.py::_offload_result",
-    "tools_tradingview.py::_single_response",
     "tools_tradingview.py::register",
     "tv_access.py::_raise_provider_error",
     "tv_access.py::limiter_state",

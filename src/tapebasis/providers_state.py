@@ -207,7 +207,7 @@ def envelope(
     *,
     provider: DataProvider,
     verification: Verification | None = None,
-    fields: dict[str, DataProvider] | None = None,
+    fields: dict[str, dict[str, Any]] | None = None,
     comparisons: Iterable[dict[str, Any]] = (),
     sources: dict[str, str] | None = None,
     errors: Iterable[dict[str, Any]] | dict[str, Any] = (),
@@ -222,7 +222,11 @@ def envelope(
         data: The payload itself (already reconciled).
         provider: Overall :class:`DataProvider` for the response.
         verification: Defaults to the documented value for ``provider``.
-        fields: Per-field provider map, e.g. ``{"price": DataProvider.ALL}``.
+        fields: Per-field provenance, one descriptor per key in ``data``. Each
+            descriptor names the provider whose reading was placed in ``data``,
+            every provider that supplied a reading for that field, and whether
+            those readings agreed. A field is never labelled with more than one
+            source, because ``data`` holds exactly one value per field.
         comparisons: Per-field comparison rows from the reconciler.
         sources: Provider -> upstream URL/identifier that produced the data.
         errors: One or more provider error dicts.
@@ -258,7 +262,7 @@ def envelope(
         "providers_answered": answered,
         "notice": notice,
         "data": data,
-        "fields": {k: v.value for k, v in (fields or {}).items()},
+        "fields": dict(fields or {}),
         "comparisons": list(comparisons),
         "sources": sources or {},
         "errors": list(errors),

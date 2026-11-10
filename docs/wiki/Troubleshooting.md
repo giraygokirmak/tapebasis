@@ -140,13 +140,25 @@ availability signal, and `rate_limits.BLOOMBERG` shows whether it is cooling dow
 
 ---
 
-## `stock_quote` returns `peers` as `FINVIZ` inside an `ALL` response
+## `stock_quote` returns `peers` with `compared: ["FINVIZ"]` inside an `ALL` response
 
 **Expected.** `stock_quote` mixes sources: price and core metrics are compared across providers, but
 the fundamentals snapshot, company profile, peers and after-hours print exist only on Finviz.
 
 `fields` exists precisely for this. `data_provider: ALL` means every provider that was asked answered
-for this call, not that every field was covered by every provider. Per-field truth is in `fields`.
+for this call, not that every field was covered by every provider. Per-field truth is in `fields`:
+`source` names the one provider whose value is in `data`, `compared` the providers that supplied a
+reading for that field, `agreement` the cross-check result.
+
+---
+
+## `fields.price.source` is one provider even though four answered
+
+**Expected, and deliberate.** `data.price` holds one value: the reading chosen as the freshest
+print. Four providers supplied a price, they were compared, one won. A field descriptor that said
+"ALL" there would read as if the number were a joint product of the four providers when it is one
+provider's print. `compared` names the four; `comparisons[].values` holds every reading if you need
+the others.
 
 ---
 

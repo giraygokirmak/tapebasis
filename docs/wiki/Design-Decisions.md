@@ -625,6 +625,35 @@ that leg, never an error and never a silent absence.
 
 ---
 
+## 36. A field is sourced from one provider, never from all of them
+
+**Decision.** `fields` carries one descriptor per key in `data`: `source` (the provider whose
+reading was placed in `data`), `compared` (every provider that supplied a reading for the field) and
+`agreement` (the cross-check result). A field is never labelled `ALL`.
+
+**Why.** `data` holds exactly one value per field, chosen as the freshest print. The old
+`{"price": "ALL"}` spelling described *coverage* in the slot that names *origin*, so a reader saw
+four providers and one number and concluded the number was a joint product of the four. It is one
+provider's print, cross-checked against the others; that is a different fact, and the contract now
+says both instead of fusing them.
+
+The fused label also lost single-source-ness silently: `agreement` is `null` only when a field was
+never judged, so a cross-checked field that failed comparison (`false`) can no longer be mistaken
+for one nobody compared (`null`).
+
+**What did not change.** `data_provider` and `verification` still describe the call: `ALL` means
+every provider asked answered, full stop. `comparisons[].values` still holds every provider's raw
+reading. The chosen reading is still the freshest print, and `freshness.chosen` still explains why.
+`tapebasis_tool_map` had been overloading `fields` to mean tool-to-provider, a different relation in
+the same slot; its descriptors now name the catalogue's declared set through the same
+`source`/`compared` shape, so one schema describes both.
+
+**Consequence:** reading a value's origin is one lookup (`fields.<field>.source`), its upstream is
+one more (`sources[fields.<field>.source]`), and no response ever presents a number as coming from
+several providers at once.
+
+---
+
 ## Related
 
 - [Architecture](Architecture): how these decisions are implemented

@@ -41,6 +41,26 @@ from .providers_state import (
     provider_from_answered,
 )
 
+__all__ = [
+    "Attempt",
+    "DEFAULT_ORDER",
+    "FieldSpec",
+    "KNOWN_REPORTING_LAG",
+    "Merged",
+    "Pair",
+    "ask",
+    "compare_numeric",
+    "compare_symbol",
+    "compare_values",
+    "field_source",
+    "finalize",
+    "merge",
+    "merge_many",
+    "notice_for",
+    "providers_in",
+    "single",
+]
+
 TRADINGVIEW = "TRADINGVIEW"
 FINVIZ = "FINVIZ"
 YAHOO = "YAHOO"
@@ -610,7 +630,11 @@ class Merged:
     """Result of comparing provider payloads field-by-field."""
 
     data: dict[str, Any] = field(default_factory=dict)
-    fields: dict[str, DataProvider] = field(default_factory=dict)
+    #: Per-field provenance. Each key names the provider whose reading is in
+    #: ``data``, every provider that supplied a reading for that field, and
+    #: whether those readings agreed. Deliberately never a single ``ALL``
+    #: label: ``data`` holds one value per field, so a field has one source.
+    fields: dict[str, dict[str, Any]] = field(default_factory=dict)
     comparisons: list[dict[str, Any]] = field(default_factory=list)
     mismatches: list[str] = field(default_factory=list)
     provider: DataProvider = DataProvider.NONE
@@ -623,6 +647,34 @@ class Merged:
     #: resolution was not a freshness decision (single-source, or no timestamps).
     chosen: str | None = None
     freshness: dict[str, Any] = field(default_factory=dict)
+
+
+def field_source(
+    source: str,
+    compared: Iterable[str] = (),
+    agreement: bool | None = None,
+) -> dict[str, Any]:
+    """Describe where one field's value came from.
+
+    ``source`` is the provider whose reading was placed in ``data``. It is a
+    single label, always: a response holds one value per field, so naming two or
+    more providers there would imply the number is a joint product when it is
+    one provider's print.
+
+    ``compared`` is every provider that supplied a reading for the field, in
+    display order. Two or more means the field was cross-checked, and
+    ``agreement`` says whether it survived that check: ``True`` all comparable
+    pairs agree, ``False`` a real disagreement, ``None`` not judged (a single
+    reading, or readings with no shared basis for comparison).
+
+    A reader who wants the losing readings finds them in ``comparisons[].values``
+    keyed by provider; a reader who wants the upstream finds it in
+    ``sources[field_source()["source"]]``.
+    """
+    labels = [p for p in PROVIDER_ORDER if p in set(compared)]
+    if source and source not in labels:
+        labels.insert(0, source)
+    return {"source": source, "compared": labels, "agreement": agreement}
 
 
 def _resolved_label(times: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -731,7 +783,9 @@ def merge_many(
         shaped = shape(payload) if shape else dict(payload)
         return Merged(
             data=shaped,
-            fields={key: DataProvider(provider) for key in shaped},
+            fields={
+                key: field_source(provider, [provider], None) for key in shaped
+            },
             provider=DataProvider(provider),
             answered=[provider],
         )
@@ -772,9 +826,16 @@ def merge_many(
         value, source = _pick(lambda p: values.get(p), order)
         if value is not None:
             out.data[spec.name] = value
-            supplied = sum(1 for v in values.values() if v is not None)
-            out.fields[spec.name] = (
-                DataProvider.ALL if supplied >= 2 else DataProvider(str(source))
+            supplied = [p for p, reading in values.items() if reading is not None]
+            # The value is one provider's reading, so ``source`` names that one
+            # provider. ``compared`` and ``agreement`` carry the coverage and the
+            # cross-check result that used to be collapsed into a single ``ALL``
+            # label, which read as if the number were a joint product of every
+            # provider rather than the one print that was chosen.
+            out.fields[spec.name] = field_source(
+                str(source),
+                supplied,
+                row.get("match"),
             )
             row["chosen"] = source
         if row["match"] is False:
@@ -794,7 +855,7 @@ def merge_many(
             continue
         for key, value in shape(present[provider]).items():
             out.data.setdefault(key, value)
-            out.fields.setdefault(key, DataProvider(provider))
+            out.fields.setdefault(key, field_source(provider, [provider], None))
     return out
 
 
@@ -923,6 +984,7 @@ def finalize(
     data: Any = None,
     provider: DataProvider | None = None,
     answered: Iterable[str] | None = None,
+    fields: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Reconcile attempts and wrap the result in the public envelope.
 
@@ -941,10 +1003,10 @@ def finalize(
     when the tool can observe the real time: without it the frozen-feed guard is
     inert, which keeps test fixtures (dated in the past) deterministic.
 
-    ``data``/``provider``/``answered`` override the reconciled payload and
-    label; tools that compose a richer payload than the field list use them, and
-    the notice is rebuilt so it still states the true providers and any
-    mismatches.
+    ``data``/``provider``/``answered``/``fields`` override the reconciled
+    payload, label and per-field provenance; tools that compose a richer payload
+    than the field list use them, and the notice is rebuilt so it still states
+    the true providers and any mismatches.
     """
     payloads: dict[str, dict[str, Any] | None] = {}
     shapes: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {}
@@ -984,6 +1046,8 @@ def finalize(
         merged.data = data
     if answered is not None:
         merged.answered = list(answered)
+    if fields is not None:
+        merged.fields = fields
 
     warn_list = list(warnings)
     if health_warn:

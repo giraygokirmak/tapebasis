@@ -664,7 +664,11 @@ async def test_tradingview_states_its_own_feed_delay(fake_providers):
     assert result["data"]["instrument_type"] == "stock"
     assert result["data"]["instrument_subtype"] == "common"
     # It rides along labelled with the provider that shaped it, not as ALL.
-    assert result["fields"]["feed_mode"] == "TRADINGVIEW"
+    assert result["fields"]["feed_mode"] == {
+        "source": "TRADINGVIEW",
+        "compared": ["TRADINGVIEW"],
+        "agreement": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -701,4 +705,8 @@ async def test_quote_carries_the_income_breakdown_finviz_already_downloaded(
     result = await tools_market.stock_quote("AAPL")
     breakdown = result["data"]["income_breakdown"]
     assert breakdown["statement"]["scale_applied"] == 1_000_000.0
-    assert result["fields"]["income_breakdown"] == "FINVIZ"
+    assert result["fields"]["income_breakdown"] == {
+        "source": "FINVIZ",
+        "compared": ["FINVIZ"],
+        "agreement": None,
+    }

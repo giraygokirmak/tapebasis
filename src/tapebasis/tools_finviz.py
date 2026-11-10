@@ -13,7 +13,7 @@ from typing import Any
 from . import fv_access
 from .health import FINVIZ, MONITOR
 from .providers_state import DataProvider, NoDataError, envelope, error_code
-from .reconcile import finalize, single
+from .reconcile import field_source, finalize, single
 from .symbols import strip_exchange, to_finviz
 
 
@@ -25,15 +25,24 @@ def _single_response(
     warnings: list[str] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Wrap a Finviz-only payload in the standard envelope."""
+    """Wrap a Finviz-only payload in the standard envelope.
+
+    Every top-level key of ``data`` is labelled with a field descriptor whose
+    ``source`` is Finviz, so a single-source response states per item where
+    each value came from instead of relying on the response-level label alone.
+    """
     MONITOR.ensure_started()
     pair = single(FINVIZ, data)
+    fields = None
+    if isinstance(data, dict):
+        fields = {key: field_source(FINVIZ, [FINVIZ], None) for key in data}
     return finalize(
         pair,
         sources={FINVIZ: source},
         warnings=warnings or [],
         data=data,
         provider=DataProvider.FINVIZ,
+        fields=fields,
         health_warn=MONITOR.warnings_for((FINVIZ,)),
         degraded=any(issue["provider"] == FINVIZ for issue in MONITOR.issues()),
         extra={"symbol": symbol, **(extra or {})},

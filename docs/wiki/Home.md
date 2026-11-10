@@ -86,7 +86,9 @@ Every tool result carries exactly one of seven values. It states **coverage**, n
   "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"],   // only those that answered
   "notice": "Every provider asked answered ...",   // sentence to relay to the user
   "data": { ... },                         // the reconciled payload, one value per field
-  "fields": { "price": "ALL", "peers": "FINVIZ" }, // per-field provenance
+  "fields": {                              // per-field provenance, never a joint label
+    "price": { "source": "FINVIZ", "compared": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA"], "agreement": true },
+    "peers": { "source": "FINVIZ", "compared": ["FINVIZ"], "agreement": null } },
   "freshness": {                           // why `data` holds the value it does
     "tradingview": "2026-11-04T00:59:53+00:00",
     "finviz": "2026-11-04T10:42:00+00:00",

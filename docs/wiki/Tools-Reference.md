@@ -26,7 +26,8 @@ Quote plus fundamentals snapshot for any instrument class, equity, index, FX, co
 | Never compared | change % on FX, where no shared previous close exists (reported from every provider) |
 
 Each compared field resolves to one value, the newest print, while every reading stays in
-`comparisons`. Finviz-only material rides along, labelled per field in `fields`: the 84-field
+`comparisons`. Finviz-only material rides along, labelled per field in `fields` (each descriptor's
+`source` is FINVIZ): the 84-field
 fundamentals snapshot, company profile, peers, the after-hours print, the classification chips
 (`sector`, `industry`, `country`, `market_cap_class`, `exchange`, `etf_type`) and the
 `income_breakdown` island. `resolutions` records the ticker each provider was asked for.
@@ -203,7 +204,8 @@ TradingView technical read + sentiment + news, with the underlying price cross-c
 Finviz's snapshot and Yahoo's chart API. One request, not one per leg.
 
 The price leg is genuinely multi-source; the analysis and sentiment legs remain single-source and are
-labelled per field in `fields`. `sentiment_source` states whether the sentiment came from Marketaux or
+labelled per field in `fields` (their `source` is TRADINGVIEW). `sentiment_source` states whether
+the sentiment came from Marketaux or
 local scoring.
 
 ---

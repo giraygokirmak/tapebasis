@@ -32,7 +32,8 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
             "TradingView, then Yahoo, then StockAnalysis, then Bloomberg. Finviz-only "
             "fields (the 84-field "
             "snapshot, profile, peers, after-hours, and the income/segment breakdown) "
-            "ride along labelled per field in `fields`. The income breakdown is a JSON "
+            "ride along labelled per field in `fields` (`fields.<field>.source` names the "
+            "provider). The income breakdown is a JSON "
             "island on the same quote page, so it costs no extra request; its statement "
             "amounts are scaled to absolute currency units (`statement.scale_applied` "
             "states the factor) so they share one unit with the segment axes, and "
@@ -374,7 +375,8 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "comparison": "underlying price across TradingView, Finviz and Yahoo",
         "notes": (
             "The price leg is multi-source; the analysis and sentiment legs are "
-            "TradingView-only and labelled per field in `fields`."
+            "TradingView-only and labelled per field in `fields` (their `source` is "
+            "TRADINGVIEW)."
         ),
     },
     # ── Ops ─────────────────────────────────────────────────────────────────
