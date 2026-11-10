@@ -877,6 +877,12 @@ INSTRUMENTS: dict[str, dict[str, Any]] = {
         "finviz_note": "Finviz quotes indices only through its indices feed",
         "yahoo": "^VIX", "sa": None, "bloomberg": "VIX:IND",
     },
+    "NDX": {
+        "name": "NASDAQ-100", "asset_class": "index",
+        "tradingview": "NASDAQ:NDX", "finviz": None,
+        "finviz_note": "Finviz quotes indices only through its indices feed",
+        "yahoo": "^NDX", "sa": None, "bloomberg": "NDX:IND",
+    },
     # ── Spot commodities ────────────────────────────────────────────────
     "XAUUSD": {
         "name": "Gold spot", "asset_class": "commodity",
@@ -965,6 +971,12 @@ INSTRUMENTS: dict[str, dict[str, Any]] = {
     },
 }
 
+#: Canonical instruments the index-snapshot tools report, in display order. The
+#: registry is broader (it also addresses NDX for single-instrument quotes), but
+#: a market snapshot is a fixed, documented list, so it is named once here and
+#: the provider-side snapshot tables are derived from it.
+INDEX_SNAPSHOT: tuple[str, ...] = ("SPX", "COMP", "DJI", "RUT", "IWM", "VIX")
+
 #: Provider column -> the reason template for a ``None`` cell. Providers that
 #: mechanically accept any plausible ticker (Finviz, StockAnalysis) get their
 #: boundary stated once here instead of in an if-chain at every call site.
@@ -1028,7 +1040,6 @@ _INSTRUMENT_ALIASES: dict[str, str] = {
     "DJIA": "DJI",
     "INDU": "DJI",
     "RUSSELL2000": "RUT",
-    "NDX": None,  # no row yet; kept out so it falls through to search
     "WTI": "USOIL",
     "BRENT": "UKOIL",
     "CRUDE": "USOIL",
@@ -1043,6 +1054,16 @@ _INSTRUMENT_ALIASES: dict[str, str] = {
     "BZF": "BZ1!",
     "NGF": "NG1!",
     "HGF": "HG1!",
+    # ``WTI=F`` is Yahoo's futures convention applied to the commodity's
+    # name: a caller typing it means the front-month future, and Yahoo's own
+    # ticker for that is ``CL=F``. Left to search it lands on ``XETR:WTIF``,
+    # the WisdomTree Japan ETF, a different instrument at a tenth of the
+    # price.
+    "WTI=F": "CL1!",
+    "WTIF": "CL1!",
+    "USOIL=F": "CL1!",
+    "UKOIL=F": "BZ1!",
+    "BRENT=F": "BZ1!",
 }
 
 #: The same aliases, lowercased, so :func:`canonical_instrument` can fold any

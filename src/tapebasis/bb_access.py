@@ -75,8 +75,7 @@ _ALIASES: dict[str, str] = {
     "NKY": "NKY:IND",
     "NIKKEI": "NKY:IND",
     "HSI": "HSI:IND",
-    # Nasdaq-100 and platinum/palladium spot pairs
-    "NDX": "NDX:IND",
+    # Nasdaq-100 is a registry row; platinum/palladium spot pairs are not
     "XPTUSD": "XPTUSD:CUR",
     "XPDUSD": "XPDUSD:CUR",
     # Bare commodity roots (``GC1!`` is the registry row; ``GC`` alone is not)

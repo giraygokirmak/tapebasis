@@ -52,7 +52,14 @@ from .reconcile import (
     finalize,
     providers_in,
 )
-from .symbols import Resolution, resolve, resolve_sa, strip_exchange, to_finviz
+from .symbols import (
+    INDEX_SNAPSHOT,
+    Resolution,
+    resolve,
+    resolve_sa,
+    strip_exchange,
+    to_finviz,
+)
 
 #: Every provider the market tools ask. They are peers, not fallbacks: a tool
 #: either asks all of them or records ``NOT_ATTEMPTED`` for the ones that have
@@ -1203,16 +1210,19 @@ async def stock_screener(
 async def market_indices() -> dict[str, Any]:
     """Level and day change for the major US indices, asked of every capable provider.
 
-    Covers S&P 500, Dow, Nasdaq Composite, Russell 2000 and VIX. Every provider
-    spells these differently (``SPX`` / ``SP:SPX`` / ``^GSPC``); they are mapped
-    to one canonical name before comparison, and the level is compared across
-    all providers that answered.
+    Covers the fixed snapshot list (``INDEX_SNAPSHOT``: S&P 500, Dow, Nasdaq
+    Composite, Russell 2000, IWM and VIX), not every index the instrument
+    registry addresses: ``NDX`` is a registry row too, but it is quoted through
+    the single-instrument tools. Every provider spells these differently
+    (``SPX`` / ``SP:SPX`` / ``^GSPC``); they are mapped to one canonical name
+    before comparison, and the level is compared across all providers that
+    answered.
 
     Returns:
         Envelope whose ``data.indices`` is keyed by canonical index
-        (``SPX``, ``DJI``, ``COMP``, ``RUT``, ``VIX``), each value carrying
-        ``level``, ``change_percent``, its own ``data_provider`` and the raw
-        readings from every provider that supplied it.
+        (``SPX``, ``DJI``, ``COMP``, ``RUT``, ``IWM``, ``VIX``), each value
+        carrying ``level``, ``change_percent``, its own ``data_provider`` and
+        the raw readings from every provider that supplied it.
     """
 
     async def tv_call() -> dict[str, Any]:
@@ -1236,7 +1246,7 @@ async def market_indices() -> dict[str, Any]:
     from .reconcile import _resolved_label, compare_values
 
     indices: dict[str, Any] = {}
-    for canonical in ("SPX", "DJI", "COMP", "RUT", "IWM", "VIX"):
+    for canonical in INDEX_SNAPSHOT:
         readings = {
             TRADINGVIEW: (tv_indices.get(canonical) or {}).get("level"),
             FINVIZ: (fv_indices.get(canonical) or {}).get("level"),

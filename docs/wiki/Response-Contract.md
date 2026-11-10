@@ -228,7 +228,10 @@ TradingView, `XAUUSD:CUR` for Bloomberg (from the registry row, `method: alias`)
 (Yahoo has no spot-gold pair, `XAUUSD=X` is a 404) and notes from Finviz and StockAnalysis saying
 they carry US equities and ETFs only. `WTI` shows `FX:USOIL` for TradingView, never `NYSE:WTI`
 (W&T Offshore, an equity whose ticker happens to match), and `CL1!` shows `GC=F`-style futures
-spellings (`CL=F` for Yahoo, `CL1:COM` for Bloomberg).
+spellings (`CL=F` for Yahoo, `CL1:COM` for Bloomberg). `WTI=F` folds onto the same front-month
+future (`CL1!`) instead of falling into search, where TradingView resolves it to `XETR:WTIF`, the
+WisdomTree Japan ETF. `NDX` and `^NDX` both resolve through the registry row (`NASDAQ:NDX`,
+`^NDX`, `NDX:IND`) with Finviz and StockAnalysis reported as not carried.
 
 ### `cross_checked` / `reconciliation_leg`
 Present on the `bloomberg_*` tools, both `false`: that call asked a single provider, so its payload

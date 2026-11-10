@@ -33,7 +33,7 @@ from typing import Any
 import httpx
 
 from ...ratelimit import RateLimited, call, limiter
-from ...symbols import INSTRUMENTS
+from ...symbols import INSTRUMENTS, INDEX_SNAPSHOT
 
 PROVIDER = "TRADINGVIEW"
 
@@ -223,12 +223,13 @@ async def quote(ticker: str) -> dict[str, Any]:
 
 
 #: Canonical index name -> the TradingView ticker that carries it. Derived
-#: from the instrument registry, so the TradingView spellings of the indices
-#: live in one place only: :data:`tapebasis.symbols.INSTRUMENTS`.
+#: from the instrument registry, restricted to the snapshot list, so the
+#: index spellings live in one place only:
+#: :data:`tapebasis.symbols.INSTRUMENTS`.
 INDEX_TICKERS: dict[str, str] = {
     canonical: str(row["tradingview"])
     for canonical, row in INSTRUMENTS.items()
-    if row["asset_class"] == "index"
+    if canonical in INDEX_SNAPSHOT and row["asset_class"] == "index"
 }
 
 _INDEX_COLUMNS = (

@@ -146,6 +146,7 @@ The same instrument is spelled differently by each upstream, and the differences
 | Apple | `NASDAQ:AAPL` | `AAPL` | `AAPL` | `aapl` | `AAPL:US` |
 | Gold (spot) | `OANDA:XAUUSD` | *(not carried)* | *(not carried, `XAUUSD=X` is a 404)* | *(not carried)* | `XAUUSD:CUR` |
 | S&P 500 | `SP:SPX` | *(indices feed only)* | `^GSPC` | *(not carried)* | `SPX:IND` |
+| NASDAQ-100 | `NASDAQ:NDX` | *(indices feed only)* | `^NDX` | *(not carried)* | `NDX:IND` |
 | WTI (spot) | `FX:USOIL` | *(not carried)* | *(not carried)* | *(not carried)* | *(no spot page; `CL1:COM` is a future)* |
 | WTI (front future) | `NYMEX:CL1!` | *(not carried)* | `CL=F` | *(not carried)* | `CL1:COM` |
 | EUR/USD | `FX:EURUSD` | *(not carried)* | `EURUSD=X` | *(not carried)* | `EURUSD:CUR` |
@@ -164,7 +165,9 @@ provider, is cached for an hour, and is recorded in `resolutions` (`explicit`, `
 - **A ticker is only returned if the provider can actually quote it.** TradingView's symbol *search*
   offers `OANDA:BTCUSD`, but its *scanner* has no row for it, resolution verifies against the
   scanner and picks `BITSTAMP:BTCUSD` instead. This is also why `WTI` resolves to `FX:USOIL` and
-  not `NYSE:WTI` (W&T Offshore, an equity whose ticker happens to match).
+  not `NYSE:WTI` (W&T Offshore, an equity whose ticker happens to match), and why `WTI=F` is
+  aliased to the front-month future instead of falling into search, where it lands on `XETR:WTIF`,
+  the WisdomTree Japan ETF.
 - **A missing instrument is not an outage.** `NotApplicable` becomes `NOT_ATTEMPTED`, which is
   excluded from `errors`. "Finviz does not carry spot gold" is a structural fact, not a failure.
 

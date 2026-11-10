@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from tapebasis.bb_access import to_bloomberg as bb_to_bloomberg
 from tapebasis.symbols import (
     INDEX_ALIASES,
     INSTRUMENTS,
@@ -173,6 +174,20 @@ def test_index_and_commodity_rows_are_never_aliased():
         ("BRENT", "UKOIL"),
         ("COPPER", "HG1!"),
         ("NATGAS", "NG1!"),
+        # Nasdaq-100: every spelling folds onto the registry row, so the
+        # dynamic path never reaches Finviz's/SA's stock-quote endpoints.
+        ("NDX", "NDX"),
+        ("^NDX", "NDX"),
+        ("NASDAQ:NDX", "NDX"),
+        ("NDX:IND", "NDX"),
+        # Yahoo's futures convention applied to the commodity's name means
+        # the front-month future; left to search it lands on XETR:WTIF, the
+        # WisdomTree Japan ETF, a different instrument at a tenth of the price.
+        ("WTI=F", "CL1!"),
+        ("WTIF", "CL1!"),
+        ("USOIL=F", "CL1!"),
+        ("UKOIL=F", "BZ1!"),
+        ("BRENT=F", "BZ1!"),
         ("AAPL", None),
         ("BRK.B", None),
         ("BTCUSD", None),
@@ -193,6 +208,59 @@ def test_registry_resolution_returns_the_spelling_or_the_boundary():
     assert "no spot gold pair" in gold.note
     # An unregistered query falls through to the dynamic path.
     assert registry_resolution("AAPL", "TRADINGVIEW") is None
+
+
+def test_ndx_row_reports_the_declared_boundaries():
+    """NDX resolves through the registry on every capable provider.
+
+    Finviz and StockAnalysis have no index quote endpoint for it, so those
+    cells must be stated boundaries, not stock-class guesses that return
+    a 404 upstream. Bloomberg carries Nasdaq-100 as ``NDX:IND``, the index
+    class id; a caret in the query must not steer it to an equity id.
+    """
+    tv = registry_resolution("NDX", "TRADINGVIEW")
+    assert tv is not None and tv.symbol == "NASDAQ:NDX"
+    yh = registry_resolution("NDX", "YAHOO")
+    assert yh is not None and yh.symbol == "^NDX"
+    fv = registry_resolution("NDX", "FINVIZ")
+    assert fv is not None and fv.symbol is None
+    assert "indices feed" in fv.note
+    for query in ("NDX", "^NDX"):
+        assert bb_to_bloomberg(query) == "NDX:IND", query
+
+
+def test_wti_futures_alias_folds_onto_the_front_month_row():
+    """``WTI=F`` is a front-month-future intent, not a stock search.
+
+    Left to the dynamic path, TradingView resolves it to ``XETR:WTIF``, the
+    WisdomTree Japan ETF, a different instrument at a tenth of the price.
+    """
+    for query in ("WTI=F", "WTIF", "USOIL=F"):
+        row = registry_resolution(query, "TRADINGVIEW")
+        assert row is not None and row.symbol == "NYMEX:CL1!", query
+        yahoo = registry_resolution(query, "YAHOO")
+        assert yahoo is not None and yahoo.symbol == "CL=F", query
+    brent = registry_resolution("BRENT=F", "TRADINGVIEW")
+    assert brent is not None and brent.symbol == "NYMEX:BZ1!"
+
+
+def test_index_snapshot_list_excludes_broader_registry_rows():
+    """The snapshot list is fixed; registry growth must not extend it.
+
+    ``NDX`` is addressable through single-instrument quotes, but a market
+    snapshot is a documented list, so the provider snapshot tables derived
+    from the registry stay restricted to it.
+    """
+    from tapebasis.symbols import INDEX_SNAPSHOT
+
+    assert "NDX" not in INDEX_SNAPSHOT
+    assert INDEX_SNAPSHOT == ("SPX", "COMP", "DJI", "RUT", "IWM", "VIX")
+    from tapebasis.providers.tradingview import native as tv_native
+
+    assert set(tv_native.INDEX_TICKERS) <= set(INDEX_SNAPSHOT)
+    from tapebasis import yh_access
+
+    assert set(yh_access.INDEX_SYMBOLS) <= set(INDEX_SNAPSHOT)
 
 
 def test_bloomberg_class_suffix_is_not_a_spelling():

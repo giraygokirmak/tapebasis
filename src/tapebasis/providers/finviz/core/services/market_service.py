@@ -24,14 +24,16 @@ from tapebasis.providers.finviz.core.errors import ErrorCode, FinvizServiceError
 from tapebasis.providers.finviz.core.services import finviz_client
 from tapebasis.providers.finviz.core.services.html_utils import extract_script_json
 from tapebasis.providers.finviz.core.utils.validators import validate_ticker
-from tapebasis.symbols import INSTRUMENTS
+from tapebasis.symbols import INSTRUMENTS, INDEX_SNAPSHOT
 
 #: Finviz index ticker -> display name. Derived from the instrument registry,
-#: so the index names live in one place only.
+#: restricted to the documented snapshot list, so the names live in one place
+#: and a broader registry row (NDX, addressable through single-instrument
+#: quotes) cannot silently join the snapshot loop.
 INDEX_TICKERS = {
     canonical: str(row["name"])
     for canonical, row in INSTRUMENTS.items()
-    if row["finviz"] is not None and row["asset_class"] == "index"
+    if (canonical in INDEX_SNAPSHOT and row["asset_class"] == "index")
     or canonical == "IWM"
 }
 

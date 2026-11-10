@@ -57,7 +57,7 @@ src/tapebasis/
 ├── ratelimit.py          per-provider pacing, shared cooldown, TTL cache
 ├── merge_helpers.py      pure payload shapers (raw provider dict → normalised fields)
 ├── sentiment.py          token-free headline scoring (VADER + finance lexicon)
-├── symbols.py            dynamic per-provider symbol resolution, index aliases
+├── symbols.py            dynamic per-provider symbol resolution, the instrument registry
 ├── health.py             upstream probes, fingerprints, drift state, background loop
 ├── tv_access.py          typed access to TradingView's own data
 ├── fv_access.py          typed access to the Finviz provider
@@ -161,15 +161,19 @@ as a provider outage: a silent demotion to single-source.
 A hardcoded ticker table cannot keep up, and when a row is missing it produces a *wrong-but-plausible*
 ticker that fails six layers later. The resolver instead:
 
-1. Takes an explicit `EXCHANGE:SYMBOL` at face value for that provider.
-2. Applies only mechanical conventions that have been confirmed against the live endpoint
+1. Checks the instrument registry first: indices and commodities with provider-specific spellings
+   (and names that collide with real equities) carry one row per instrument, one column per
+   provider, so `NDX`, `^NDX`, `NASDAQ:NDX` and `NDX:IND` all fold onto one instrument and no leg is
+   ever steered to another provider's stock endpoint.
+2. Takes an explicit `EXCHANGE:SYMBOL` at face value for that provider.
+3. Applies only mechanical conventions that have been confirmed against the live endpoint
    (`XXXYYY` → `XXXYYY=X` when both halves are real currency codes, `BTCUSD` → `BTC-USD`).
-3. Falls back to each provider's own symbol search, ranking hits by exact-ticker match, asset class
+4. Falls back to each provider's own symbol search, ranking hits by exact-ticker match, asset class
    and venue preference, with a confidence floor so "something vaguely similar" is never used.
-4. **Verifies against the quote endpoint.** TradingView's search offers `OANDA:BTCUSD`; its scanner
+5. **Verifies against the quote endpoint.** TradingView's search offers `OANDA:BTCUSD`; its scanner
    has no row for it. Resolution that stops at search hands the quote path a ticker it cannot quote
    and a real instrument is reported as unavailable.
-5. Returns `none` with a reason for instruments a provider genuinely does not carry, never a
+6. Returns `none` with a reason for instruments a provider genuinely does not carry, never a
    fabricated ticker. Yahoo has no spot-gold pair; `XAUUSD=X` returns HTTP 404.
 
 Results are cached per `(provider, query)` for an hour.

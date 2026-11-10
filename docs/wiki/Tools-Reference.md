@@ -131,6 +131,10 @@ index ticker, while `market_indices` still uses Finviz's indices feed for the le
 `RUT` (index) and `IWM` (its tracking ETF) are different instruments at different price levels and
 are never cross-compared.
 
+The list is fixed (`INDEX_SNAPSHOT`), and the registry being broader does not extend it: `NDX` is a
+registry row addressable through single-instrument tools (`stock_quote NDX`), but it is not part of
+the snapshot.
+
 ### `stock_news`
 
 Ticker headlines, matched by title across the feeds.

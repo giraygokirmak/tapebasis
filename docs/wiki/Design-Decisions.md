@@ -660,7 +660,8 @@ several providers at once.
 front-month futures) are addressed through one registry in `symbols.py`: one row per instrument,
 one column per provider, a `None` cell stating the boundary that provider declares. The per-provider
 copies (`_YAHOO_INDEX_ALIASES`, `TV_INDEX_SYMBOLS`, the index/commodity halves of Bloomberg's alias
-table, `INDEX_SYMBOLS`, `INDEX_TICKERS`) are derived from it or deleted.
+table, `INDEX_SYMBOLS`, `INDEX_TICKERS`) are derived from it or deleted; the dead `TV_INDEX_SYMBOLS`
+copy, never wired to a call site, was removed outright.
 
 **Why:** the same knowledge lived in five tables across four files in three shapes. Adding copper
 meant editing every one; a stale spelling drifted silently. Worse, the dynamic search path is
@@ -674,6 +675,17 @@ for; every provider with a filled cell is still asked in parallel, and the fan-o
 `None` cell records a boundary the provider itself declares ("no spot pair", "indices feed only"),
 reported as `NOT_ATTEMPTED` with the reason. One row is one instrument: `RUT`/`IWM` and
 `XAUUSD`/`GC1!` stay separate rows, so a spot price is never compared with a futures price.
+
+**A registry row is not snapshot membership.** The registry is broader than the fixed list
+`market_indices` reports (`INDEX_SNAPSHOT`: SPX, COMP, DJI, RUT, IWM, VIX). `NDX` was added as a row
+so a single-instrument quote folds every spelling (`NDX`, `^NDX`, `NASDAQ:NDX`, `NDX:IND`) onto
+one instrument instead of steering Finviz/StockAnalysis to their stock endpoints, and so
+Bloomberg's `^NDX` no longer resolves to the equity-class id `^NDX:US` but to `NDX:IND`. The
+provider snapshot tables are derived from the registry *restricted to the snapshot list*, so the
+row does not silently join the loop. `WTI=F`/`WTIF` are aliases of the front-month future row
+(`CL1!`) for the same reason: left to search, Yahoo's futures convention applied to the commodity's
+name lands on `XETR:WTIF`, the WisdomTree Japan ETF, a different instrument at a tenth of the
+price.
 
 **Consequence:** a registry row is cheap to audit (tests assert every cell is either a spelling or
 a documented `None`, and that no two rows claim the same provider spelling), and every spelling in
