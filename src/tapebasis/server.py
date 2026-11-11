@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
 
 from . import __version__
-from . import bb_access
+from . import bb_access, blocking_pool
 from .health import MONITOR
 from .http_pool import aclose_all, warm_origins
 from .providers_state import PROVIDER_MEANING
@@ -97,6 +97,7 @@ async def lifespan(_server: FastMCP):
         await MONITOR.stop()
         await bb_access.aclose()
         await aclose_all()
+        blocking_pool.shutdown()
 
 
 mcp = FastMCP(

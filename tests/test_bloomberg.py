@@ -316,3 +316,52 @@ async def test_ticker_page_without_a_quote_object_is_no_data(monkeypatch):
     response = await tools_bloomberg.bloomberg_quote("ZZZZ")
     assert response["data_provider"] == "NONE"
     assert response["errors"][0]["code"] == "NO_DATA"
+
+
+# ── an instrument the registry says Bloomberg does not carry ────────────────
+
+
+@pytest.mark.parametrize("requested", ["WTI", "USOIL", "UKOIL", "BRENT"])
+def test_a_declined_instrument_is_refused_not_guessed(requested):
+    """``WTI`` mechanically became ``WTI:US``, which is W&T Offshore Inc.
+
+    A registry row with an empty Bloomberg cell is a boundary the instrument
+    declares: Bloomberg's quote page carries no WTI spot series. Mechanical
+    guessing landed on an unrelated company at 2.89, and ``USOIL`` landed on
+    ``USOIL:US``, a robot page.
+    """
+    resolution = bb_access.resolve_bloomberg(requested)
+    assert resolution.found is False
+    assert resolution.note
+    with pytest.raises(Exception) as excinfo:
+        bb_access.to_bloomberg(requested)
+    assert getattr(excinfo.value, "code", None) is None
+    assert "WTI" in str(excinfo.value) or "Brent" in str(excinfo.value) or "spot" in str(excinfo.value)
+
+
+def test_the_report_and_the_fetch_are_the_same_identity():
+    """``stock_quote`` reported one id while ``bloomberg_quote`` fetched another."""
+    from tapebasis import tools_market
+
+    for requested in ("AAPL", "SPX", "XAUUSD", "CL1!"):
+        cross_checked = tools_market._bloomberg_resolution(requested)
+        direct = bb_access.resolve_bloomberg(requested)
+        assert cross_checked.symbol == direct.symbol
+
+
+@pytest.mark.asyncio
+async def test_quote_refuses_a_declined_instrument_without_a_request(monkeypatch):
+    """No page is fetched for an id the registry already said does not exist."""
+    asked: list[str] = []
+
+    async def fake_fetch(path, cache_key):
+        asked.append(path)
+        return _html({"quote": _equity_quote()})
+
+    monkeypatch.setattr(bb_access, "_fetch_html", fake_fetch)
+    response = await tools_bloomberg.bloomberg_quote("WTI")
+
+    assert asked == []
+    assert response["data_provider"] == "NONE"
+    assert response["errors"][0]["code"] == "NO_DATA"
+    assert "WTI" in response["errors"][0]["message"] or "spot" in response["errors"][0]["message"]

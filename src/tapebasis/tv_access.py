@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import blocking_pool
 from .providers.tradingview import native
 from .providers.tradingview.core.services import screener_service, stock_screener_service
 from .providers_state import NoDataError, ProviderError
@@ -146,10 +147,8 @@ async def stock_screen(
     in 'await' expression`` and silently demotes the whole screener to
     Finviz-only, which is exactly what it did before this was fixed.
     """
-    import asyncio
-
     try:
-        return await asyncio.to_thread(
+        return await blocking_pool.run(
             stock_screener_service.screen_stocks,
             country=country,
             stock_type=stock_type,
@@ -165,10 +164,8 @@ async def technical_analysis(
     symbol: str, exchange: str = "NASDAQ", timeframe: str = "1D"
 ) -> dict[str, Any]:
     """TradingView's technical-analysis engine for one symbol."""
-    import asyncio
-
     try:
-        return await asyncio.to_thread(
+        return await blocking_pool.run(
             screener_service.analyze_coin, symbol, exchange=exchange, timeframe=timeframe
         )
     except Exception as exc:  # noqa: BLE001
@@ -182,13 +179,11 @@ async def news(symbol: str | None = None, *, limit: int = 20) -> dict[str, Any]:
     ``MARKETAUX_API_TOKEN`` the feed has nothing, which is reported as
     ``NoDataError`` rather than as an empty success.
     """
-    import asyncio
-
     from .providers.tradingview.core.services.marketaux_service import (
         fetch_news_summary,
     )
 
-    data = await asyncio.to_thread(fetch_news_summary, symbol, limit=limit)
+    data = await blocking_pool.run(fetch_news_summary, symbol, limit=limit)
     if not isinstance(data, dict):
         raise ProviderError(PROVIDER, "news feed returned a non-dict payload")
     if data.get("error"):

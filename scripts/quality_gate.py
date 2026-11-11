@@ -263,6 +263,11 @@ def doc_with_code() -> list[str]:
             continue
         if not head_exists:
             continue
+        if not (ROOT / relative).exists():
+            # A deleted module has no current surface to compare, and removing
+            # code never needs a documentation change. The deletion itself is
+            # judged by the documentation sweep, not by this check.
+            continue
         tracked = _git("ls-tree", "--name-only", "HEAD", "--", relative)
         if not tracked:
             # A brand-new module has no previous surface to change; its functions

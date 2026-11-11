@@ -81,9 +81,29 @@ Bulk quotes for a ticker list.
 
 Each row carries its own `data_provider`, `providers_answered` and an `agrees` flag, one ticker can
 be `ALL` while another is single-source or `NONE` in the same response. Multi-source rows also carry
-`price_source` (whose print the single `price` came from) and their own `comparisons` and `freshness`
-blocks. Rows where every provider came up empty carry a `misses` map explaining why. The FX day
-change is reported but never compared, exactly as in `stock_quote`.
+`price_source` (whose print the single `price` came from), a `fields` map and their own
+`comparisons` and `freshness` blocks. Rows where every provider came up empty carry a `misses` map
+explaining why. The FX day change is reported but never compared, exactly as in `stock_quote`.
+
+`fields` states provenance per value, because `data_provider` describes the row rather than each
+number in it:
+
+```jsonc
+{
+  "price": { "source": "YAHOO", "compared": ["TRADINGVIEW", "FINVIZ", "YAHOO"], "agreement": true },
+  "change_percent": { "source": "YAHOO", "compared": ["TRADINGVIEW", "FINVIZ", "YAHOO"], "agreement": true },
+  "previous_close": { "source": "YAHOO", "compared": ["YAHOO"], "agreement": null },
+  "volume": { "source": "TRADINGVIEW", "compared": ["TRADINGVIEW"], "agreement": null }
+}
+```
+
+A row can read `ALL` while `previous_close` was shaped by one provider. Only `price` and
+`change_percent` are compared, so only those carry an agreement verdict and a `compared` list of every
+provider that supplied a reading. The rest name the one provider whose value was used, chosen
+freshest-print-first: an uncontested field comes from whichever provider has it and can date its
+print, with the documented order breaking a tie on the same instant. A provider with no usable print
+time cannot outrank one that has it. `price_source` remains as the row-level shorthand for the
+provider the compared values were taken from.
 
 Bloomberg is asked about at most four tickers per call (`TAPEBASIS_BLOOMBERG_BATCH_MAX`), because its
 page path is paced at 10 s per request. The rest are listed in `warnings` and are not counted as
@@ -304,8 +324,16 @@ the caller wants Bloomberg's reading specifically, or a figure only Bloomberg pu
 
 `print_time: null` with `print_time_missing_reason` is the honest answer when the intraday series
 ends somewhere other than the quoted price: a timestamp describing a different number is not a print
-time. Symbols resolve through a curated alias table (`SPX` to `SPX:IND`, `EURUSD` to `EURUSD:CUR`,
-`BRK.B` to `BRK/B:US`), because Bloomberg answers a bad id with a 403 bot page rather than a 404.
+time. Symbols resolve through the instrument registry plus a curated alias table (`SPX` to `SPX:IND`,
+`EURUSD` to `EURUSD:CUR`, `BRK.B` to `BRK/B:US`), because Bloomberg answers a bad id with a 403 bot
+page rather than a 404.
+
+An instrument the registry states Bloomberg does not carry is refused with that reason instead of
+being guessed. `WTI` is a spot series with no Bloomberg quote page, and the mechanical fallback
+`WTI:US` is W&T Offshore Inc, a different company; `USOIL` resolved to `USOIL:US`, which answers a
+robot page. The response is `NONE` with a `NO_DATA` error naming the boundary, and no request is
+made. The same identity function decides what the cross-checked tools report, so the id in
+`resolutions` is always the id that was fetched.
 
 ### `bloomberg_markets`
 
@@ -320,7 +348,7 @@ as a snapshot, not a live tape.
 
 | Tool | Purpose |
 | --- | --- |
-| `tapebasis_health` | Read the cached drift/outage verdict and per-provider rate-limit state, or `refresh=True` to probe now |
+| `tapebasis_health` | Read the cached drift/outage verdict and per-provider rate-limit state, `refresh=True` to probe now, or `accept_baseline=True` to accept the shape being served |
 | `tapebasis_tool_map` | Return this catalogue with no upstream call |
 
 ---

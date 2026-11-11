@@ -66,6 +66,49 @@ probes compare against it, so a renamed field is caught even though the endpoint
 The baseline file matters: without it, the first probe of a shape that already drifted would be
 recorded as the new normal. With it, drift is detected on the next round.
 
+## Drift is judged on the fields this server reads
+
+A whole-shape comparison reports a removed key nobody reads as an outage. Two cosmetic upstream
+removals (`COMP.premarketProxyTicker` and `data.epv`) did exactly that: every tool response carried
+`degraded: true` and three warnings for as long as the process lived, which trains a reader to ignore
+the warning that matters.
+
+So every JSON probe declares `watched_keys`: the field names its parser actually reads. Drift is
+reported when one of those disappears. An **added** key is never drift, because a superset cannot
+break a parser. Matching is exact on the key and happens at any depth, since the same field sits at
+different depths per endpoint (a scanner row is `data[0].d`, a StockAnalysis quote is `data.p`).
+
+The full key-path fingerprint is still recorded, because it is the useful thing to look at when
+diagnosing a rename.
+
+## Resetting a baseline
+
+After an intentional upstream change that you have checked and adapted to, the stored baseline is
+stale and will keep reporting `DRIFT`. Ask the monitor to accept the shape it is serving now:
+
+```
+tapebasis_health(accept_baseline=True)
+```
+
+The result carries `baseline_accepted` with the probes it re-recorded and the ones it skipped, and a
+warning naming the accepted probes. A probe that is `DOWN` has no shape to record and keeps its old
+baseline.
+
+Accepting is a decision, not a convenience: it states that the current payload is correct and the
+difference was cosmetic or already adapted to. Only do it when you know the current shape is right,
+because it hides an active drift. Editing the state file by hand is no longer needed for this, though
+deleting it still works as a hard reset:
+
+```bash
+rm ~/.tapebasis/health_state.json
+```
+
+In Docker, the state lives on the `tapebasis-state` volume:
+
+```bash
+docker compose exec tapebasis rm /home/mcpuser/.tapebasis/state/health_state.json
+```
+
 ## Verdicts
 
 | Status | Meaning |
@@ -112,8 +155,9 @@ container healthcheck to hit every 30 s.
 ## `tapebasis_health`
 
 ```
-tapebasis_health()                 # cached verdict
-tapebasis_health(refresh=True)     # probe every upstream now
+tapebasis_health()                      # cached verdict
+tapebasis_health(refresh=True)          # probe every upstream now
+tapebasis_health(accept_baseline=True)  # accept the shape being served now
 ```
 
 Returns per-probe status, message, fingerprint, and whether the result matches the baseline, plus a
@@ -160,23 +204,15 @@ particular request rate-limited". Those are separate diagnostics:
 | Everything is `NONE` | DNS/network first, then `tapebasis_health(refresh=True)` |
 | `bloomberg_*` returns `NONE` / `UPSTREAM_BLOCKED` | there is no probe: check the next `bloomberg_*` call, and `rate_limits.BLOOMBERG.cooling_down_s` |
 
-## Resetting a baseline
+## Probes are paced like every other request
 
-After an intentional upstream change that you have adapted to (e.g. updating a parser), the stored
-baseline is stale and will keep reporting `DRIFT`. Delete the state file and let the next round
-re-baseline:
+A probe goes through its provider's limiter, so the monitor looks like the same well-behaved client
+the rest of the server does. Before this, three Yahoo probes were gathered at once against a limiter
+configured for one request per second and one in flight, on the same upstream the server paces
+precisely because it answers `429` to a burst.
 
-```bash
-rm ~/.tapebasis/health_state.json
-```
-
-In Docker, the state lives on the `tapebasis-state` volume:
-
-```bash
-docker compose exec tapebasis rm /home/mcpuser/.tapebasis/state/health_state.json
-```
-
-Only do this when you know the current shape is correct: resetting hides an active drift.
+A probe round therefore takes longer than an unpaced gather would, and costs nothing on the request
+path, which only reads the cached verdict.
 
 ## Why not just retry?
 

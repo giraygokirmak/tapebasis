@@ -437,6 +437,171 @@ async def test_prices_ask_bloomberg_and_keep_the_delay_visible(fake_providers, m
     assert row["exchange_delay"] == "15 Minutes"
     assert row["comparisons"]["price"]["values"]["BLOOMBERG"] == pytest.approx(331.9)
 
+
+@pytest.mark.asyncio
+async def test_prices_state_the_source_of_every_field(fake_providers, monkeypatch):
+    """A row can read ``ALL`` while ``previous_close`` came from one provider.
+
+    ``data_provider`` describes the row, not each number in it. Only ``price``
+    and ``change_percent`` are compared, so those two carry the agreement
+    verdict; ``previous_close`` and ``volume`` are shaped by one provider and say
+    so, which stops a single print being read as a cross-check.
+    """
+    from tapebasis import fv_access, tv_access, yh_access
+
+    async def tv_quotes(symbols):
+        return {
+            "AAPL": {
+                "ticker": "NASDAQ:AAPL",
+                "close": 331.9,
+                "change": -1.9,
+                "volume": 63160515,
+                "update_time": "2026-11-03T21:00:01+00:00",
+            }
+        }
+
+    async def fv_rows(symbols):
+        return [
+            {
+                "ticker": "AAPL",
+                "price": 331.9,
+                "change": -1.9,
+                "prevClose": 338.32,
+                "last_update": "2026-11-03T20:59:00+00:00",
+            }
+        ]
+
+    async def yh_quote(symbol):
+        return {
+            "price": 331.9,
+            "change_pct": -1.9,
+            "previous_close": 338.32,
+            "market_time": "2026-11-03T21:00:01+00:00",
+            "shortName": "Apple Inc.",
+        }
+
+    monkeypatch.setattr(tv_access, "quotes", tv_quotes)
+    monkeypatch.setattr(fv_access, "screener_rows", fv_rows)
+    monkeypatch.setattr(yh_access, "quote", yh_quote)
+
+    result = await tools_market.stock_prices("AAPL")
+    row = result["data"][0]
+    fields = row["fields"]
+
+    assert row["data_provider"] == "ALL"
+    # The compared fields carry every provider that supplied a reading.
+    assert set(fields["price"]["compared"]) == {"TRADINGVIEW", "FINVIZ", "YAHOO"}
+    assert fields["price"]["agreement"] is True
+    assert fields["price"]["source"] == row["price_source"]
+    # A field this tool does not compare names its one source, and does not
+    # claim a cross-check that never happened.
+    for name in ("previous_close", "volume"):
+        assert len(fields[name]["compared"]) == 1
+        assert fields[name]["compared"] == [fields[name]["source"]]
+        assert fields[name]["agreement"] is None
+    assert set(fields) == {"price", "change_percent", "previous_close", "volume"}
+
+
+@pytest.mark.asyncio
+async def test_prices_fill_an_uncontested_field_from_a_provider_that_has_it(
+    fake_providers, monkeypatch
+):
+    """Reading extras off the winning provider dropped data every row.
+
+    TradingView prints most recently and carries no ``previous_close``, so every
+    row reported ``null`` for a number four providers had shaped.
+    """
+    from tapebasis import fv_access, tv_access, yh_access
+
+    async def tv_quotes(symbols):
+        return {
+            "AAPL": {
+                "ticker": "NASDAQ:AAPL",
+                "close": 331.9,
+                "change": -1.9,
+                "volume": 63160515,
+                "update_time": "2026-11-03T21:00:01+00:00",
+            }
+        }
+
+    async def fv_rows(symbols):
+        return [
+            {
+                "ticker": "AAPL",
+                "price": 331.9,
+                "change": -1.9,
+                "prevClose": 338.32,
+                "last_update": "2026-11-03T20:59:00+00:00",
+            }
+        ]
+
+    async def yh_quote(symbol):
+        return {
+            "price": 331.9,
+            "change_pct": -1.9,
+            "previous_close": 338.32,
+            "market_time": "2026-11-03T21:00:01+00:00",
+        }
+
+    monkeypatch.setattr(tv_access, "quotes", tv_quotes)
+    monkeypatch.setattr(fv_access, "screener_rows", fv_rows)
+    monkeypatch.setattr(yh_access, "quote", yh_quote)
+
+    row = (await tools_market.stock_prices("AAPL"))["data"][0]
+    assert row["price_source"] == "TRADINGVIEW"
+    assert row["previous_close"] == pytest.approx(338.32)
+    # Yahoo printed at 21:00:01 and Finviz at 20:59:00, so the newer print
+    # supplies the uncontested field even though Finviz comes first in the
+    # documented order. Display order only breaks a tie on the same instant.
+    assert row["fields"]["previous_close"]["source"] == "YAHOO"
+    assert row["volume"] == 63160515
+    assert row["fields"]["volume"]["source"] == "TRADINGVIEW"
+
+
+@pytest.mark.asyncio
+async def test_prices_fill_ignores_a_provider_with_no_print_time(
+    fake_providers, monkeypatch
+):
+    """A provider that cannot date its reading must not outrank one that can."""
+    from tapebasis import fv_access, tv_access, yh_access
+
+    async def tv_quotes(symbols):
+        return {
+            "AAPL": {
+                "ticker": "NASDAQ:AAPL",
+                "close": 331.9,
+                "change": -1.9,
+                "update_time": "2026-11-03T21:00:01+00:00",
+            }
+        }
+
+    async def fv_rows(symbols):
+        return [
+            {
+                "ticker": "AAPL",
+                "price": 331.9,
+                "change": -1.9,
+                "prevClose": 338.32,
+                # No ``last_update``: an undated screener row.
+            }
+        ]
+
+    async def yh_quote(symbol):
+        return {
+            "price": 331.9,
+            "change_pct": -1.9,
+            "previous_close": 338.32,
+            "market_time": "2026-11-03T21:00:01+00:00",
+        }
+
+    monkeypatch.setattr(tv_access, "quotes", tv_quotes)
+    monkeypatch.setattr(fv_access, "screener_rows", fv_rows)
+    monkeypatch.setattr(yh_access, "quote", yh_quote)
+
+    row = (await tools_market.stock_prices("AAPL"))["data"][0]
+    assert row["fields"]["previous_close"]["source"] == "YAHOO"
+
+
 # ── StockAnalysis as the fifth leg ───────────────────────────────────────────
 
 

@@ -34,6 +34,7 @@ from .merge_helpers import (
     yahoo_news_fields,
 )
 from .providers_state import (
+    PROVIDER_ORDER,
     DataProvider,
     NoDataError,
     NotApplicable,
@@ -50,6 +51,7 @@ from .reconcile import (
     FieldSpec,
     Pair,
     ask,
+    field_source,
     finalize,
     providers_in,
 )
@@ -68,7 +70,11 @@ from .symbols import (
 #: asked in parallel like the rest, and the known delay of the former and the
 #: US-only coverage of the latter are handled by the print-time guards and the
 #: resolution notes rather than by keeping them out of the comparison.
-ALL_PROVIDERS = (TRADINGVIEW, FINVIZ, YAHOO, SA, BLOOMBERG)
+#:
+#: Derived from :data:`tapebasis.providers_state.PROVIDER_ORDER`, which is the
+#: single list of provider labels: a second literal here would let a tool ask a
+#: provider the reconciler does not order, or order one the tools never ask.
+ALL_PROVIDERS = PROVIDER_ORDER
 
 #: Read a numeric environment override without letting a typo crash the import.
 def _env_number(name: str, default: float) -> float:
@@ -172,45 +178,16 @@ async def _symbols_for(symbol: str) -> dict[str, Any]:
 def _bloomberg_resolution(symbol: str) -> Resolution:
     """Bloomberg's id for *symbol*, resolved without a request.
 
-    Bloomberg has no usable anonymous search endpoint and answers a bad id with
-    a bot-wall 403 rather than a 404, so identity is the instrument registry
-    plus a small alias table plus a mechanical rule
-    (:func:`tapebasis.bb_access.to_bloomberg`). A registry row whose Bloomberg
-    cell is ``None`` with a note ("no spot series") is resolved as not carried,
-    so the leg is ``NOT_ATTEMPTED`` with the stated boundary instead of being
-    sent an id that will answer a robot page.
+    Delegates to :func:`tapebasis.bb_access.resolve_bloomberg`, the one place
+    identity is decided, so this tool and ``bloomberg_quote`` can never disagree
+    about what a symbol means. Bloomberg has no usable anonymous search endpoint
+    and answers a bad id with a bot-wall 403 rather than a 404, so the decision
+    is the instrument registry plus a small alias table plus a mechanical rule.
+    A registry row whose Bloomberg cell is ``None`` with a note ("no spot
+    series") is resolved as not carried, so the leg is ``NOT_ATTEMPTED`` with the
+    stated boundary instead of being sent an id that will answer a robot page.
     """
-    from .symbols import instrument_row
-
-    row = instrument_row(symbol)
-    if row is not None and row.get("bloomberg") is None:
-        note = row.get("bloomberg_note") or "not carried by Bloomberg"
-        return Resolution(
-            query=symbol,
-            provider=BLOOMBERG,
-            symbol=None,
-            method="none",
-            note=note,
-        )
-    try:
-        bloomberg_id = bb_access.to_bloomberg(symbol)
-    except Exception as exc:  # noqa: BLE001 - a bad symbol is not a failure here
-        return Resolution(
-            query=symbol,
-            provider=BLOOMBERG,
-            symbol=None,
-            method="none",
-            note=getattr(exc, "message", None) or str(exc),
-        )
-    return Resolution(
-        query=symbol,
-        provider=BLOOMBERG,
-        symbol=bloomberg_id,
-        venue=bloomberg_id.rpartition(":")[2],
-        method="mechanical",
-        confidence=0.8,
-    )
-
+    return bb_access.resolve_bloomberg(symbol)
 
 
 def _is_fx(*resolutions: Any) -> bool:
@@ -708,9 +685,13 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
 
     Returns:
         Envelope whose ``data`` is a list of rows, each with ``symbol``,
-        ``price``, ``change_percent`` and its own ``data_provider``. On an FX
-        symbol the day change is reported but not compared, because spot FX has
-        no single official previous close.
+        ``price``, ``change_percent``, its own ``data_provider``, and a
+        ``fields`` map giving each value's provenance. ``price_source`` names
+        the provider the row's values were taken from, and ``fields`` states it
+        per field, because only ``price`` and ``change_percent`` are compared:
+        a row can read ``ALL`` while ``previous_close`` was shaped by one
+        provider. On an FX symbol the day change is reported but not compared,
+        because spot FX has no single official previous close.
     """
     requested = [t.strip().upper() for t in tickers.split(",") if t.strip()]
     if not requested:
@@ -1021,12 +1002,67 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             freshness["chosen"] = winner
 
         source = readings[winner]
+        # Per-field provenance, because ``data_provider`` describes the row, not
+        # each number in it. A row can read ``ALL`` while ``previous_close`` came
+        # from one provider that happened to shape it.
+        #
+        # ``compared`` means "was cross-checked here", so only the two fields
+        # this tool actually compares carry the set of providers that supplied a
+        # reading. The rest name their one source, because listing every provider
+        # that happened to have the number would claim a cross-check that did not
+        # happen.
+        from .freshness import parse_market_timestamp
+
+        def _freshness_rank(provider: str) -> tuple[int, float, int]:
+            """Sort key: newest print first, undated providers last.
+
+            A provider with no usable print time cannot argue that its reading is
+            current, so it must not outrank a provider that can. Within the same
+            print instant the documented order decides, exactly as it does for a
+            tie between compared fields.
+            """
+            stamp = parse_market_timestamp(readings[provider].get("price_timestamp"))
+            order_index = DEFAULT_ORDER.index(provider) if provider in DEFAULT_ORDER else 99
+            if stamp is None:
+                return (1, 0.0, order_index)
+            return (0, -stamp.timestamp(), order_index)
+
+        order = sorted(readings, key=_freshness_rank)
+
+        def _fill(name: str) -> tuple[Any, str]:
+            """The value and the provider it came from, freshest provider first.
+
+            An uncontested field is filled from whichever provider has it, using
+            the same freshness rule the compared fields use. Reading it off
+            ``source`` alone dropped data: TradingView usually prints most
+            recently and does not carry ``previous_close``, so every row reported
+            ``null`` for a number four other providers had shaped.
+            """
+            for provider in order:
+                value = readings[provider].get(name)
+                if value is not None:
+                    return value, provider
+            return None, winner
+
+        def _compared_field(name: str, comparison: dict[str, Any]) -> dict[str, Any]:
+            supplied = [p for p, r in readings.items() if r.get(name) is not None]
+            return field_source(winner, supplied or [winner], comparison.get("match"))
+
+        previous_close, previous_close_source = _fill("previous_close")
+        volume, volume_source = _fill("volume")
+        fields = {
+            "price": _compared_field("price", price_cmp),
+            "change_percent": _compared_field("change_percent", change_cmp),
+            "previous_close": field_source(previous_close_source, [previous_close_source], None),
+            "volume": field_source(volume_source, [volume_source], None),
+        }
         row: dict[str, Any] = {
             "symbol": symbol,
             "price": source.get("price"),
             "change_percent": source.get("change_percent"),
-            "previous_close": source.get("previous_close"),
-            "volume": source.get("volume"),
+            "previous_close": previous_close,
+            "volume": volume,
+            "fields": fields,
             "company": next(
                 (r.get("company") for r in readings.values() if r.get("company")), None
             ),

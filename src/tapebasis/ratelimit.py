@@ -23,6 +23,15 @@ helps, and what this module provides:
 
 State is per process and per provider. Nothing here is persisted: a restart
 should start optimistic.
+
+The ``asyncio`` primitives that enforce ``min_interval``/``max_inflight`` are
+created per event loop, on first use, and held in a weak table keyed by the
+loop. An ``asyncio.Semaphore`` or ``asyncio.Lock`` built at import time belongs
+to no loop and binds to the first one that *contends* it, so the second loop to
+contend raises ``RuntimeError: ... is bound to a different event loop``. That
+never shows up in a single-loop server, and it breaks the moment anything starts
+a second loop: a test runner, a script, a re-entrant start. ``http_pool`` grew
+the same weak loop key for the same reason; the limiters now match it.
 """
 from __future__ import annotations
 
@@ -30,6 +39,7 @@ import asyncio
 import os
 import random
 import time
+import weakref
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -61,16 +71,47 @@ class ProviderLimiter:
     min_interval: float
     max_inflight: int
     max_retries: int = 2
-    _semaphore: asyncio.Semaphore = field(init=False, repr=False)
     _last_call: float = field(default=0.0, init=False, repr=False)
-    _interval_lock: asyncio.Lock = field(init=False, repr=False)
     _cooldown_until: float = field(default=0.0, init=False, repr=False)
     _block_streak: int = field(default=0, init=False, repr=False)
     _cache: dict[str, tuple[float, Any]] = field(default_factory=dict, init=False, repr=False)
+    #: loop -> the primitives that loop owns. Weak, so a closed loop's
+    #: semaphore and lock go with it instead of binding the next loop to a
+    #: primitive it does not own.
+    _per_loop: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, tuple[asyncio.Semaphore, asyncio.Lock]]" = (
+        field(default_factory=weakref.WeakKeyDictionary, init=False, repr=False)
+    )
 
-    def __post_init__(self) -> None:
-        self._semaphore = asyncio.Semaphore(max(1, self.max_inflight))
-        self._interval_lock = asyncio.Lock()
+    # ── per-loop primitives ─────────────────────────────────────────────────
+    def _primitives(self) -> tuple[asyncio.Semaphore, asyncio.Lock]:
+        """The (semaphore, interval lock) pair belonging to the running loop.
+
+        Created on first use in each loop, so a limiter shared by two loops
+        never hands one loop's primitive to the other.
+
+        Returns:
+            The semaphore that bounds concurrency and the lock that serialises
+            the ``min_interval`` wait, both owned by the current loop.
+        """
+        loop = asyncio.get_running_loop()
+        pair = self._per_loop.get(loop)
+        if pair is None:
+            pair = (
+                asyncio.Semaphore(max(1, self.max_inflight)),
+                asyncio.Lock(),
+            )
+            self._per_loop[loop] = pair
+        return pair
+
+    @property
+    def _semaphore(self) -> asyncio.Semaphore:
+        """The concurrency gate for the running loop."""
+        return self._primitives()[0]
+
+    @property
+    def _interval_lock(self) -> asyncio.Lock:
+        """The lock that serialises ``min_interval`` spacing for this loop."""
+        return self._primitives()[1]
 
     # ── cooldown ────────────────────────────────────────────────────────────
     def note_rate_limited(self) -> float:

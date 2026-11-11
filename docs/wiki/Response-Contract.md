@@ -264,7 +264,17 @@ Real failures only:
 gold quote, TradingView publishes no options chain), which is a structural fact, not an error.
 
 Common codes: `UPSTREAM_TIMEOUT`, `UPSTREAM_RATE_LIMIT`, `UPSTREAM_BLOCKED`, `UPSTREAM_ERROR`,
-`NO_DATA`, `PARSE_ERROR`, `INVALID_TICKER`, `NOT_CONFIGURED`, `PROVIDER_ERROR`.
+`NO_DATA`, `PARSE_ERROR`, `INVALID_TICKER`, `NOT_CONFIGURED`, `SCHEMA_DRIFT`, `PROVIDER_ERROR`.
+
+Two codes are deliberately distinct rather than merged:
+
+- `TIMEOUT` is **this server's own deadline** expiring on a paced leg (Bloomberg's page path is paced
+  at 10 s per request), so the request may well have succeeded a moment later. Retrying is sensible.
+- `UPSTREAM_TIMEOUT` is the **upstream itself** timing out.
+
+Collapsing them would tell a caller to retry a leg that is not slow. `SCHEMA_DRIFT` is this server
+reporting that a provider's payload no longer parses, as distinct from a reconciliation disagreement,
+which is not an error at all and lives in `comparisons`.
 
 ### `warnings`
 Human-readable cautions. A disagreement adds `"Providers disagree on: price"`. A field that could not

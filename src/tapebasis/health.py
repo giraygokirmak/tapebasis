@@ -34,13 +34,24 @@ from typing import Any, Iterable
 
 import httpx
 
+from .providers_state import PROVIDER_ORDER
+from .ratelimit import call as paced_call
+
 TRADINGVIEW = "TRADINGVIEW"
 FINVIZ = "FINVIZ"
 YAHOO = "YAHOO"
 SA = "SA"
 
-#: Every provider the monitor probes, in display order.
-PROVIDERS: tuple[str, ...] = (TRADINGVIEW, FINVIZ, YAHOO, SA)
+#: Every provider the monitor probes, in display order. Derived from the one
+#: provider order in :mod:`tapebasis.providers_state` rather than written out
+#: again, so the monitor's list and the reconciliation list cannot disagree:
+#: they used to be two independent literals, and adding a leg to one silently
+#: left it unprobed.
+#:
+#: Bloomberg is the one leg left out. bloomberg.com gates plain HTTP clients on
+#: the TLS fingerprint, so an ``httpx`` probe there would report a false outage
+#: on a provider whose tools work (see :mod:`tapebasis.tools_health`).
+PROVIDERS: tuple[str, ...] = tuple(p for p in PROVIDER_ORDER if p != "BLOOMBERG")
 
 STATUS_OK = "OK"
 STATUS_DRIFT = "DRIFT"
@@ -68,6 +79,30 @@ def state_path() -> str:
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+)
+
+#: The chart payload fields ``yh_access`` builds a quote from. Listed once
+#: because the three Yahoo probes assert the same contract on three different
+#: tickers.
+_YAHOO_CHART_FIELDS: tuple[str, ...] = (
+    "meta",
+    "symbol",
+    "regularMarketPrice",
+    "regularMarketTime",
+    "regularMarketDayHigh",
+    "regularMarketDayLow",
+    "regularMarketVolume",
+    "regularMarketOpen",
+    "previousClose",
+    "chartPreviousClose",
+    "fiftyTwoWeekHigh",
+    "fiftyTwoWeekLow",
+    "shortName",
+    "currency",
+    "marketState",
+    "timestamp",
+    "quote",
+    "close",
 )
 
 
@@ -112,6 +147,14 @@ class Probe:
     markers: tuple[str, ...] = ()
     #: Dotted keys that must exist in the decoded JSON (JSON probes).
     required_keys: tuple[str, ...] = ()
+    #: Key *prefixes* whose removal is real drift. A probe that compares the
+    #: whole payload shape reports a removed key nobody reads as an outage: two
+    #: cosmetic upstream removals (``COMP.premarketProxyTicker`` and
+    #: ``data.epv``) made every response ``degraded: true`` for as long as the
+    #: process lived, which trains a reader to ignore the warning. Only the
+    #: fields the server actually reads belong here; an added key is never
+    #: drift either way, because a superset cannot break a parser.
+    watched_keys: tuple[str, ...] = ()
     json_body: dict[str, Any] | None = None
     headers: dict[str, str] | None = None
     #: Only these HTTP statuses count as healthy.
@@ -148,6 +191,49 @@ def _has_key(payload: Any, dotted: str) -> bool:
     return True
 
 
+def watched_shape(payload: Any, watched: tuple[str, ...]) -> set[str]:
+    """The names in *payload* that this server reads, as a flat set.
+
+    Deliberately coarser than :func:`key_paths`. A watched name is compared at
+    any depth, because the same field sits at different depths per endpoint: a
+    scanner row is ``data[0].d`` while a quote object is ``data.p``. What the
+    check answers is "is the field this parser reads still somewhere in the
+    payload", which is the invariant that actually breaks a tool, and it does so
+    without recording a depth per provider that would have to be maintained
+    separately.
+
+    The matching is exact on the key itself: a watched ``close`` matches
+    ``indicators.quote[].close`` and does not match ``closes`` or
+    ``chartPreviousClose``.
+
+    Args:
+        payload: The decoded JSON body.
+        watched: Field names the server reads.
+
+    Returns:
+        The subset of *watched* present in the payload.
+    """
+    if not watched:
+        return set()
+    wanted = set(watched)
+    found: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if not wanted - found:
+            return
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in wanted:
+                    found.add(key)
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(payload)
+    return found
+
+
 def _probes() -> list[Probe]:
     """The upstream contract this server depends on.
 
@@ -172,6 +258,15 @@ def _probes() -> list[Probe]:
             url="https://finviz.com/api/indices_data",
             headers={"User-Agent": BROWSER_UA, "Accept": "application/json, text/plain, */*"},
             required_keys=("DJI", "SPX", "COMP"),
+            # Exactly the members ``market_service.get_market_indices`` reads.
+            # The island also carries presentation keys the server never looks
+            # at; their removal is not this server's outage.
+            watched_keys=(
+                "lastClose", "prevClose", "perfDayUsd", "perfDayPct",
+                "lastOpen", "lastHigh", "lastLow", "lastDate",
+                "afterClose", "afterChange",
+                "date", "open", "high", "low", "close", "volume",
+            ),
         ),
         Probe(
             id="finviz.quote_html",
@@ -195,6 +290,7 @@ def _probes() -> list[Probe]:
             url="https://finviz.com/api/news/quote/AAPL",
             headers={"User-Agent": BROWSER_UA, "Accept": "application/json, text/plain, */*"},
             required_keys=("html",),
+            watched_keys=("html",),
         ),
         # ── TradingView (native) ────────────────────────────────────────────
         Probe(
@@ -209,6 +305,9 @@ def _probes() -> list[Probe]:
                 "columns": ["name", "close", "change", "update_time"],
             },
             required_keys=("totalCount", "data.0.d"),
+            # The scanner is read through a fixed column list, so the row
+            # columns are where a rename would break every quote.
+            watched_keys=("totalCount", "d", "s"),
         ),
         Probe(
             id="tradingview.symbol_search",
@@ -220,6 +319,7 @@ def _probes() -> list[Probe]:
             ),
             headers={"User-Agent": BROWSER_UA, "Origin": "https://www.tradingview.com"},
             required_keys=("symbols",),
+            watched_keys=("symbol", "exchange"),
         ),
         # ── Yahoo Finance ───────────────────────────────────────────────────
         Probe(
@@ -229,6 +329,7 @@ def _probes() -> list[Probe]:
             url="https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=5d",
             headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
             required_keys=("chart.result.0.meta", "chart.result.0.timestamp"),
+            watched_keys=_YAHOO_CHART_FIELDS,
         ),
         Probe(
             id="yahoo.chart_fx",
@@ -237,6 +338,7 @@ def _probes() -> list[Probe]:
             url="https://query1.finance.yahoo.com/v8/finance/chart/EURUSD%3DX?interval=1d&range=5d",
             headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
             required_keys=("chart.result.0.meta", "chart.result.0.timestamp"),
+            watched_keys=_YAHOO_CHART_FIELDS,
         ),
         Probe(
             id="yahoo.chart_crypto",
@@ -245,6 +347,7 @@ def _probes() -> list[Probe]:
             url="https://query1.finance.yahoo.com/v8/finance/chart/BTC-USD?interval=1d&range=5d",
             headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
             required_keys=("chart.result.0.meta", "chart.result.0.timestamp"),
+            watched_keys=_YAHOO_CHART_FIELDS,
         ),
         # ── StockAnalysis ───────────────────────────────────────────────────
         Probe(
@@ -258,6 +361,13 @@ def _probes() -> list[Probe]:
             # of the leg silently reporting "no price" forever. The sibling
             # ``status`` is an HTTP-style integer, so it is not part of the path.
             required_keys=("data.p",),
+            # Exactly what ``sa_access.shape_quote`` reads. The quote object also
+            # carries fields this server never looks at (``epv`` among them);
+            # losing one of those is not this server's outage.
+            watched_keys=(
+                "p", "cl", "cp", "c", "o", "h", "l", "v", "h52", "l52",
+                "ts", "ms", "ex", "td", "ep", "e", "es", "ec", "ecp", "ets",
+            ),
         ),
     ]
 
@@ -279,6 +389,13 @@ class ProbeResult:
     missing: list[str] = field(default_factory=list)
     shape_hash: str | None = None
     baseline_hash: str | None = None
+    #: Fingerprint of the watched fields only (see
+    #: :attr:`Probe.watched_keys`), which is what drift is judged on for a JSON
+    #: probe. ``None`` for an HTML probe, which judges markers directly.
+    watched_hash: str | None = None
+    #: The watched field names found in this payload, so a reader can see what
+    #: the verdict was actually judged on.
+    watched: list[str] = field(default_factory=list)
     drift: bool = False
     down: bool = False
 
@@ -332,16 +449,87 @@ class HealthMonitor:
     def _baseline(self, probe_id: str) -> dict[str, Any] | None:
         return self._state.get("baselines", {}).get(probe_id)
 
-    def _record_baseline(self, probe_id: str, shape_hash: str, keys: list[str]) -> None:
-        self._state.setdefault("baselines", {})[probe_id] = {
+    def _record_baseline(
+        self,
+        probe_id: str,
+        shape_hash: str,
+        keys: list[str],
+        watched: set[str] | None = None,
+    ) -> None:
+        """Store the shape a probe is compared against, and persist it.
+
+        Both fingerprints are kept: the whole-payload one for the record (it is
+        what the state file has always held, and it is useful when diagnosing a
+        rename), and the watched-field one, which is what a JSON probe actually
+        judges drift on.
+        """
+        entry: dict[str, Any] = {
             "shape_hash": shape_hash,
             "keys": keys,
             "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
+        if watched is not None:
+            entry["watched"] = sorted(watched)
+            entry["watched_hash"] = fingerprint(watched)
+        self._state.setdefault("baselines", {})[probe_id] = entry
         _save_state(self._state)
+
+    def accept_baseline(self) -> dict[str, Any]:
+        """Re-record every current probe result as the new baseline.
+
+        Drift is only cleared by accepting the shape the upstream serves now.
+        Without this the verdict was permanent: an intentional upstream change
+        that the parser already handles kept reporting ``DRIFT``, and the only
+        way out was deleting the state file by hand.
+
+        Accepting is a decision, not a convenience: it says "the current payload
+        is correct and the difference was cosmetic or already adapted to". A
+        probe currently ``DOWN`` has no shape to record and keeps its old
+        baseline.
+
+        Returns:
+            ``{"accepted": [probe ids], "skipped": [probe ids]}`` so the caller
+            can report exactly what changed.
+        """
+        accepted: list[str] = []
+        skipped: list[str] = []
+        for probe_id, result in self.results.items():
+            if result.down or result.status == STATUS_DOWN or not result.checked_at:
+                skipped.append(probe_id)
+                continue
+            stored = (self._state.get("baselines", {}).get(probe_id) or {})
+            shape_hash = result.shape_hash or stored.get("shape_hash") or fingerprint([probe_id])
+            keys = list(stored.get("keys") or [])
+            # The watched set is the *current* payload's, not the old baseline's:
+            # accepting a shape means agreeing that the fields present now are the
+            # ones that matter. Copying the old set forward would keep reporting
+            # the very removal the caller just accepted.
+            watched = set(result.watched) if result.watched_hash else None
+            self._record_baseline(probe_id, shape_hash, keys, watched)
+            result.status = STATUS_OK
+            result.drift = False
+            result.message = "baseline accepted"
+            accepted.append(probe_id)
+        self._state["last_run"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _save_state(self._state)
+        return {"accepted": accepted, "skipped": skipped}
 
     # ── probing ─────────────────────────────────────────────────────────────
     async def _probe(self, probe: Probe, client: httpx.AsyncClient) -> ProbeResult:
+        """Run one probe, paced and bounded by that provider's limiter.
+
+        The probes used to be gathered all at once on a private client, which
+        bypassed every pacing rule this server otherwise enforces: three Yahoo
+        probes went out simultaneously against a limiter configured for one
+        request per second and one in flight, on the same provider the rest of
+        the code paces precisely because it answers 429 to a burst. A probe
+        round costs 300 s of wall clock; it has no reason to be fast, and every
+        reason to look like a well-behaved client.
+
+        Returns:
+            The probe's result. Failures are recorded, never raised, so one
+            broken endpoint cannot hide the verdict for the others.
+        """
         result = ProbeResult(
             id=probe.id,
             provider=probe.provider,
@@ -349,8 +537,9 @@ class HealthMonitor:
             url=probe.url,
         )
         started = time.monotonic()
-        try:
-            response = await client.request(
+
+        async def _once() -> httpx.Response:
+            return await client.request(
                 probe.method,
                 probe.url,
                 headers=probe.headers,
@@ -358,6 +547,9 @@ class HealthMonitor:
                 timeout=PROBE_TIMEOUT,
                 follow_redirects=True,
             )
+
+        try:
+            response = await paced_call(probe.provider, _once)
             result.latency_ms = round((time.monotonic() - started) * 1000, 1)
             result.http_status = response.status_code
             result.checked_at = time.time()
@@ -407,7 +599,10 @@ class HealthMonitor:
         missing = [key for key in probe.required_keys if not _has_key(payload, key)]
         result.missing = missing
         keys = key_paths(payload)
+        watched = watched_shape(payload, probe.watched_keys)
+        result.watched = sorted(watched)
         result.shape_hash = fingerprint(keys)
+        result.watched_hash = fingerprint(watched) if probe.watched_keys else None
 
         baseline = self._baseline(probe.id)
         result.baseline_hash = baseline["shape_hash"] if baseline else None
@@ -423,9 +618,27 @@ class HealthMonitor:
             return result
 
         if baseline is None:
-            self._record_baseline(probe.id, result.shape_hash, keys)
+            self._record_baseline(probe.id, result.shape_hash, keys, watched)
             result.status = STATUS_OK
             result.message = "baseline recorded"
+            return result
+
+        if probe.watched_keys:
+            # Only a field the server reads can be this server's outage. An
+            # upstream that drops a key nobody looks at is still serving every
+            # number here, and reporting it as drift made every response
+            # ``degraded`` for the life of the process.
+            gone = sorted(set(baseline.get("watched") or []) - watched)
+            if gone:
+                result.status = STATUS_DRIFT
+                result.drift = True
+                result.message = (
+                    "watched field(s) no longer in the payload ("
+                    + ", ".join(gone[:6])
+                    + "): upstream API/schema changed"
+                )
+            else:
+                result.status = STATUS_OK
             return result
 
         if baseline["shape_hash"] != result.shape_hash:
@@ -449,7 +662,14 @@ class HealthMonitor:
         return result
 
     async def run_once(self, *, force: bool = False) -> dict[str, ProbeResult]:
-        """Probe every endpoint once (serialised; concurrent callers share)."""
+        """Probe every endpoint once (serialised; concurrent callers share).
+
+        Each probe goes through its provider's limiter, so a round is paced the
+        way the rest of the server is: Yahoo's three probes are spread a second
+        apart and never overlap. The round is therefore slower than an unpaced
+        gather and costs nothing on the request path, which only reads the
+        cached verdict.
+        """
         async with self._lock:
             if not force and (time.monotonic() - self._last_run) < self.ttl:
                 return dict(self.results)

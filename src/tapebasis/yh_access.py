@@ -21,6 +21,7 @@ import asyncio
 import os
 from typing import Any
 
+from . import blocking_pool, singleflight
 from .http_pool import shared_client
 from .providers_state import NoDataError, ProviderError
 from .ratelimit import RateLimited, call, limiter
@@ -103,8 +104,18 @@ async def _get(
         paced.cache_set(key, payload)
         return payload
 
-    try:
+    async def _fetch_once() -> dict[str, Any]:
+        # Two identical questions in the same instant used to be two requests,
+        # serialised behind ``max_inflight=1``: five concurrent identical
+        # ``stock_quote`` calls made five Yahoo requests. The limiter is what
+        # paces this upstream, so the duplicate must not reach it at all.
+        cached_now = paced.cache_get(key, _CACHE_TTL)
+        if isinstance(cached_now, dict):
+            return cached_now
         return await call(PROVIDER, _once)
+
+    try:
+        return await singleflight.run(("yahoo", key), _fetch_once)
     except RateLimited as exc:
         raise ProviderError(
             PROVIDER,
@@ -412,7 +423,7 @@ async def options(symbol: str, expiry: str | None = None) -> dict[str, Any]:
 
     async def _once() -> dict[str, Any]:
         # ``call`` did the pacing; the handshake is inside the thread, not here.
-        return await asyncio.to_thread(get_options_chain, symbol, expiry)
+        return await blocking_pool.run(get_options_chain, symbol, expiry)
 
     data = await call(PROVIDER, _once)
     if not isinstance(data, dict):

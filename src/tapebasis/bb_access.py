@@ -115,6 +115,88 @@ def _registry_bloomberg_id(symbol: str) -> str | None:
     return str(bloomberg) if bloomberg else None
 
 
+def _registry_declines(symbol: str) -> str | None:
+    """The registry's stated reason Bloomberg does not carry *symbol*, if any.
+
+    A registry row with an empty Bloomberg cell is a boundary the instrument
+    itself declares ("Bloomberg's quote page carries no WTI spot series; its WTI
+    generic future is CL1:COM, a different instrument, not substituted"). That
+    is not a resolution failure to be papered over with a mechanical guess: the
+    guess lands on an unrelated company. ``WTI`` mechanically becomes ``WTI:US``,
+    which is W&T Offshore Inc at 2.89, and ``USOIL`` becomes ``USOIL:US``, which
+    answers a robot page.
+
+    Returns:
+        The reason, or ``None`` when the registry has no row or carries it.
+    """
+    from .symbols import instrument_row
+
+    row = instrument_row(symbol)
+    if row is None or row.get("bloomberg") is not None:
+        return None
+    return str(
+        row.get("bloomberg_note") or "not carried by bloomberg.com"
+    )
+
+
+def resolve_bloomberg(symbol: str) -> "Resolution":
+    """Bloomberg's identity for *symbol*, as the one place it is decided.
+
+    Every path that asks Bloomberg goes through this function, so the id a
+    response *reports* and the id it *fetched* cannot disagree. That was a real
+    bug: ``tools_market`` resolved through the instrument registry (which says
+    ``WTI`` has no Bloomberg spot series) while :func:`to_bloomberg` guessed
+    ``WTI:US``, and the single-provider tool priced W&T Offshore Inc at 2.89 for
+    a caller who asked for crude.
+
+    The order is:
+
+    1. a registry row that carries the instrument wins,
+    2. a registry row that declines it is a stated boundary, not a failure,
+    3. the alias table and the mechanical rule fill in what the registry does
+       not describe.
+
+    Args:
+        symbol: Anything the instrument is commonly called, or an id already in
+            Bloomberg's spelling.
+
+    Returns:
+        A :class:`tapebasis.symbols.Resolution` whose ``symbol`` is the quote id
+        to fetch, or ``None`` with ``note`` stating why Bloomberg does not
+        carry the instrument.
+    """
+    from .symbols import Resolution
+
+    query = (symbol or "").strip().upper().replace(" ", "")
+    declined = _registry_declines(query)
+    if declined is not None:
+        return Resolution(
+            query=symbol,
+            provider=PROVIDER,
+            symbol=None,
+            method="none",
+            note=declined,
+        )
+    try:
+        bloomberg_id = to_bloomberg(symbol)
+    except NoDataError as exc:
+        return Resolution(
+            query=symbol,
+            provider=PROVIDER,
+            symbol=None,
+            method="none",
+            note=exc.message,
+        )
+    return Resolution(
+        query=symbol,
+        provider=PROVIDER,
+        symbol=bloomberg_id,
+        venue=bloomberg_id.rpartition(":")[2],
+        method="mechanical",
+        confidence=0.8,
+    )
+
+
 def to_bloomberg(symbol: str) -> str:
     """Resolve a caller's symbol to a Bloomberg quote id.
 
@@ -126,14 +208,30 @@ def to_bloomberg(symbol: str) -> str:
 
     * a registry instrument wins (``SPX`` -> ``SPX:IND``, ``XAUUSD`` ->
       ``XAUUSD:CUR``, ``CL1!`` -> ``CL1:COM``),
+    * a registry instrument Bloomberg does not carry is refused with its stated
+      reason (``WTI`` is a spot series with no Bloomberg page; ``WTI:US`` is
+      W&T Offshore Inc, a different company),
     * a known alias wins (``DAX`` -> ``DAX:IND``),
     * an id that already carries a Bloomberg suffix is kept (``BRK/B:US``),
     * ``EXCHANGE:TICKER`` drops the exchange (``NASDAQ:AAPL`` -> ``AAPL:US``),
     * a six-letter currency pair becomes ``PAIR:CUR`` (``GBPUSD`` -> ``GBPUSD:CUR``),
     * anything else is a US equity (``BRK.B`` -> ``BRK/B:US``).
 
-    A wrong guess is cheap: the parser reports that Bloomberg has no quote
-    object for the page instead of presenting a number.
+    Prefer :func:`resolve_bloomberg`: it is the identity decision every caller
+    should make, and it reports *why* an instrument is not carried instead of
+    raising. This function stays for callers that only need the id, and it
+    raises ``NoDataError`` where the registry declines an instrument rather than
+    guessing a ticker that belongs to something else.
+
+    Args:
+        symbol: The instrument as the caller spelled it.
+
+    Returns:
+        Bloomberg's quote id, e.g. ``AAPL:US``.
+
+    Raises:
+        NoDataError: The symbol is empty, has no ticker part, or names an
+            instrument the registry states Bloomberg does not carry.
     """
     raw = (symbol or "").strip()
     if not raw:
@@ -144,6 +242,9 @@ def to_bloomberg(symbol: str) -> str:
     registry_id = _registry_bloomberg_id(upper)
     if registry_id:
         return registry_id
+    declined = _registry_declines(upper)
+    if declined is not None:
+        raise NoDataError(PROVIDER, declined)
     alias = _ALIASES.get(upper)
     if alias:
         return alias
@@ -443,9 +544,29 @@ def shape_board(payload: dict[str, Any]) -> dict[str, Any]:
 async def quote(symbol: str) -> tuple[dict[str, Any], str]:
     """Bloomberg's quote page for *symbol*, shaped and labelled.
 
-    Returns the shaped payload plus the upstream URL it came from.
+    Identity comes from :func:`resolve_bloomberg`, the same function the
+    cross-checked tools use, so the id reported in ``resolutions`` is always the
+    id that was fetched. An instrument the registry states Bloomberg does not
+    carry is a ``NoDataError`` with that reason, never a mechanical guess that
+    lands on an unrelated company.
+
+    Args:
+        symbol: The instrument as the caller spelled it.
+
+    Returns:
+        The shaped payload plus the upstream URL it came from.
+
+    Raises:
+        NoDataError: Bloomberg does not carry this instrument, or the page
+            exists but has no quote object.
     """
-    bloomberg_id = to_bloomberg(symbol)
+    resolution = resolve_bloomberg(symbol)
+    if not resolution.found:
+        raise NoDataError(
+            PROVIDER,
+            resolution.note or f"bloomberg.com does not carry {symbol!r}",
+        )
+    bloomberg_id = resolution.require()
     path = f"/quote/{bloomberg_id}"
     html = await _fetch_html(path, f"quote:{bloomberg_id}")
     payload = _payload(html).get("props", {}).get("pageProps", {})
@@ -466,4 +587,12 @@ async def board() -> tuple[dict[str, Any], str]:
     return shape_board(payload), f"{_BASE}{path}"
 
 
-__all__ = ["PROVIDER", "board", "quote", "shape_board", "shape_quote", "to_bloomberg"]
+__all__ = [
+    "PROVIDER",
+    "board",
+    "quote",
+    "resolve_bloomberg",
+    "shape_board",
+    "shape_quote",
+    "to_bloomberg",
+]

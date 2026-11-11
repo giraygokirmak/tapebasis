@@ -24,7 +24,6 @@ loop, a deeper hole is the failure mode.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import random
 import string
@@ -32,6 +31,7 @@ from typing import Any
 
 import httpx
 
+from ... import blocking_pool, singleflight
 from ...http_pool import shared_client
 from ...ratelimit import RateLimited, call, limiter
 from ...symbols import INSTRUMENTS, INDEX_SNAPSHOT
@@ -214,7 +214,16 @@ async def scan(
         paced.cache_set(key, rows)
         return rows
 
-    return await call(PROVIDER, _once)
+    async def _scan_once() -> list[dict[str, Any]]:
+        # Identical concurrent scans are one request. The scanner is paced, so a
+        # duplicate does not arrive at the upstream twice, it queues: two tools
+        # asking for the same symbol in one turn paid a full extra interval.
+        cached_now = paced.cache_get(key, ttl=15.0)
+        if cached_now is not None:
+            return cached_now
+        return await call(PROVIDER, _once)
+
+    return await singleflight.run(("tradingview", key), _scan_once)
 
 
 async def quote(ticker: str) -> dict[str, Any]:
@@ -463,7 +472,7 @@ async def history(
     async def _once() -> dict[str, Any]:
         await paced.wait_turn()
         try:
-            rows = await asyncio.to_thread(
+            rows = await blocking_pool.run(
                 _history_blocking, ticker, interval, bars, timeout
             )
         except SymbolNotFound:

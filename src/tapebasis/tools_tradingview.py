@@ -15,10 +15,9 @@ Two exceptions genuinely combine providers:
 """
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
-from . import fv_access, sentiment, tv_access, yh_access
+from . import blocking_pool, fv_access, sentiment, tv_access, yh_access
 from .health import FINVIZ, MONITOR, TRADINGVIEW, YAHOO
 from .providers_state import DataProvider, NotApplicable, ProviderError, envelope, error_code
 from .reconcile import ask, field_source, finalize, providers_in, single
@@ -32,7 +31,10 @@ from .providers.tradingview.core.services import (
 )
 from .symbols import resolve_tradingview, strip_exchange, to_finviz
 
-_OFFLOAD = asyncio.to_thread
+#: Blocking provider work goes to its own bounded pool, not the loop's default
+#: executor, so a slow screener or backtest cannot starve a fast path that needs
+#: a thread (see :mod:`tapebasis.blocking_pool`).
+_OFFLOAD = blocking_pool.run
 
 
 async def _run(fn, /, *args, **kwargs):
@@ -423,7 +425,7 @@ async def stock_backtest(
         payload = await tv_access.history_candles(
             tv_res.symbol, period=period, interval=interval
         )
-        result = await asyncio.to_thread(_run, payload["candles"], "TradingView")
+        result = await _OFFLOAD(_run, payload["candles"], "TradingView")
         if result.get("error"):
             raise ProviderError(TRADINGVIEW, str(result["error"]))
         return result
@@ -434,7 +436,7 @@ async def stock_backtest(
         payload = await yh_access.history_candles(
             yh_res.symbol, period=period, interval=interval
         )
-        result = await asyncio.to_thread(_run, payload["candles"], "Yahoo Finance")
+        result = await _OFFLOAD(_run, payload["candles"], "Yahoo Finance")
         if result.get("error"):
             raise ProviderError(YAHOO, str(result["error"]))
         return result
@@ -514,7 +516,7 @@ async def stock_backtest_compare(
         if not tv_res.found:
             raise NotApplicable(TRADINGVIEW, tv_res.note or f"no TradingView symbol for {symbol}")
         payload = await tv_access.history_candles(tv_res.symbol, period=period)
-        result = await asyncio.to_thread(
+        result = await _OFFLOAD(
             backtest_service.compare_strategies,
             ticker,
             period=period,
@@ -530,7 +532,7 @@ async def stock_backtest_compare(
         if not yh_res.found:
             raise NotApplicable(YAHOO, yh_res.note or f"no Yahoo symbol for {symbol}")
         payload = await yh_access.history_candles(yh_res.symbol, period=period)
-        result = await asyncio.to_thread(
+        result = await _OFFLOAD(
             backtest_service.compare_strategies,
             ticker,
             period=period,

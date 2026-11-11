@@ -67,6 +67,11 @@ Some behaviours are not configurable, because they are safety properties rather 
 - **A paced request, waited for once.** A provider request waits its turn in the shared limiter, and
   the request body does not wait a second time. Waiting in both places cost a full extra
   `min_interval` on every single call.
+- **Primitives that belong to their loop.** The semaphore and interval lock behind
+  `min_interval` / `max_inflight` are created per event loop on first use and keyed weakly by the
+  loop, like the pooled HTTP clients. An `asyncio` primitive built at import time binds to the first
+  loop that contends it, and the second loop to contend raises
+  `RuntimeError: ... is bound to a different event loop`.
 - **A per-process gate.** Limiter state is process-local; running several containers multiplies the
   effective request rate.
 
@@ -90,6 +95,30 @@ questions of one agent turn without ever serving a price a live feed would disag
 
 Current limiter state (`min_interval_s`, `max_inflight`, `cooling_down_s`, `block_streak`,
 `cached_entries`) is reported by `tapebasis_health` and `GET /health` under `rate_limits`.
+
+## Concurrency and blocking work
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TAPEBASIS_BLOCKING_THREADS` | `4` | Worker ceiling for the pool that runs blocking provider calls |
+
+Half of the provider layer is synchronous: TradingView's screener posts with `requests` and sleeps
+through its own backoff, its history path opens `urllib`, and the EGX, options and backtest services
+do the same. Each of those has to be moved off the event loop. They used `asyncio.to_thread`, which
+runs on the loop's default executor, shared with everything else that pool serves: twelve workers on
+an eight-core host, and a whole-market screen can occupy every one of them for seconds while a fast
+path that needs one thread queues behind it.
+
+Blocking provider work therefore gets its own pool with its own ceiling
+([`blocking_pool.py`](https://github.com/giraygokirmak/tapebasis/blob/main/src/tapebasis/blocking_pool.py)).
+The default is deliberately smaller than the default executor's, because this is the *slow* lane: the
+limiter, not this number, controls the request rate, and this only bounds how many slow calls can sit
+in flight. The pool is created once per event loop and shut down with the server lifespan.
+
+Nothing collapses duplicate concurrent work at the tool level: identical requests that arrive in the
+same instant are merged by [`singleflight.py`](https://github.com/giraygokirmak/tapebasis/blob/main/src/tapebasis/singleflight.py),
+so five identical `stock_quote` calls make one Yahoo request instead of five serialised behind
+`max_inflight=1`. Nothing is cached there: that stays each provider's short TTL cache.
 
 ## Finviz (provider layer)
 

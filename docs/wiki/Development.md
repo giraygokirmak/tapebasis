@@ -56,7 +56,7 @@ contract did not expect:
 | Scanner partitioning | A mixed-market scanner batch silently dropped tickers; unresolved symbols are retried in `global` |
 | Yahoo fabricated FX ticker | `XAUUSD=X` is a 404; the suffix rule now requires two real ISO currency codes |
 | Finviz index 404 | `SPX` and `DJI` have no Finviz quote page, and `COMP` is Compass Inc, a real equity |
-| Blocking screener | `screen_stocks` is sync pandas/requests and must run under `asyncio.to_thread` |
+| Blocking screener | `screen_stocks` is sync pandas/requests and must run in a worker thread (`blocking_pool.run`), never on the event loop |
 | TradingView search lies | Search offers `OANDA:BTCUSD`; the scanner has no row. Candidates are verified against the scanner, so BTCUSD resolves to `BITSTAMP:BTCUSD` |
 | Silent per-provider misses | `stock_prices` must report a `misses` map rather than dropping a ticker |
 | Session-relative fields | A pre-market Finviz close against a prior-close Yahoo print produced a false `change_percent` conflict, now `not_comparable` |

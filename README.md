@@ -393,7 +393,15 @@ signal, and it still shows up under `rate_limits`.
 
 Each successful probe records a SHA-256 fingerprint of the payload's key paths as a **baseline**
 persisted to `~/.tapebasis/health_state.json`. Later probes compare against it, so a renamed
-field is caught even if the endpoint still returns 200. Verdicts:
+field is caught even if the endpoint still returns 200. Drift is judged on the **fields this server
+reads**: each JSON probe declares its watched keys, and only one of those disappearing counts as
+drift, because an upstream dropping a key nobody looks at is still serving every number correctly.
+An added key is never drift, since a superset cannot break a parser.
+
+Probes go through their provider's limiter like every other request, so the monitor paces itself on
+the same upstreams the server paces. `tapebasis_health(accept_baseline=True)` re-records the current
+shape after an upstream change you have checked and adapted to; a probe that is `DOWN` keeps its old
+baseline. Verdicts:
 
 - `OK`: status and shape match the baseline
 - `DRIFT`: answered, but the status/shape changed (renamed field, moved route, missing marker)
@@ -514,6 +522,7 @@ Everything is optional. See [`.env.example`](.env.example) for the full list.
 | `TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE` | `12.0` | Longest `stock_quote` waits for the Bloomberg leg before recording a `TIMEOUT` |
 | `TAPEBASIS_BLOOMBERG_BATCH_MAX` | `4` | Tickers per `stock_prices` call asked of Bloomberg (its page path is paced at 10 s) |
 | `TAPEBASIS_BLOOMBERG_BATCH_BUDGET` | `12.0` | Total seconds one `stock_prices` call spends on the Bloomberg leg before naming the rest in `warnings` |
+| `TAPEBASIS_BLOCKING_THREADS` | `4` | Worker ceiling for the pool that runs blocking provider calls, separate from the loop's default executor |
 | `TAPEBASIS_TV_MAX_RETRIES`, `TAPEBASIS_FINVIZ_MAX_RETRIES`, `TAPEBASIS_YAHOO_MAX_RETRIES` | `2` | Retries per provider request (the shared cooldown is not tunable) |
 | `MARKETAUX_API_TOKEN` | - | Optional. Enables licensed Marketaux news + entity sentiment |
 | `MARKETAUX_DAILY_BUDGET` | `90` | Marketaux request cap per day (free plan is 100) |

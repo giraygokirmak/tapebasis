@@ -728,6 +728,108 @@ warm, and the parallel provider legs from 1328 ms to 986 ms with the same provid
 
 ---
 
+## 39. An `asyncio` primitive belongs to the loop that created it
+
+**Decision:** the semaphore and interval lock behind `min_interval` / `max_inflight` are created per
+event loop on first use, in a weak table keyed by the loop, exactly as `http_pool` keys its clients
+and `singleflight` keys its in-flight table.
+
+**Why:** an `asyncio.Semaphore` or `asyncio.Lock` built at import time belongs to no loop. It binds to
+the first loop that *contends* it, and the second loop to contend raises
+`RuntimeError: <asyncio.locks.Lock ...> is bound to a different event loop`. That is invisible in a
+single-loop server and breaks the moment anything starts a second loop: a test runner, a script, a
+re-entrant start. The limiter is process-wide and shared, so it was the one place where "one per
+loop" had not been applied.
+
+**Consequence:** a limiter's pacing state (`_last_call`, cooldown, cache) stays process-wide on
+purpose, because it describes the upstream's patience rather than any one loop. Only the primitives
+that a loop must own are per loop.
+
+---
+
+## 40. Identical concurrent work is merged, and never cached by that merge
+
+**Decision:** `singleflight.py` runs `factory()` once per equal key per loop. The first caller
+performs the work, everyone else awaits the same task, and the entry disappears when it finishes.
+
+**Why:** a cache answers "have I done this already" and cannot answer "am I doing this right now", so
+two identical questions in the same instant both miss it and both go to the network. Measured before
+the module existed: 8 concurrent `resolve("AAPL", "TRADINGVIEW")` calls made 8 upstream searches, and
+5 concurrent identical `stock_quote` calls made 5 Yahoo requests, serialised behind
+`max_inflight=1`, so cost grew linearly with the caller count. An agent asking for one quote and then
+for a batch in the same turn does exactly that.
+
+**A cancelled waiter is detached, not propagated.** Waiters use `asyncio.shield`, so one caller
+giving up does not cancel a request the others are still waiting on. A task whose every waiter is
+gone still finishes; it is one request the process was already making.
+
+**Single-flight is not a cache.** Nothing is stored, so a request made a moment later is a real
+request. Caching stays each provider's short TTL cache, where the staleness ceiling is stated.
+
+---
+
+## 41. Drift is judged on the fields the parser reads, not on the whole shape
+
+**Decision:** every JSON probe declares `watched_keys`, the field names its parser reads, and drift
+is reported only when one of those disappears. An added key is never drift. The whole-payload
+fingerprint is still recorded, for diagnosis.
+
+**Why:** a whole-shape comparison reports a removed key nobody reads as an outage. Two cosmetic
+upstream removals (`COMP.premarketProxyTicker` and `data.epv`) made every response carry
+`degraded: true` and three warnings for as long as the process lived, which trains a reader to ignore
+the warning that matters.
+
+**Matching is exact on the key, at any depth.** The same field sits at different depths per endpoint
+(a scanner row is `data[0].d`, a StockAnalysis quote is `data.p`), so a depth-specific path per
+provider would be another thing to maintain and get wrong. The question the check answers is "is the
+field this parser reads still somewhere in the payload".
+
+**Accepting a new baseline is a decision surface.** `tapebasis_health(accept_baseline=True)`
+re-records the current shape and clears drift, because the alternative was a verdict that could only
+be cleared by deleting the state file. It reports which probes it re-recorded and which it skipped,
+and a probe that is `DOWN` keeps its old baseline because it has no shape to record. Making this an
+explicit parameter rather than a side effect keeps "the upstream changed" separate from "I have
+decided the change is fine".
+
+---
+
+## 42. Blocking provider work gets its own bounded pool
+
+**Decision:** synchronous provider calls run in a dedicated `ThreadPoolExecutor`
+(`blocking_pool.py`, `TAPEBASIS_BLOCKING_THREADS`, default 4) created per event loop, not in the
+loop's default executor via `asyncio.to_thread`.
+
+**Why:** half the provider layer is blocking: TradingView's screener posts with `requests` and sleeps
+through its own backoff, its history path opens `urllib`, and the EGX, options and backtest services
+do the same. The default executor is shared with everything else that pool serves, twelve workers on
+an eight-core host, so a whole-market screen can occupy every one of them for seconds while a fast
+path that needs one thread queues behind it. The slow work is not more urgent for being slower; it is
+less urgent.
+
+**The limiter, not this number, controls the request rate.** The ceiling only bounds how many slow
+calls sit in flight at once, and it is deliberately smaller than the default executor's so a fan-out
+cannot flood upstreams the limiters are pacing anyway.
+
+---
+
+## 43. One identity function per instrument, per provider
+
+**Decision:** Bloomberg identity is decided in exactly one place,
+`bb_access.resolve_bloomberg()`. Every path that asks Bloomberg goes through it, including the
+cross-checked tools.
+
+**Why:** `tools_market` resolved through the instrument registry, which states `WTI` has no Bloomberg
+spot series, while `bb_access.to_bloomberg()` guessed `WTI:US` from the mechanical rule. The same
+symbol was therefore "not carried" to one tool and "W&T Offshore Inc at 2.89" to the other. `USOIL`
+became `USOIL:US`, which answers a robot page.
+
+**A boundary the instrument declares is not a resolution failure.** A registry row with an empty
+provider cell and a note is a stated limitation of the provider, so it resolves to `symbol=None` with
+that note. `to_bloomberg()` refuses the same case rather than guessing, so no caller can invent an id
+that belongs to something else. The id a response reports is always the id it fetched.
+
+---
+
 ## Related
 
 - [Architecture](Architecture): how these decisions are implemented

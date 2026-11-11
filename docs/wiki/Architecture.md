@@ -56,6 +56,8 @@ src/tapebasis/
 ├── freshness.py          market-print timestamps + freshest-print selection
 ├── ratelimit.py          per-provider pacing, shared cooldown, TTL cache
 ├── http_pool.py          one pooled HTTP client and resolver warm-up per upstream
+├── singleflight.py       merge identical concurrent work (not a cache)
+├── blocking_pool.py      bounded thread pool for blocking provider calls
 ├── merge_helpers.py      pure payload shapers (raw provider dict → normalised fields)
 ├── sentiment.py          token-free headline scoring (VADER + finance lexicon)
 ├── symbols.py            dynamic per-provider symbol resolution, the instrument registry
@@ -153,7 +155,9 @@ into `ProviderError`. That single conversion point is why `reconcile.py` can pro
 by the time an exception reaches it, it is already an envelope-ready dict.
 
 They are also where a blocking call is pushed off the event loop. `stock_screener_service.screen_stocks`
-is synchronous (pandas + requests); it runs under `asyncio.to_thread`. Awaiting it directly raises
+is synchronous (pandas + requests); it runs in the dedicated provider thread pool
+(`blocking_pool.run`), not the loop's default executor, so a slow screener cannot starve a fast path
+that needs a worker. Awaiting it directly raises
 `TypeError: object dict can't be used in 'await' expression`, which the reconciler would then record
 as a provider outage: a silent demotion to single-source.
 
@@ -294,8 +298,16 @@ Tool calls only **read** the cached verdict, so a health probe never adds latenc
 ## Concurrency and blocking I/O
 
 The provider layer contains both sync and async code paths. Anything sync is pushed to a worker
-thread with `asyncio.to_thread`, so a blocking pandas/requests scraper or backtest computation cannot
-stall the event loop for other in-flight tool calls.
+thread in a dedicated bounded pool (`blocking_pool.run`, `TAPEBASIS_BLOCKING_THREADS`), so a blocking
+pandas/requests scraper or backtest computation cannot stall the event loop for other in-flight tool
+calls, and cannot occupy every thread of the loop's default executor either.
+
+Three pieces keep a fan-out from paying for the same work twice. Each upstream gets one pooled HTTP
+client per event loop (`http_pool.py`). Identical requests that arrive in the same instant are merged
+by `singleflight.py`, so five identical `stock_quote` calls make one Yahoo request rather than five
+serialised behind `max_inflight=1`. And the `asyncio` primitives behind pacing are created per event
+loop, keyed weakly by the loop, because a semaphore built at import time binds to the first loop that
+contends it.
 
 ## Related
 

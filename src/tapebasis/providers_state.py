@@ -162,11 +162,46 @@ class ProviderError(Exception):
         }
 
 
+#: The codes the reconciliation and access layers emit themselves, so a client
+#: can branch on a value that is stated here rather than discovered by
+#: experiment. The provider service layers carry their own ``ErrorCode`` enums
+#: (:mod:`tapebasis.providers.finviz.core.errors` and the TradingView one); those
+#: values pass through unchanged and are a superset of this list.
+#:
+#: ``TIMEOUT`` and ``UPSTREAM_TIMEOUT`` are deliberately distinct: the first is
+#: this server's own deadline expiring on a paced leg (Bloomberg's page path), so
+#: the request may well have succeeded a moment later; the second is the upstream
+#: itself timing out. Collapsing them would tell a caller to retry a leg that is
+#: not slow.
+ERROR_CODES: tuple[str, ...] = (
+    "PROVIDER_ERROR",
+    "NO_DATA",
+    "NOT_CONFIGURED",
+    "SCHEMA_DRIFT",
+    "TIMEOUT",
+    "UPSTREAM_BLOCKED",
+    "UPSTREAM_ERROR",
+    "UPSTREAM_RATE_LIMIT",
+    "UPSTREAM_TIMEOUT",
+)
+
+
 def error_code(exc: BaseException, default: str = "PROVIDER_ERROR") -> str:
     """Extract a stable error code from any provider exception.
 
-    Provider errors carry either an ``ErrorCode`` enum or a plain string; both
-    must survive to the envelope unchanged.
+    The access layers raise :class:`ProviderError` with a plain string code, and
+    the provider service layers raise their own errors carrying an ``ErrorCode``
+    enum member. Both have to survive to the envelope unchanged, which is why
+    this reads ``.value`` off whatever it is handed rather than assuming one of
+    the two shapes. The codes this layer produces are listed in
+    :data:`ERROR_CODES`; the service-layer enums are a superset.
+
+    Args:
+        exc: The exception a provider raised.
+        default: Code to report when the exception carries none.
+
+    Returns:
+        The code as a plain string, ready for JSON.
     """
     code = getattr(exc, "code", None)
     if code is None:

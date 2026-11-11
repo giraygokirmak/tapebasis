@@ -10,7 +10,10 @@ from .reconcile import field_source
 READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True}
 
 
-async def tapebasis_health(refresh: bool = False) -> dict[str, Any]:
+async def tapebasis_health(
+    refresh: bool = False,
+    accept_baseline: bool = False,
+) -> dict[str, Any]:
     """Probe every upstream and report whether any provider's API drifted.
 
     Every other tool reads the cached verdict from this monitor and adds a
@@ -18,12 +21,24 @@ async def tapebasis_health(refresh: bool = False) -> dict[str, Any]:
     with ``refresh=True`` to force an immediate re-probe (otherwise the cached
     result is reused for ``TAPEBASIS_HEALTH_TTL`` seconds).
 
+    Drift is judged on the fields this server actually reads. An upstream that
+    drops a key nobody looks at is serving every number here correctly and is not
+    reported as an outage, which is what made every response ``degraded: true``
+    when two cosmetic keys were removed upstream.
+
+    ``accept_baseline=True`` re-records the current payload shape as the new
+    baseline. Use it after an upstream change you have checked and adapted to:
+    without it, a cosmetic rename keeps reporting ``DRIFT`` forever, and the only
+    way out was deleting the state file.
+
     The report also carries ``rate_limits``: per-provider pacing, cooldown and
     cache state. A provider can be ``OK`` and still be cooling down after a
     ``429``, which is what an agent needs to know before it retries.
 
     Args:
         refresh: Force fresh probes instead of using the cached verdict.
+        accept_baseline: Re-record the current shape as the baseline and clear
+            drift. Probes that are ``DOWN`` keep their old baseline.
 
     Returns:
         Envelope whose ``data`` carries ``providers`` (``OK``/``DRIFT``/
@@ -33,6 +48,10 @@ async def tapebasis_health(refresh: bool = False) -> dict[str, Any]:
     MONITOR.ensure_started()
     if refresh or not MONITOR.results:
         await MONITOR.run_once(force=True)
+
+    accepted: dict[str, Any] | None = None
+    if accept_baseline:
+        accepted = MONITOR.accept_baseline()
 
     summary = MONITOR.summary()
     statuses = summary["providers"]
@@ -56,6 +75,16 @@ async def tapebasis_health(refresh: bool = False) -> dict[str, Any]:
                 f"{state['cooling_down_s']}s (block streak {state.get('block_streak')})"
             )
 
+    extra: dict[str, Any] = {"schema_drift": summary["issues"]}
+    if accepted is not None:
+        extra["baseline_accepted"] = accepted
+        if accepted["accepted"]:
+            warnings.append(
+                "Baseline accepted for "
+                + ", ".join(accepted["accepted"])
+                + "; drift for those probes is cleared until the shape changes again."
+            )
+
     return envelope(
         summary,
         provider=provider,
@@ -63,7 +92,7 @@ async def tapebasis_health(refresh: bool = False) -> dict[str, Any]:
         degraded=summary["degraded"],
         providers_answered=responding,
         sources={name: "health probe" for name in statuses},
-        extra={"schema_drift": summary["issues"]},
+        extra=extra,
     )
 
 

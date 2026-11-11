@@ -53,6 +53,7 @@ from typing import Any, Iterable
 from .http_pool import shared_client
 from .providers_state import NoDataError
 from .ratelimit import RateLimited, call
+from . import singleflight
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -86,6 +87,11 @@ _CLASS_HINTS: dict[str, tuple[str, ...]] = {
 #: apart from "we did not look".
 _CACHE: dict[tuple[str, str], tuple[float, "Resolution"]] = {}
 _CACHE_TTL = 3600.0
+#: Capacity ceiling. A resolution is a few hundred bytes but a long-lived
+#: server sees an unbounded stream of arbitrary queries, and 3000 distinct
+#: queries used to mean 3000 entries that never left. Oldest-first eviction
+#: past this cap, the same shape the other caches here use.
+_CACHE_MAX_ENTRIES = 512
 
 
 @dataclass
@@ -770,6 +776,32 @@ def resolve_sa(query: str, *, asset_class: str = "") -> Resolution:
 # ── Facade ───────────────────────────────────────────────────────────────────
 
 
+async def _resolve_uncached(query: str, provider: str, asset_class: str) -> Resolution:
+    """Run one provider's resolution path, without the cache or the merger."""
+    if provider == "TRADINGVIEW":
+        return await resolve_tradingview(query, asset_class=asset_class)
+    if provider == "YAHOO":
+        return await resolve_yahoo(query, asset_class=asset_class)
+    if provider == "FINVIZ":
+        return resolve_finviz(query, asset_class=asset_class)
+    if provider == "SA":
+        return resolve_sa(query, asset_class=asset_class)
+    raise ValueError(f"unknown provider {provider!r}")
+
+
+def _cache_put(cache_key: tuple[str, str], result: "Resolution") -> None:
+    """Store one resolution, evicting the oldest entries past the cap.
+
+    Eviction is oldest-first by insertion time: a resolution is either still
+    inside its TTL or it is not, so recency of *use* buys nothing the TTL does
+    not already give, and insertion order is cheaper to maintain.
+    """
+    if len(_CACHE) >= _CACHE_MAX_ENTRIES and cache_key not in _CACHE:
+        for stale_key in sorted(_CACHE, key=lambda k: _CACHE[k][0])[: len(_CACHE) - _CACHE_MAX_ENTRIES + 1]:
+            _CACHE.pop(stale_key, None)
+    _CACHE[cache_key] = (time.monotonic(), result)
+
+
 async def resolve(
     query: str,
     provider: str,
@@ -777,7 +809,23 @@ async def resolve(
     asset_class: str = "",
     refresh: bool = False,
 ) -> Resolution:
-    """Resolve one user-supplied symbol for one provider (cached)."""
+    """Resolve one user-supplied symbol for one provider.
+
+    A cache hit is returned straight away. A miss runs the provider's search
+    once: concurrent callers asking the identical question await that same
+    request instead of each starting one of their own (see
+    :mod:`tapebasis.singleflight`), which is what an agent does when it asks for
+    a quote and a batch of quotes in the same turn.
+
+    Args:
+        query: The symbol as the caller spelled it.
+        provider: ``TRADINGVIEW``, ``FINVIZ``, ``YAHOO`` or ``SA``.
+        asset_class: Optional hint used when ranking search hits.
+        refresh: Skip the cache and resolve again.
+
+    Returns:
+        The provider's :class:`Resolution`, found or not.
+    """
     provider = provider.upper()
     cache_key = (provider, f"{query.strip().upper()}|{asset_class}")
     if not refresh:
@@ -785,19 +833,18 @@ async def resolve(
         if hit and time.monotonic() - hit[0] < _CACHE_TTL:
             return hit[1]
 
-    if provider == "TRADINGVIEW":
-        result = await resolve_tradingview(query, asset_class=asset_class)
-    elif provider == "YAHOO":
-        result = await resolve_yahoo(query, asset_class=asset_class)
-    elif provider == "FINVIZ":
-        result = resolve_finviz(query, asset_class=asset_class)
-    elif provider == "SA":
-        result = resolve_sa(query, asset_class=asset_class)
-    else:
-        raise ValueError(f"unknown provider {provider!r}")
+    async def _produce() -> Resolution:
+        # Re-check inside the shared task: a waiter that joins just after the
+        # first caller stored its result must not repeat the search.
+        if not refresh:
+            hit = _CACHE.get(cache_key)
+            if hit and time.monotonic() - hit[0] < _CACHE_TTL:
+                return hit[1]
+        result = await _resolve_uncached(query, provider, asset_class)
+        _cache_put(cache_key, result)
+        return result
 
-    _CACHE[cache_key] = (time.monotonic(), result)
-    return result
+    return await singleflight.run(("symbol", *cache_key), _produce)
 
 
 async def resolve_all(query: str, *, asset_class: str = "") -> dict[str, Resolution]:
@@ -812,6 +859,7 @@ async def resolve_all(query: str, *, asset_class: str = "") -> dict[str, Resolut
 
 
 def clear_cache() -> None:
+    """Drop every cached resolution, so the next ask resolves again."""
     _CACHE.clear()
 
 
