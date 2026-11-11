@@ -707,11 +707,9 @@ def analyze_timeframe_context(indicators: Dict, timeframe: str) -> Dict:
     rsi = indicators.get("RSI")
     ema20 = indicators.get("EMA20")
     ema50 = indicators.get("EMA50")
-    ema100 = indicators.get("EMA100")
     ema200 = indicators.get("EMA200")
     macd_line = indicators.get("MACD.macd")
     macd_signal = indicators.get("MACD.signal")
-    adx = indicators.get("ADX")
     volume = indicators.get("volume")
     rel_volume = indicators.get(RELATIVE_VOLUME)
     vwap = indicators.get("VWAP")
@@ -1219,8 +1217,6 @@ def compute_trade_setup(indicators: Dict) -> Optional[Dict]:
     ``scenarios`` with the chosen one named in ``primary_scenario``.
     """
     close = indicators.get("close")
-    high = indicators.get("high")
-    low = indicators.get("low")
     atr = indicators.get("ATR")
     ema20 = indicators.get("EMA20")
     ema50 = indicators.get("EMA50")

@@ -35,7 +35,9 @@ def _single_response(
     pair = single(FINVIZ, data)
     fields = None
     if isinstance(data, dict):
-        fields = {key: field_source(FINVIZ, [FINVIZ], None) for key in data}
+        fields = {
+            key: field_source(FINVIZ, (), None, supplied=[FINVIZ]) for key in data
+        }
     return finalize(
         pair,
         sources={FINVIZ: source},

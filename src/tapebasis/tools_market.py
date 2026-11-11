@@ -41,6 +41,7 @@ from .providers_state import (
     ProviderError,
     envelope,
     provider_from_answered,
+    verification_for,
 )
 from .reconcile import (
     BLOOMBERG,
@@ -51,6 +52,7 @@ from .reconcile import (
     FieldSpec,
     Pair,
     ask,
+    compared_providers,
     field_source,
     finalize,
     providers_in,
@@ -210,8 +212,25 @@ _FX_DAY_CHANGE_REASON = (
     "own daily roll, so the day-change figures answer different questions"
 )
 
+#: Why the previous close itself is not cross-checked on spot FX. It is the same
+#: structural fact as the day change, one step removed: there is no official
+#: close to report, so each provider publishes its own roll.
+_FX_PREVIOUS_CLOSE_REASON = (
+    "spot FX has no single official previous close; each provider rolls the day "
+    "over at its own hour, so the two figures are different baselines"
+)
 
-def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]:
+#: Why volume is not cross-checked on spot FX. Spot FX is not traded on an
+#: exchange, so there is no session volume to report; a provider that prints a
+#: number is quoting tick count or its own feed's activity, which is not the
+#: same measurement as another provider's. Yahoo reports 0 for every pair.
+_FX_VOLUME_REASON = (
+    "spot FX has no exchange session volume; providers report their own tick "
+    "counts or zero, which are not the same measurement"
+)
+
+
+def _quote_specs(*, spot_fx: bool = False) -> tuple[FieldSpec, ...]:
     """Fields every provider is asked for, and the tolerance for each.
 
     Every spec that a provider *can* answer carries a getter for that provider. A
@@ -224,9 +243,15 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
     lives on its stock page, a second endpoint that is not fetched here). A
     getter that reads a field nobody asked for would be worse than the gap.
 
-    ``day_change_comparable=False`` marks the day change as structurally not
-    comparable instead of comparing readings that share no baseline. Every
-    reading is still reported.
+    ``spot_fx=True`` marks the fields that have no shared definition on a spot
+    currency pair as structurally not comparable instead of comparing readings
+    that answer different questions. There are three of them, and they are the
+    same fact seen three ways: spot FX has no official previous close, so the
+    day change (which is measured against it) has no shared baseline, the
+    previous close itself has none, and volume has no exchange session to
+    accumulate over. Every reading is still reported; none of them is counted as
+    a provider conflict. A real equity keeps all three under the ordinary guards
+    below.
     """
     return (
         FieldSpec(
@@ -263,7 +288,9 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
             max_skew_seconds=SKEW_LIMIT_SECONDS,
             session_boundary=True,
             max_age_seconds=MAX_SESSION_AGE_SECONDS,
-            not_comparable_reason=None if day_change_comparable else _FX_DAY_CHANGE_REASON,
+            not_comparable_reason=(
+                _FX_DAY_CHANGE_REASON if spot_fx else None
+            ),
         ),
         FieldSpec(
             "previous_close",
@@ -280,6 +307,14 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
             # print, so a quote that is merely old does not make it wrong.
             max_skew_seconds=SKEW_LIMIT_SECONDS,
             session_boundary=True,
+            # On spot FX this is the very baseline the day change lacks, so it is
+            # not comparable for the identical reason. Reporting it as a
+            # disagreement was the tool contradicting its own FX rule: it
+            # refused to compare the change, then blamed the providers for
+            # disagreeing on the close that change is measured from.
+            not_comparable_reason=(
+                _FX_PREVIOUS_CLOSE_REASON if spot_fx else None
+            ),
         ),
         FieldSpec(
             "week_52_high",
@@ -326,6 +361,11 @@ def _quote_specs(*, day_change_comparable: bool = True) -> tuple[FieldSpec, ...]
             max_skew_seconds=SKEW_LIMIT_SECONDS,
             session_boundary=True,
             max_age_seconds=MAX_SESSION_AGE_SECONDS,
+            # Spot FX has no exchange session, so there is nothing for the
+            # number to be. Measured live: Yahoo reports 0 for every pair while
+            # TradingView reports its own tick count, which the 1 % tolerance
+            # scored as a 100 % conflict on every FX quote asked for.
+            not_comparable_reason=_FX_VOLUME_REASON if spot_fx else None,
         ),
         # The session's own high and low. Every price feed here publishes them
         # and none of the tools did: TradingView returned them on each scanner
@@ -628,10 +668,12 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
 
     return finalize(
         pair,
-        # FX has no shared previous close, so its day change is reported from
-        # every provider but never compared. Everything else is compared.
+        # Spot FX has no official previous close, so the three fields that are
+        # defined against it (the day change, the close itself, and a session
+        # volume it never accumulates) are reported from every provider but never
+        # compared. Everything else is compared.
         specs=_quote_specs(
-            day_change_comparable=not _is_fx(tv_res, fv_res, yh_res, sa_res, bb_res)
+            spot_fx=_is_fx(tv_res, fv_res, yh_res, sa_res, bb_res)
         ),
         tv_norm=tv_norm,
         fv_norm=fv_norm,
@@ -960,12 +1002,23 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         # minutes behind on equities) is a different observation, not a
         # disagreement, and a screener row with no print time cannot prove
         # otherwise.
+        #
+        # ``require_all_times`` is what makes that last clause real. Finviz's
+        # screener row carries no print time at all (``last_update`` is absent,
+        # unlike its quote page), so without this flag the session guard simply
+        # never fires for that leg and yesterday's Finviz price is compared
+        # against today's TradingView one. That produced two different verdicts
+        # for one symbol: ``stock_quote`` reported the pair as not comparable
+        # while ``stock_prices`` reported ``agrees: false``, on the same data.
+        # A reading that cannot be dated cannot be shown to be the same
+        # observation, so it is not comparable, not a conflict.
         price_cmp = compare_values(
             {p: r.get("price") for p, r in readings.items()},
             tolerance_pct=0.5,
             times=stamps,
             max_skew_seconds=SKEW_LIMIT_SECONDS,
             session_boundary=True,
+            require_all_times=True,
         )
         change_cmp = compare_values(
             {p: r.get("change_percent") for p, r in readings.items()},
@@ -974,6 +1027,7 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             times=stamps,
             max_skew_seconds=SKEW_LIMIT_SECONDS,
             session_boundary=True,
+            require_all_times=True,
             # Same rule as ``stock_quote``: an FX day change has no shared
             # baseline, so it is reported but never called a conflict.
             not_comparable_reason=(
@@ -1006,11 +1060,10 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         # each number in it. A row can read ``ALL`` while ``previous_close`` came
         # from one provider that happened to shape it.
         #
-        # ``compared`` means "was cross-checked here", so only the two fields
-        # this tool actually compares carry the set of providers that supplied a
-        # reading. The rest name their one source, because listing every provider
-        # that happened to have the number would claim a cross-check that did not
-        # happen.
+        # ``compared`` means "was judged here", so only the two fields this tool
+        # actually cross-checks carry a compared set. The rest say who supplied a
+        # reading and leave ``compared`` empty, because listing every provider
+        # that happened to have the number would claim a check that never ran.
         from .freshness import parse_market_timestamp
 
         def _freshness_rank(provider: str) -> tuple[int, float, int]:
@@ -1046,16 +1099,61 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
 
         def _compared_field(name: str, comparison: dict[str, Any]) -> dict[str, Any]:
             supplied = [p for p, r in readings.items() if r.get(name) is not None]
-            return field_source(winner, supplied or [winner], comparison.get("match"))
+            return field_source(
+                winner,
+                compared_providers(comparison),
+                comparison.get("match"),
+                supplied=supplied or [winner],
+            )
 
-        previous_close, previous_close_source = _fill("previous_close")
-        volume, volume_source = _fill("volume")
+        def _uncompared_field(name: str) -> tuple[Any, dict[str, Any] | None]:
+            """A field this tool serves but does not judge.
+
+            ``previous_close`` and ``volume`` are not in this tool's comparison
+            set: only ``price`` and ``change_percent`` are cross-checked. So
+            ``compared`` is empty here, not the list of providers that happened
+            to have the number, and ``agreement`` stays ``None``. ``supplied``
+            still names everyone who answered, because that is a separate and
+            still useful fact.
+            """
+            value, source = _fill(name)
+            if source is None:
+                return value, None
+            supplied = [p for p, r in readings.items() if r.get(name) is not None]
+            return value, field_source(
+                source, (), None, supplied=supplied or [source]
+            )
+
+        previous_close, previous_close_field = _uncompared_field("previous_close")
+        volume, volume_field = _uncompared_field("volume")
         fields = {
             "price": _compared_field("price", price_cmp),
             "change_percent": _compared_field("change_percent", change_cmp),
-            "previous_close": field_source(previous_close_source, [previous_close_source], None),
-            "volume": field_source(volume_source, [volume_source], None),
         }
+        if previous_close_field is not None:
+            fields["previous_close"] = previous_close_field
+        if volume_field is not None:
+            fields["volume"] = volume_field
+        # What this row's call actually asked. Two filters, both needed:
+        #
+        # * a provider that resolved as not-carried was never asked
+        #   (``NOT_ATTEMPTED``), and neither was a provider whose whole leg
+        #   answered ``NOT_ATTEMPTED`` for the batch (no endpoint for this kind
+        #   of request, the instrument is not carried). Their silence cannot turn
+        #   a row into PARTIAL.
+        # * a ticker the Bloomberg batch budget cut off was never asked either.
+        #
+        # A provider that was asked and produced nothing stays in the set, and
+        # then the row honestly reads PARTIAL instead of claiming ALL.
+        asked_for = [
+            p
+            for p in ALL_PROVIDERS
+            if entry[p].found
+            and (pair.attempts.get(p) is None
+                 or (pair.attempts[p].error or {}).get("code") != "NOT_ATTEMPTED")
+            and not (p == BLOOMBERG and symbol in bb_skipped)
+        ]
+        row_provider = provider_from_answered(list(readings), asked_for)
         row: dict[str, Any] = {
             "symbol": symbol,
             "price": source.get("price"),
@@ -1066,14 +1164,9 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             "company": next(
                 (r.get("company") for r in readings.values() if r.get("company")), None
             ),
-            "data_provider": (
-                DataProvider.ALL.value
-                if len(readings) >= 2
-                else DataProvider(next(iter(readings))).value
-            ),
-            "verification": (
-                "MULTI_SOURCE" if len(readings) >= 2 else "SINGLE_SOURCE"
-            ),
+            "data_provider": row_provider.value,
+            "verification": verification_for(row_provider).value,
+            "asked": asked_for,
             "agrees": agree,
             "price_source": winner,
             "freshness": freshness,
@@ -1363,7 +1456,8 @@ async def market_indices() -> dict[str, Any]:
     fv_indices = (fv_norm or {}).get("indices") or {}
     yh_indices = (yh_norm or {}).get("indices") or {}
 
-    from .reconcile import _resolved_label, compare_values
+    from .freshness import parse_market_timestamp, session_date
+    from .reconcile import DEFAULT_ORDER, _resolved_label, compare_values
 
     indices: dict[str, Any] = {}
     for canonical in INDEX_SNAPSHOT:
@@ -1405,29 +1499,84 @@ async def market_indices() -> dict[str, Any]:
             max_skew_seconds=SKEW_LIMIT_SECONDS,
             session_boundary=True,
         )
+        # The day-quote block resolves as one session, not one provider. A level,
+        # its previous close, the day change and the day-change percent are four
+        # views of one observation, so reading them off different providers mixes
+        # two sessions into a single row and the numbers contradict each other on
+        # the page: SPX reported a level 0.74 % above its previous close next to
+        # a day change of -0.38 %, because the level and the previous close came
+        # from the provider that had rolled into today while the change percent
+        # came from whichever row was listed first (yesterday's session).
+        #
+        # So the block is filled from providers whose print belongs to the
+        # *winner's* session date, in freshness order, and a provider from
+        # another session never lends a number. This keeps the data the session
+        # actually has: TradingView's index rows carry no previous close, so
+        # without the same-session fallback a TradingView win would blank a
+        # number Finviz had shaped from the same session.
+        blocks = {TRADINGVIEW: tv_row, FINVIZ: fv_row, YAHOO: yh_row}
+        winner_stamp = parse_market_timestamp(stamps.get(winner))
+        winner_day = session_date(winner_stamp)
+        # Freshness order, winner first, then the documented order. A provider
+        # from another session is excluded outright, not merely ranked last: its
+        # previous close belongs to a different observation, and pairing it with
+        # the winner's level is the contradiction this block exists to prevent.
+        # Only a provider with no print time at all (so no session it can be
+        # shown to disagree with) is consulted as a last resort.
+        same_session = [
+            p for p in [winner] + [q for q in DEFAULT_ORDER if q != winner]
+            if p in blocks
+            and (
+                winner_day is None
+                or session_date(parse_market_timestamp(stamps.get(p))) == winner_day
+            )
+        ]
+        undated = [
+            p
+            for p in [winner] + list(DEFAULT_ORDER)
+            if p in blocks
+            and p not in same_session
+            and parse_market_timestamp(stamps.get(p)) is None
+        ]
+
+        def _resolve(name: str) -> tuple[Any, str | None]:
+            """The value for one day-quote field and the provider it came from."""
+            for provider in same_session + undated:
+                value = blocks[provider].get(name)
+                if value is not None:
+                    return value, provider
+            return None, None
+
+        fields: dict[str, dict[str, Any]] = {
+            "level": field_source(winner, compared_providers(level_cmp), level_cmp.get("match"), supplied=[winner])
+        }
+        shaped_values: dict[str, Any] = {}
+        for name in ("previous_close", "change", "change_percent"):
+            value, provider = _resolve(name)
+            shaped_values[name] = value
+            if provider is not None:
+                fields[name] = field_source(
+                    provider, (), None, supplied=[provider]
+                )
+
         indices[canonical] = {
             "name": fv_row.get("name") or tv_row.get("name") or canonical,
             "level": present[winner],
             "level_source": winner,
             "freshness": freshness,
-            "previous_close": fv_row.get("previous_close"),
-            "change": fv_row.get("change"),
-            "change_percent": next(
-                (
-                    row.get("change_percent")
-                    for row in (tv_row, fv_row, yh_row)
-                    if row.get("change_percent") is not None
-                ),
-                None,
-            ),
-            "data_provider": (
-                DataProvider.ALL.value
-                if len(present) >= 2
-                else DataProvider(next(iter(present))).value
-            ),
-            "verification": (
-                "MULTI_SOURCE" if len(present) >= 2 else "SINGLE_SOURCE"
-            ),
+            **shaped_values,
+            "fields": fields,
+            # Row coverage counts the providers that supplied *this index*. A
+            # feed that answered but lists no row for it is read the same way
+            # ``resolve`` reads an instrument a provider does not carry: not
+            # asked about it, not a failure. Finviz publishes no RUT or VIX row
+            # and TradingView no IWM, and those are boundaries, not outages; the
+            # provider-level failures would be invisible in a per-index label
+            # anyway, and the envelope's own state reports them.
+            "data_provider": provider_from_answered(list(present)).value,
+            "verification": verification_for(
+                provider_from_answered(list(present))
+            ).value,
             "providers_answered": [p for p in ALL_PROVIDERS if p in present],
             "readings": present,
             "comparison": {"level": level_cmp},
@@ -1439,7 +1588,7 @@ async def market_indices() -> dict[str, Any]:
         if row["data_provider"] == DataProvider.ALL.value
     }
     answered = {p for row in indices.values() for p in row["providers_answered"]}
-    overall = provider_from_answered(answered)
+    overall = provider_from_answered(answered, pair.asked)
     return finalize(
         pair,
         specs=(),
@@ -1916,7 +2065,12 @@ async def technical_analysis(
     async def fv_call() -> dict[str, Any]:
         if not resolved["FINVIZ"].found:
             raise NotApplicable(FINVIZ, resolved["FINVIZ"].note or "Finviz has no page")
-        return await fv_access.snapshot(resolved["FINVIZ"].symbol)
+        # The quote page, not the snapshot endpoint: it carries the same 84-field
+        # snapshot plus the print time this tool needs to prove the reading
+        # describes the same observation as the others. Asking for the snapshot
+        # alone meant every Finviz pair was undatable, so its price either got
+        # compared across sessions or had to be dropped entirely.
+        return await fv_access.quote(resolved["FINVIZ"].symbol)
 
     async def yh_call() -> dict[str, Any]:
         if not resolved["YAHOO"].found:
@@ -1926,14 +2080,26 @@ async def technical_analysis(
     pair = await ask(tv_call, fv_call, yh_call)
 
     analysis = pair.tv.payload or {}
-    fv_snapshot = pair.fv.payload or {}
-    fv_numeric = fv_snapshot.get("numeric") or {}
+    fv_quote = pair.fv.payload or {}
+    fv_numeric = fv_quote.get("snapshot_numeric") or {}
     yh = pair.yh.payload or {}
 
     from .reconcile import compare_values
 
     tv_price = (analysis.get("price_data") or {}).get("current_price")
     tv_rsi = (analysis.get("rsi") or {}).get("value")
+    tv_volume = (analysis.get("price_data") or {}).get("volume")
+
+    # Every price and price-derived field here points at an instant, so the same
+    # print-time guards ``stock_quote`` uses apply: two prints from different
+    # sessions are two observations, not a disagreement. Finviz's quote page
+    # carries a rendered print time ("Nov 11 - 5:09 AM ET"), so all three legs
+    # can be dated and the comparison can be asserted rather than skipped.
+    stamps = {
+        TRADINGVIEW: (pair.tv.payload or {}).get("update_time"),
+        FINVIZ: (fv_quote.get("last_close") or {}).get("date"),
+        YAHOO: yh.get("market_time"),
+    }
 
     cross_check = None
     if analysis and (fv_numeric or yh):
@@ -1945,7 +2111,14 @@ async def technical_analysis(
                     YAHOO: yh.get("price"),
                 },
                 tolerance_pct=0.5,
+                times=stamps,
+                max_skew_seconds=SKEW_LIMIT_SECONDS,
+                session_boundary=True,
             ),
+            # RSI and ATR are lookback statistics, not point-in-time prints, so a
+            # print-time guard would be the wrong test: two feeds legitimately
+            # compute them over slightly different bar counts. Their tolerance is
+            # wide for that reason and no timestamp guard applies.
             "rsi_14": compare_values(
                 {TRADINGVIEW: tv_rsi, FINVIZ: fv_numeric.get("RSI (14)")},
                 tolerance_pct=12.0,
@@ -1959,12 +2132,25 @@ async def technical_analysis(
                 tolerance_pct=10.0,
                 absolute_floor=0.1,
             ),
+            # Finviz's snapshot ``Volume`` is not the session total the other
+            # providers report: measured live, AAPL arrived as 97,520 against
+            # 29,756,060 from TradingView and 29,726,781 from Yahoo. It counts
+            # the current, partial session (the same number its quote page
+            # carries next to a 5:09 AM print), while the consolidated feeds
+            # report the last completed one. Comparing them was a guaranteed
+            # 100 % "conflict" on every request, so this field is reported and
+            # named as a different measurement rather than judged.
             "volume": compare_values(
                 {
-                    TRADINGVIEW: (analysis.get("price_data") or {}).get("volume"),
+                    TRADINGVIEW: tv_volume,
                     FINVIZ: fv_numeric.get("Volume"),
                 },
                 tolerance_pct=2.0,
+                not_comparable_reason=(
+                    "Finviz's snapshot volume counts the current partial session "
+                    "while the consolidated feeds report the last completed one, "
+                    "so the two numbers answer different questions"
+                ),
             ),
         }
 

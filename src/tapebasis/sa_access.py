@@ -35,6 +35,7 @@ from typing import Any
 from .http_pool import shared_client
 from .providers_state import NoDataError, ProviderError
 from .ratelimit import RateLimited, call, limiter
+from .utils import BROWSER_UA
 
 PROVIDER = "SA"
 _POOL = "stockanalysis"
@@ -47,10 +48,7 @@ _TIMEOUT = float(os.environ.get("TAPEBASIS_SA_TIMEOUT", "20"))
 _CACHE_TTL = float(os.environ.get("TAPEBASIS_SA_CACHE_TTL", "20"))
 
 _HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": BROWSER_UA,
     "Accept": "application/json, text/plain, */*",
 }
 

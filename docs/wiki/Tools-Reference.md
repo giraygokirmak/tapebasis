@@ -155,6 +155,13 @@ The list is fixed (`INDEX_SNAPSHOT`), and the registry being broader does not ex
 registry row addressable through single-instrument tools (`stock_quote NDX`), but it is not part of
 the snapshot.
 
+Each index carries its own `fields` map and `data_provider`. The day-quote block (level, previous
+close, change, change percent) is filled from providers whose print belongs to the winner's session
+date, so a row is always one observation: a provider from another session never lends a number. When
+the winning provider's session has no previous close to report, the field is `null` rather than
+borrowed from the other session, which is the behaviour that stopped a level and its previous close
+contradicting each other on the page.
+
 ### `stock_news`
 
 Ticker headlines, matched by title across the feeds.
@@ -194,11 +201,26 @@ session's `volume` when the feed reports one, so a pre-market print can be told 
 lot. StockAnalysis's block is also served whole as `stockanalysis_extended_hours`, next to
 `stockanalysis_regular_close`.
 
+Yahoo's candles are requested over two days, not one: `range=1d` stopped returning a `timestamp`
+array, so every call reported `NO_DATA` with "unexpected response shape: 'timestamp'" and the session
+timeline silently disappeared. Each candle is classified against the session windows of the day it
+falls in, which keeps yesterday's regular prints out of today's pre-market block.
+
 ### `technical_analysis`
 
 Full indicator stack from TradingView (RSI, MACD, EMAs, Bollinger, ATR, ADX, structure, trade setup).
 Finviz's snapshot and Yahoo's chart API independently confirm four headline readings in `cross_check`:
 price (0.5 %), RSI(14) (12 %), ATR(14) (10 %), volume (2 %).
+
+The three price-and-price-derived readings are guarded by print time: TradingView's scanner
+`update_time`, Finviz's rendered print time and Yahoo's `market_time` are compared, so two prints from
+different sessions are reported as `not_comparable` rather than as a conflict. RSI and ATR are
+lookback statistics and are judged without a timestamp guard.
+
+Volume is reported from every provider but never compared: Finviz's snapshot counts the current
+partial session while the consolidated feeds report the last completed one, so the two numbers answer
+different questions. That is stated in `cross_check.volume.pairs[].not_comparable` rather than
+presented as a disagreement.
 
 ### `stock_backtest`
 

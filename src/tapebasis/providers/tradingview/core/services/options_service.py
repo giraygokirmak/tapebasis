@@ -39,11 +39,13 @@ import urllib.request
 import urllib.error
 from typing import Optional, List, Dict, Any
 
+from tapebasis.utils import BROWSER_UA
+
 _TIMEOUT = 12
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
+#: The same browser identity the rest of the Yahoo leg presents. This module
+#: carried a Chrome 120 string of its own while every other leg moved to 152,
+#: so it was the one request in the codebase that presented a stale fingerprint.
+_UA = BROWSER_UA
 # Yahoo started gating /v7/finance/options behind a crumb+cookie session
 # in 2024 (same as the quoteSummary endpoint). Without auth: HTTP 401.
 # We open a session against fc.yahoo.com to drop cookies, then ask

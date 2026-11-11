@@ -36,6 +36,7 @@ import httpx
 
 from .providers_state import PROVIDER_ORDER
 from .ratelimit import call as paced_call
+from .utils import BROWSER_UA
 
 TRADINGVIEW = "TRADINGVIEW"
 FINVIZ = "FINVIZ"
@@ -75,11 +76,9 @@ def state_path() -> str:
     """
     return os.environ.get("TAPEBASIS_HEALTH_STATE") or DEFAULT_STATE_PATH
 
-#: Chrome UA that finviz.com serves without a challenge.
-BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
-)
+#: ``BROWSER_UA`` is imported above from :mod:`tapebasis.utils`, so every probe
+#: presents the exact identity the real requests present. It lived here first;
+#: the import keeps the name on ``tapebasis.health`` for existing callers.
 
 #: The chart payload fields ``yh_access`` builds a quote from. Listed once
 #: because the three Yahoo probes assert the same contract on three different

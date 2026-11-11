@@ -52,6 +52,7 @@ __all__ = [
     "compare_numeric",
     "compare_symbol",
     "compare_values",
+    "compared_providers",
     "field_source",
     "finalize",
     "merge",
@@ -177,8 +178,29 @@ class Pair:
         return sorted(present, key=lambda p: PROVIDER_ORDER.index(p) if p in PROVIDER_ORDER else 99)
 
     @property
+    def asked(self) -> list[str]:
+        """Provider labels this call actually asked, in display order.
+
+        ``NOT_ATTEMPTED`` is excluded because it means "not asked": either the
+        tool has no endpoint for this provider on this request, or the provider
+        does not carry the instrument. A provider that *was* asked and failed
+        (``NO_DATA``, ``PROVIDER_ERROR``, an upstream timeout) stays in this
+        list, which is what makes the difference between ``ALL`` and
+        ``PARTIAL`` visible.
+        """
+        asked = [
+            p
+            for p, a in self.attempts.items()
+            if (a.error or {}).get("code") != "NOT_ATTEMPTED"
+        ]
+        return sorted(
+            asked,
+            key=lambda p: PROVIDER_ORDER.index(p) if p in PROVIDER_ORDER else 99,
+        )
+
+    @property
     def provider(self) -> DataProvider:
-        return provider_from_answered(self.answered)
+        return provider_from_answered(self.answered, self.asked)
 
     @property
     def errors(self) -> list[dict[str, Any]]:
@@ -649,10 +671,46 @@ class Merged:
     freshness: dict[str, Any] = field(default_factory=dict)
 
 
+def compared_providers(comparison: Mapping[str, Any] | None) -> list[str]:
+    """Providers whose reading was actually judged against another one.
+
+    A comparison row records every pair it looked at under ``pairs``. A pair
+    carries ``match: None`` plus a ``not_comparable`` reason when the two prints
+    could not be judged (different sessions, a declared feed delay, no print
+    time, no shared definition). Those pairs are *not* comparisons: nothing was
+    concluded from them.
+
+    Reading ``values`` instead answers a different question, and that is the
+    mistake this function exists to stop. Five providers can supply a price
+    while only three of the ten pairs are actually comparable, and then
+    ``agreement: true`` would read as "all five agreed" when two of them were
+    never judged.
+
+    Args:
+        comparison: A ``compare_values`` row, or ``None``.
+
+    Returns:
+        Every provider on a side of a pair that reached a verdict, in the
+        comparison's own order, deduplicated. Empty when nothing was judged.
+    """
+    if not comparison:
+        return []
+    labels: list[str] = []
+    for pair in comparison.get("pairs") or []:
+        if pair.get("match") is None:
+            continue
+        for provider in pair.get("between") or ():
+            if provider not in labels:
+                labels.append(provider)
+    return labels
+
+
 def field_source(
     source: str,
     compared: Iterable[str] = (),
     agreement: bool | None = None,
+    *,
+    supplied: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Describe where one field's value came from.
 
@@ -661,20 +719,46 @@ def field_source(
     more providers there would imply the number is a joint product when it is
     one provider's print.
 
-    ``compared`` is every provider that supplied a reading for the field, in
-    display order. Two or more means the field was cross-checked, and
-    ``agreement`` says whether it survived that check: ``True`` all comparable
-    pairs agree, ``False`` a real disagreement, ``None`` not judged (a single
-    reading, or readings with no shared basis for comparison).
+    ``supplied`` is every provider that returned a reading for the field, in
+    display order. It answers "who answered", not "who was checked".
+
+    ``compared`` is every provider whose reading was actually judged against
+    another one. It is never wider than ``supplied``, and it is narrower when a
+    pair could not be compared: two prints from different sessions are two
+    observations, so nothing was concluded about them. ``agreement`` describes
+    exactly that set: ``True`` every compared pair agrees, ``False`` a real
+    disagreement, ``None`` nothing was judged (one reading, or no shared basis).
+
+    The two lists exist because collapsing them made ``agreement: true`` read as
+    "all five providers agreed" when only three of the ten pairs had been
+    comparable at all. A caller that wants "who answered" reads ``supplied``; a
+    caller that wants "who corroborated this number" reads ``compared``.
+
+    For backwards compatibility ``compared`` also accepts the supplied set as
+    its positional argument, which is what every caller meant before the split:
+    pass ``supplied=`` explicitly when the two differ.
 
     A reader who wants the losing readings finds them in ``comparisons[].values``
     keyed by provider; a reader who wants the upstream finds it in
     ``sources[field_source()["source"]]``.
     """
-    labels = [p for p in PROVIDER_ORDER if p in set(compared)]
-    if source and source not in labels:
-        labels.insert(0, source)
-    return {"source": source, "compared": labels, "agreement": agreement}
+    supplied_labels = [p for p in PROVIDER_ORDER if p in set(supplied or compared)]
+    extra_supplied = [
+        p for p in (supplied or compared) if p not in PROVIDER_ORDER
+    ]
+    supplied_labels.extend(p for p in extra_supplied if p not in supplied_labels)
+    compared_labels = [p for p in PROVIDER_ORDER if p in set(compared)]
+    compared_labels.extend(
+        p for p in compared if p not in PROVIDER_ORDER and p not in compared_labels
+    )
+    if source and source not in supplied_labels:
+        supplied_labels.insert(0, source)
+    return {
+        "source": source,
+        "supplied": supplied_labels,
+        "compared": compared_labels,
+        "agreement": agreement,
+    }
 
 
 def _resolved_label(times: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -784,7 +868,8 @@ def merge_many(
         return Merged(
             data=shaped,
             fields={
-                key: field_source(provider, [provider], None) for key in shaped
+                key: field_source(provider, (), None, supplied=[provider])
+                for key in shaped
             },
             provider=DataProvider(provider),
             answered=[provider],
@@ -828,14 +913,16 @@ def merge_many(
             out.data[spec.name] = value
             supplied = [p for p, reading in values.items() if reading is not None]
             # The value is one provider's reading, so ``source`` names that one
-            # provider. ``compared`` and ``agreement`` carry the coverage and the
-            # cross-check result that used to be collapsed into a single ``ALL``
-            # label, which read as if the number were a joint product of every
-            # provider rather than the one print that was chosen.
+            # provider. ``supplied`` is who answered, ``compared`` is who was
+            # actually checked against whom, and ``agreement`` describes that
+            # second set. Collapsing the two made ``agreement: true`` read as
+            # "every provider agreed" when most pairs could not be judged: five
+            # prices, ten pairs, three comparable.
             out.fields[spec.name] = field_source(
                 str(source),
-                supplied,
+                compared_providers(row),
                 row.get("match"),
+                supplied=supplied,
             )
             row["chosen"] = source
         if row["match"] is False:
@@ -855,7 +942,9 @@ def merge_many(
             continue
         for key, value in shape(present[provider]).items():
             out.data.setdefault(key, value)
-            out.fields.setdefault(key, field_source(provider, [provider], None))
+            out.fields.setdefault(
+                key, field_source(provider, (), None, supplied=[provider])
+            )
     return out
 
 
@@ -904,12 +993,20 @@ def _provider_phrase(answered: Iterable[str]) -> str:
 def notice_for(merged: Merged) -> str:
     """Provider notice, extended with agreement and freshness explanation."""
     base = PROVIDER_MEANING[merged.provider]
-    if merged.provider is DataProvider.ALL:
-        base = (
-            f"Every provider asked answered ({_provider_phrase(merged.answered)}). "
-            "Coverage is ALL; agreement is a separate axis."
-        )
-    if merged.provider is not DataProvider.ALL:
+    if merged.provider in (DataProvider.ALL, DataProvider.PARTIAL):
+        if merged.provider is DataProvider.ALL:
+            base = (
+                f"Every provider asked answered ({_provider_phrase(merged.answered)}). "
+                "Coverage is ALL; agreement is a separate axis."
+            )
+        else:
+            base = (
+                f"Not every provider asked answered; these did: "
+                f"{_provider_phrase(merged.answered)}. Coverage is PARTIAL, not "
+                "ALL; the failures are listed in `errors`. Agreement is a "
+                "separate axis."
+            )
+    else:
         return base
 
     chosen = merged.chosen or DEFAULT_ORDER[0]
@@ -1040,14 +1137,23 @@ def finalize(
             times[label] = stamp
 
     merged = merge_many(payloads, specs, shapes=shapes, times=times, now=now)
-    if provider is not None:
-        merged.provider = provider
     if data is not None:
         merged.data = data
     if answered is not None:
         merged.answered = list(answered)
     if fields is not None:
         merged.fields = fields
+    if provider is not None:
+        merged.provider = provider
+    elif merged.answered:
+        # ``merge_many`` only sees payloads, so it cannot tell "this provider was
+        # never asked" from "it was asked and failed". The pair can. Coverage is
+        # therefore recomputed from it, so an unasked leg (``NOT_ATTEMPTED``)
+        # stays silent while a leg that was asked and produced nothing turns
+        # ``ALL`` into ``PARTIAL`` rather than claiming complete coverage.
+        merged.provider = provider_from_answered(merged.answered, pair.asked)
+    else:
+        merged.provider = pair.provider
 
     warn_list = list(warnings)
     if health_warn:

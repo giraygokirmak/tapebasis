@@ -67,17 +67,21 @@ asks them all, compares, and tells the agent what it is holding.
 
 ## The `data_provider` contract
 
-Every tool result carries exactly one of seven values. It states **coverage**, never agreement:
+Every tool result carries exactly one of eight values. It states **coverage**, never agreement:
 
 | Value | Meaning |
 | --- | --- |
 | `ALL` | Every provider that was asked answered. |
+| `PARTIAL` | More than one answered, but a provider that was asked produced nothing. Values are served; `errors` says why. |
 | `TRADINGVIEW` | Only TradingView answered. Served, but **not** corroborated. |
 | `FINVIZ` | Only Finviz answered. Served, but **not** corroborated. |
 | `YAHOO` | Only Yahoo Finance answered. Served, but **not** corroborated. |
 | `SA` | Only StockAnalysis answered. Served, but **not** corroborated; US equities and ETFs only. |
 | `BLOOMBERG` | Only Bloomberg answered. Served, but **not** corroborated; its quote can be delayed. |
 | `NONE` | No provider could supply it. No value is presented. |
+
+`ALL` says every provider asked answered, never that they agree, and a leg that was asked and
+failed downgrades the label to `PARTIAL` rather than hiding behind `ALL`.
 
 ```jsonc
 {
@@ -87,8 +91,11 @@ Every tool result carries exactly one of seven values. It states **coverage**, n
   "notice": "Every provider asked answered ...",   // sentence to relay to the user
   "data": { ... },                         // the reconciled payload, one value per field
   "fields": {                              // per-field provenance, never a joint label
-    "price": { "source": "FINVIZ", "compared": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA"], "agreement": true },
-    "peers": { "source": "FINVIZ", "compared": ["FINVIZ"], "agreement": null } },
+    "price": { "source": "FINVIZ",
+               "supplied": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA"],
+               "compared": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA"],
+               "agreement": true },
+    "peers": { "source": "FINVIZ", "supplied": ["FINVIZ"], "compared": [], "agreement": null } },
   "freshness": {                           // why `data` holds the value it does
     "tradingview": "2026-11-04T00:59:53+00:00",
     "finviz": "2026-11-04T10:42:00+00:00",
@@ -122,7 +129,13 @@ applied.
 
 **`ALL` does not mean "the values agree".** It means every provider asked answered. Agreement is a
 separate axis, reported per field in `comparisons[].match` and summarised in `notice`/`warnings`. A
-subset of providers answering is still `ALL`; `providers_answered` names which ones.
+leg that was asked and failed makes the response `PARTIAL`, and `providers_answered` names which
+providers actually answered.
+
+**`fields` separates who answered from who was judged.** `supplied` is every provider that returned
+a reading for the field; `compared` is every provider whose reading was actually judged against
+another one, which is narrower whenever a pair could not be compared. `agreement` describes only
+`compared`, so `true` never means "every supplier agreed".
 
 **Disagreements are never silently resolved.** If the providers report different prices, all values
 stay in `comparisons`, the field is named in `notice` and `warnings`, and `data_provider` stays `ALL`.

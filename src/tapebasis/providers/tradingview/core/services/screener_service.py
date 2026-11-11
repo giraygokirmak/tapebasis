@@ -624,6 +624,11 @@ def lookup_tradingview_instrument(symbol: str, exchange: str = "") -> Optional[d
     url = f"{_SYMBOL_SEARCH_URL}?{_uparse.urlencode({'text': bare, 'lang': 'en'})}"
     req = _urequest.Request(url, headers={
         # The endpoint 403s bare python UAs; browser-shaped headers required.
+        # Deliberately the short form, not ``BROWSER_UA``: TradingView's search
+        # endpoint accepts this and rejects nothing about it, while the full
+        # Chrome string is what the scanner path sends. Both are recorded here
+        # rather than unified, because unifying them is a request to the
+        # upstream, not a refactor.
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Origin": "https://www.tradingview.com",
         "Referer": "https://www.tradingview.com/",
@@ -811,7 +816,12 @@ def analyze_coin(
             "symbol": full_symbol,
             "exchange": exchange,
             "timeframe": timeframe,
+            # ``time`` is when this analysis object was built, which is not a
+            # market observation. ``update_time`` is the scanner's own print
+            # time for the row, so callers that compare this price against
+            # another provider can date it instead of guessing.
             "timestamp": "real-time",
+            "update_time": indicators.get("update_time"),
             "price_data": {
                 "current_price": metrics["price"],
                 "open": round(open_price, 6) if open_price else None,

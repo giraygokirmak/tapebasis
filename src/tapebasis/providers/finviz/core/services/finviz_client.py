@@ -47,14 +47,14 @@ import httpx
 
 from tapebasis.http_pool import shared_client
 from tapebasis.providers.finviz.core.errors import ErrorCode, FinvizServiceError
+from tapebasis.utils import BROWSER_UA
 
 BASE_URL = "https://finviz.com"
 
-#: Chrome UA that finviz.com serves without a Cloudflare challenge.
-DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
-)
+#: Chrome UA that finviz.com serves without a Cloudflare challenge. The string
+#: has one home in :mod:`tapebasis.utils`; this name stays because Finviz service
+#: modules import it.
+DEFAULT_USER_AGENT = BROWSER_UA
 
 DEFAULT_TIMEOUT = float(os.environ.get("FINVIZ_TIMEOUT", "25"))
 DEFAULT_TTL = float(os.environ.get("FINVIZ_CACHE_TTL", "30"))

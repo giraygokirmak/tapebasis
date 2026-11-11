@@ -19,7 +19,14 @@ from typing import Any
 
 from . import blocking_pool, fv_access, sentiment, tv_access, yh_access
 from .health import FINVIZ, MONITOR, TRADINGVIEW, YAHOO
-from .providers_state import DataProvider, NotApplicable, ProviderError, envelope, error_code
+from .providers_state import (
+    DataProvider,
+    NotApplicable,
+    ProviderError,
+    envelope,
+    error_code,
+    provider_from_answered,
+)
 from .reconcile import ask, field_source, finalize, providers_in, single
 from .providers.tradingview.core.services import (
     bitcoin_market_service,
@@ -632,18 +639,21 @@ async def _snapshot_impl() -> dict[str, Any]:
                 compared_any = True
                 if cmp_row["match"] is False:
                     agree_all = False
+            row_answered = [
+                p
+                for p, row in ((TRADINGVIEW, tv_row), (YAHOO, yh_row))
+                if row
+            ]
             rows.append(
                 {
                     "symbol": symbol,
                     "price": (tv_row or yh_row or {}).get("price"),
                     "change_pct": (tv_row or yh_row or {}).get("change_pct"),
-                    "data_provider": (
-                        DataProvider.ALL.value
-                        if tv_row and yh_row
-                        else DataProvider.TRADINGVIEW.value
-                        if tv_row
-                        else DataProvider.YAHOO.value
-                    ),
+                    # Row coverage from the providers that supplied this row, so
+                    # a leg that answered for this symbol never has to be spelled
+                    # out as a literal ALL: the label is derived, the same way the
+                    # envelope derives its own.
+                    "data_provider": provider_from_answered(row_answered).value,
                     "tradingview_price": (tv_row or {}).get("price"),
                     "yahoo_price": (yh_row or {}).get("price"),
                     "agree": cmp_row["match"],

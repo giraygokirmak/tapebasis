@@ -132,10 +132,18 @@ def parse_market_timestamp(
     compact = _COMPACT_DATE.match(text)
     if compact:
         try:
-            return datetime(
-                int(compact["year"]), int(compact["month"]), int(compact["day"]),
-                tzinfo=timezone.utc,
-            )
+            # A bare ``YYYYMMDD`` is a *calendar date in the market's own zone*,
+            # not an instant. Reading it as UTC midnight puts it 04:00-05:00
+            # earlier in US/Eastern, which lands on the previous date and makes
+            # the session guard treat today's Finviz index print as yesterday's.
+            # That made COMP report a day change from one session beside a level
+            # from another. The date is therefore attached to US/Eastern
+            # midnight, so the session date it yields is the date it names.
+            return _to_eastern(
+                datetime(
+                    int(compact["year"]), int(compact["month"]), int(compact["day"]),
+                )
+            ).astimezone(timezone.utc)
         except ValueError:
             return None
 

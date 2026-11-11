@@ -25,7 +25,7 @@ from tapebasis.providers.tradingview.core.services.indicators import (
     analyze_fibonacci_position,
     detect_trend_for_fibonacci,
 )
-from tapebasis.providers.tradingview.core.utils.validators import EXCHANGE_SCREENER, sanitize_timeframe
+from tapebasis.providers.tradingview.core.utils.validators import EXCHANGE_SCREENER
 
 # Resilience layer (no tradingview_ta dependency; safe to import unconditionally).
 from tapebasis.providers.tradingview.core.services.screener_provider import _scan_with_retry
@@ -302,7 +302,6 @@ def run_egx_sector_scanner(
         EGX_SECTORS,
         EGX_SECTOR_META,
         SECTOR_DISPLAY_NAMES,
-        get_sector,
         get_currency,
     )
 
@@ -1042,7 +1041,7 @@ def analyze_egx_fibonacci(
     Returns:
         Fibonacci retracement & extension levels, price position, and context.
     """
-    from tapebasis.providers.tradingview.core.data.egx_sectors import get_sector, get_currency
+    from tapebasis.providers.tradingview.core.data.egx_sectors import get_sector
 
     if not _TA_AVAILABLE:
         return {"error": "tradingview_ta is missing; run `uv sync`."}

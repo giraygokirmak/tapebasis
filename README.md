@@ -46,11 +46,12 @@ instead of requested.
 
 ## The `data_provider` contract
 
-Every tool result carries exactly one of seven values. It states **coverage**, never agreement:
+Every tool result carries exactly one of eight values. It states **coverage**, never agreement:
 
 | Value          | Meaning                                                                    |
 | -------------- | -------------------------------------------------------------------------- |
 | `ALL`          | Every provider that was asked answered. Coverage is complete for this call. |
+| `PARTIAL`      | More than one answered, but a provider that was asked produced nothing. The values are served; `errors` says why the missing leg is missing. |
 | `TRADINGVIEW`  | Only TradingView answered. Served, but **not** corroborated.               |
 | `FINVIZ`       | Only Finviz answered. Served, but **not** corroborated.                    |
 | `YAHOO`        | Only Yahoo Finance answered. Served, but **not** corroborated.             |
@@ -59,8 +60,9 @@ Every tool result carries exactly one of seven values. It states **coverage**, n
 | `NONE`         | No provider could supply it. No value is presented.                        |
 
 `ALL` means "every provider asked answered", not "they agree". Agreement is a separate axis, and it
-lives in `comparisons[].match`. A partial response is still `ALL`; `providers_answered` names
-exactly which providers contributed.
+lives in `comparisons[].match`. A provider that was asked and failed makes the response `PARTIAL`,
+never `ALL`: the label describes coverage, and a listed error is missing coverage.
+`providers_answered` names exactly which providers contributed.
 
 The same envelope also contains:
 
@@ -72,8 +74,11 @@ The same envelope also contains:
   "notice": "Every provider asked answered (TradingView, Finviz, Yahoo Finance, StockAnalysis and Bloomberg). ...",   // names whichever answered
   "data": { ... },                       // the reconciled payload, one value per field
   "fields": {                            // per-field provenance, never a joint label
-    "price": { "source": "FINVIZ", "compared": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA"], "agreement": true },
-    "peers": { "source": "FINVIZ", "compared": ["FINVIZ"], "agreement": null } },
+    "price": { "source": "FINVIZ",
+               "supplied": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA"],
+               "compared": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA"],
+               "agreement": true },
+    "peers": { "source": "FINVIZ", "supplied": ["FINVIZ"], "compared": [], "agreement": null } },
   "freshness": {                         // why `data` holds the value it does
     "tradingview": "2026-11-04T00:59:53+00:00",
     "finviz": "2026-11-04T10:42:00+00:00",
@@ -537,6 +542,8 @@ No proxy configuration exists: every provider reaches its upstream directly.
 ```
 1. Check data_provider.
    ALL         -> quote the numbers; every provider asked answered.
+   PARTIAL     -> quote them, but say a provider that was asked did not answer,
+                  and read `errors` for which one and why.
    TRADINGVIEW -> quote them, but say the figure is single-source and not corroborated.
    FINVIZ      -> same, from the Finviz side.
    YAHOO       -> same, from the Yahoo side.
@@ -551,8 +558,10 @@ No proxy configuration exists: every provider reaches its upstream directly.
                 provider's figures may be stale or incomplete.
 
 3. Check fields for per-field provenance when the response mixes sources
-   (e.g. price.source is FINVIZ, compared against four providers, while
-   peers.source is FINVIZ alone).
+   (e.g. price.source is FINVIZ while price.supplied names four providers, and
+   peers.source is FINVIZ alone). Read `supplied` for who answered and
+   `compared` for whose reading was actually cross-checked; `agreement`
+   describes only that second set.
 
 4. Check comparisons when you need to show how far apart the providers are.
    match: true  -> they agree within tolerance.

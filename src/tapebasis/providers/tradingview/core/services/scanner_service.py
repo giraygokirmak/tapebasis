@@ -30,7 +30,6 @@ from tapebasis.providers.tradingview.core.services.screener_service import (
     pick_fallback_exchange,
     symbol_not_found_error,
 )
-from tapebasis.providers.tradingview.core.services.indicators import compute_metrics
 from tapebasis.providers.tradingview.core.services.screener_provider import (
     humanize_upstream_error,
     resilient_scan_columns,

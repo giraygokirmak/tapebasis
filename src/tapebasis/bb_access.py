@@ -47,6 +47,7 @@ from typing import Any
 
 from .providers_state import NoDataError, ProviderError
 from .ratelimit import RateLimited, call, limiter
+from .symbols import Resolution
 
 PROVIDER = "BLOOMBERG"
 _POOL = "bloomberg"
@@ -139,7 +140,7 @@ def _registry_declines(symbol: str) -> str | None:
     )
 
 
-def resolve_bloomberg(symbol: str) -> "Resolution":
+def resolve_bloomberg(symbol: str) -> Resolution:
     """Bloomberg's identity for *symbol*, as the one place it is decided.
 
     Every path that asks Bloomberg goes through this function, so the id a
@@ -165,8 +166,6 @@ def resolve_bloomberg(symbol: str) -> "Resolution":
         to fetch, or ``None`` with ``note`` stating why Bloomberg does not
         carry the instrument.
     """
-    from .symbols import Resolution
-
     query = (symbol or "").strip().upper().replace(" ", "")
     declined = _registry_declines(query)
     if declined is not None:

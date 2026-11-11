@@ -37,7 +37,17 @@ _BASE = "https://query1.finance.yahoo.com/v8/finance/chart"
 
 
 def _quote_url(symbol: str) -> str:
-    return f"{_BASE}/{symbol}?interval=1m&range=1d&includePrePost=true"
+    """The chart request for extended hours.
+
+    ``range=1d`` used to return the day's 1-minute candles and no longer does:
+    Yahoo answers with ``meta`` alone and no ``timestamp`` array, so there was
+    nothing to walk and every call degraded to "unexpected response shape:
+    'timestamp'". ``range=2d`` is the narrowest window that still carries
+    candles, and it brings two session days with it, which is why the shaper
+    classifies each candle against *its own* day's windows rather than against
+    the single ``currentTradingPeriod`` block.
+    """
+    return f"{_BASE}/{symbol}?interval=1m&range=2d&includePrePost=true"
 
 
 def _change_pct(price: Optional[float], reference: Optional[float]) -> Optional[float]:
@@ -53,19 +63,83 @@ def _fmt_time(ts: Optional[int]) -> Optional[str]:
     return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(ts))
 
 
+def _session_windows(meta: dict) -> list[tuple[str, dict[str, int]]]:
+    """Every session window the response covers, as ``(label, window)``.
+
+    ``meta.currentTradingPeriod`` describes one day, so walking a multi-day
+    window against it quietly classifies yesterday's candles as today's
+    pre-market. ``meta.tradingPeriods`` carries the windows for every day the
+    response covers; older payloads only have the single block, which is still
+    correct for a one-day window and is used as the fallback.
+
+    Windows are kept flat rather than bucketed per day: a day missing one of its
+    three windows would otherwise shift every later day's mapping. Each window
+    carries its own ``start``/``end``, which is all the classifier needs.
+    """
+    periods = meta.get("tradingPeriods")
+    if isinstance(periods, dict):
+        windows: list[tuple[str, dict[str, int]]] = []
+        for label in ("pre", "regular", "post"):
+            for block in periods.get(label) or ():
+                for window in block if isinstance(block, list) else [block]:
+                    if isinstance(window, dict) and window.get("start") is not None:
+                        windows.append((label, window))
+        if windows:
+            return windows
+    current = meta.get("currentTradingPeriod")
+    if isinstance(current, dict):
+        return [
+            (label, current[label])
+            for label in ("pre", "regular", "post")
+            if isinstance(current.get(label), dict)
+        ]
+    return []
+
+
+def _window_for(ts: int, windows: list[tuple[str, dict[str, int]]]) -> str | None:
+    """Which session a candle belongs to, using the windows that contain it.
+
+    A regular window is fully bounded, so a timestamp inside one identifies the
+    session unambiguously; regular windows are therefore tested first across
+    every day. Pre and post windows can abut the regular one, and a post window
+    ends after midnight UTC, so a candle at 00:30 belongs to the previous
+    session's after-hours and must not be filed as the next day's pre-market.
+    """
+    for label, window in windows:
+        if label != "regular":
+            continue
+        start, end = window.get("start"), window.get("end")
+        if start is not None and end is not None and start <= ts <= end:
+            return "regular"
+    for label, window in windows:
+        if label == "regular":
+            continue
+        start, end = window.get("start"), window.get("end")
+        if start is not None and end is not None and start <= ts <= end:
+            return label
+    return None
+
+
 def _shape_extended_hours(symbol: str, data: dict) -> dict:
-    """Pure formatter for the Yahoo chart response. Shared sync + async."""
+    """Pure formatter for the Yahoo chart response. Shared sync + async.
+
+    Returns:
+        One block per session (``pre_market``, ``regular``, ``post_market``),
+        each with the most recent print inside that session, or ``None`` for a
+        session with no print yet. A payload with no candle array reports the
+        reason in ``error`` rather than raising.
+    """
     try:
         result = data["chart"]["result"][0]
         meta = result["meta"]
-        period = meta["currentTradingPeriod"]
         timestamps = result["timestamp"]
         closes = result["indicators"]["quote"][0]["close"]
     except (KeyError, IndexError, TypeError) as e:
         return {"symbol": symbol.upper(), "error": f"unexpected response shape: {e}"}
 
-    regular_start = period["regular"]["start"]
-    regular_end = period["regular"]["end"]
+    windows = _session_windows(meta)
+    current = meta.get("currentTradingPeriod") or {}
+    regular_start = (current.get("regular") or {}).get("start")
 
     pre_price, pre_time = None, None
     regular_price_intraday, regular_time = None, None
@@ -74,11 +148,12 @@ def _shape_extended_hours(symbol: str, data: dict) -> dict:
     for ts, c in zip(timestamps, closes):
         if c is None:
             continue
-        if ts < regular_start:
+        session = _window_for(ts, windows)
+        if session == "pre":
             pre_price, pre_time = c, ts
-        elif ts <= regular_end:
+        elif session == "regular":
             regular_price_intraday, regular_time = c, ts
-        else:
+        elif session == "post":
             post_price, post_time = c, ts
 
     # Prefer the meta `regularMarketPrice` (consolidated tape); fall back to
@@ -93,7 +168,11 @@ def _shape_extended_hours(symbol: str, data: dict) -> dict:
     # (`regularMarketPrice`) instead. `previous_close` and the regular change keep
     # Yahoo's reference: before the open they describe the last session's own move.
     regular_market_time = meta.get("regularMarketTime")
-    pre_open = regular_market_time is not None and regular_market_time < regular_start
+    pre_open = (
+        regular_market_time is not None
+        and regular_start is not None
+        and regular_market_time < regular_start
+    )
     pre_reference = regular_close if pre_open and regular_close is not None else previous_close
 
     out = {

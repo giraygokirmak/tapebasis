@@ -628,8 +628,9 @@ that leg, never an error and never a silent absence.
 ## 36. A field is sourced from one provider, never from all of them
 
 **Decision.** `fields` carries one descriptor per key in `data`: `source` (the provider whose
-reading was placed in `data`), `compared` (every provider that supplied a reading for the field) and
-`agreement` (the cross-check result). A field is never labelled `ALL`.
+reading was placed in `data`), `supplied` (every provider that returned a reading for the field),
+`compared` (every provider whose reading was actually judged against another one) and `agreement`
+(the cross-check result). A field is never labelled `ALL`.
 
 **Why.** `data` holds exactly one value per field, chosen as the freshest print. The old
 `{"price": "ALL"}` spelling described *coverage* in the slot that names *origin*, so a reader saw
@@ -641,12 +642,17 @@ The fused label also lost single-source-ness silently: `agreement` is `null` onl
 never judged, so a cross-checked field that failed comparison (`false`) can no longer be mistaken
 for one nobody compared (`null`).
 
+**Why `supplied` and `compared` are separate, later.** Filling `compared` from the supplied set was
+the same collapse one level down: five providers can have a price while only three of the ten pairs
+are comparable, and then `agreement: true` read as "all five agreed" when two were never judged. See
+[#44](#44-coverage-is-partial-when-a-leg-was-asked-and-produced-nothing).
+
 **What did not change.** `data_provider` and `verification` still describe the call: `ALL` means
 every provider asked answered, full stop. `comparisons[].values` still holds every provider's raw
 reading. The chosen reading is still the freshest print, and `freshness.chosen` still explains why.
 `tapebasis_tool_map` had been overloading `fields` to mean tool-to-provider, a different relation in
 the same slot; its descriptors now name the catalogue's declared set through the same
-`source`/`compared` shape, so one schema describes both.
+`source`/`supplied`/`compared` shape, so one schema describes both.
 
 **Consequence:** reading a value's origin is one lookup (`fields.<field>.source`), its upstream is
 one more (`sources[fields.<field>.source]`), and no response ever presents a number as coming from
@@ -827,6 +833,117 @@ became `USOIL:US`, which answers a robot page.
 provider cell and a note is a stated limitation of the provider, so it resolves to `symbol=None` with
 that note. `to_bloomberg()` refuses the same case rather than guessing, so no caller can invent an id
 that belongs to something else. The id a response reports is always the id it fetched.
+
+---
+
+## 44. Coverage is PARTIAL when a leg was asked and produced nothing
+
+**Decision:** `DataProvider` gains `PARTIAL`. `ALL` means every provider that was *asked* answered;
+`PARTIAL` means more than one answered while at least one provider that was asked produced nothing.
+`verification_for` maps both onto `MULTI_SOURCE`. The ask set is explicit: `Pair.asked` derives it
+from the attempts (`error.code != "NOT_ATTEMPTED"`), and `provider_from_answered(answered, asked)`
+takes it as an argument.
+
+**Why:** a live `stock_quote` response reported `data_provider: ALL` beside `errors: [{YAHOO, ...}]`
+and three answers. Coverage is a claim about the providers a call asked, so listing a failure in the
+same payload and then claiming complete coverage is a false statement, not a rounding of one. The
+measured case was not a one-off: any provider outage during a fan-out produced it.
+
+**`NOT_ATTEMPTED` is not a failure.** A provider with no endpoint for the request, or one that does
+not carry the instrument, was never asked; counting its silence as missing coverage would make every
+`XAUUSD` or `WTI` response `PARTIAL` for a boundary that is declared in the registry. Only an
+attempt that was made and produced nothing changes the label.
+
+**Consequence:** a caller can now trust `ALL` literally. `PARTIAL` says the values are served but a
+leg is missing, and `errors` names it. `providers_answered` remains the precise list either way.
+
+---
+
+## 45. `supplied` and `compared` are different questions about a field
+
+**Decision:** `field_source()` returns `{source, supplied, compared, agreement}`, and
+`compared_providers(comparison)` extracts the providers on a side of any pair that reached a verdict
+(`match is not None`). `compared` is never wider than `supplied`.
+
+**Why:** filling `compared` from the supplied set reintroduced the original collapse one level down.
+Five providers can supply a price while only some of the pairs are comparable; the rest were excluded
+for a reason (different session, declared feed delay, no print time, no shared definition). Reporting
+`agreement: true` against the supplied set therefore claimed agreement for providers that were never
+judged. The measured shape: a `technical_analysis` price row with five suppliers, ten pairs, three
+comparable.
+
+**A field a tool does not compare has an empty `compared`.** `stock_prices` compares `price` and
+`change_percent` only; `previous_close` and `volume` are served from the freshest provider that has
+them and carry `supplied` for who answered with `compared: []`. Listing suppliers there would claim a
+check that never ran.
+
+**Back-compat:** `compared` is still the third positional argument, so old call sites keep working;
+`supplied=` is the keyword that makes the split explicit.
+
+---
+
+## 46. A provider that prints a time is a provider that can be dated
+
+**Decision:** the TradingView leg now asks its scanner for `update_time` and exposes it on the
+analysis payload (`update_time`, separate from the library's own `Analysis.time`). Finviz's compact
+`YYYYMMDD` index date is pinned at US/Eastern midnight, not UTC midnight.
+
+**Why:** `technical_analysis` had four `compare_values` calls with no print-time guards, because the
+TradingView payload carried no observation time to guard against. Its only time-ish field was
+`timestamp: "real-time"`, a static string. The scanner was already returning the print time; the
+wrapper simply never requested the column. Without it every cross-check had to either compare across
+sessions or drop the provider.
+
+The compact-date bug was the mirror image: Finviz renders `20261111`, and parsing that as UTC
+midnight lands on the previous ET date, so a current session was read as the prior one and its
+numbers were mixed with genuinely-current ones. A date without a zone is a market-calendar date, and
+the market is US/Eastern.
+
+**Consequence:** `technical_analysis` reports every price pair as `not_comparable` with the correct
+reason (different sessions, or 240 minutes past the window) instead of a false conflict, and
+`market_indices` rows are internally consistent.
+
+---
+
+## 47. An index row is one session, not one provider per field
+
+**Decision:** `market_indices` resolves the day-quote block (level, previous close, change, change
+percent) from providers whose print belongs to the winner's session date. A provider from another
+session is excluded, not merely ranked last. Per-index `fields` name each value's source.
+
+**Why:** the measured row reported SPX at a level 0.74 % above its previous close beside a day change
+of -0.38 %. The level and previous close came from the provider that had rolled into today, the
+change percent from a row still on yesterday. Four numbers describing one observation contradicted
+each other.
+
+**A provider with no print time is still consulted last.** It cannot be shown to disagree with the
+winner's session, and TradingView's index rows carry no previous close at all, so excluding undated
+providers outright would blank a number another provider shaped from the same session.
+
+**Consequence:** a row can read `previous_close: null` when the winning provider's session has no
+previous close to report, which is honest: borrowing the other session's number is the bug.
+
+---
+
+## 48. `range=1d` is not a trading day, and a multi-day window has multi-day sessions
+
+**Decision:** the Yahoo extended-hours request asks for `range=2d`, and the shaper classifies every
+candle against its *own* day's session windows from `meta.tradingPeriods`, falling back to
+`currentTradingPeriod` when only one day is present.
+
+**Why:** Yahoo stopped returning a `timestamp` array for `range=1d&interval=1m&includePrePost=true`.
+It answers with `meta` and `indicators` only, so every call degraded to `errors: [{YAHOO, NO_DATA,
+"unexpected response shape: 'timestamp'"}]` and the session timeline vanished from the response
+without a test noticing. `range=2d` is the narrowest window that still carries candles.
+
+A wider window brings a second hazard: walking two days of candles against today's single
+`currentTradingPeriod` block files yesterday's regular prints as today's pre-market. Each candle is
+therefore classified by the windows of the day it falls in. The post window ends after midnight UTC,
+so a candle at 00:30 UTC belongs to the previous session's after-hours and must not be filed as the
+next day's pre-market.
+
+**Consequence:** the extended-hours response carries real session blocks again, and the classification
+is correct across the midnight roll that the wider window introduced.
 
 ---
 

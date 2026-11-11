@@ -141,7 +141,8 @@ async def test_tool_map_names_one_source_per_tool():
     fields = response["fields"]
     assert fields["bloomberg_quote"] == {
         "source": "BLOOMBERG",
-        "compared": ["BLOOMBERG"],
+        "supplied": ["BLOOMBERG"],
+        "compared": [],
         "agreement": None,
     }
     assert fields["bloomberg_markets"]["source"] == "BLOOMBERG"

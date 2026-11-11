@@ -175,18 +175,72 @@ def test_field_source_names_one_provider_and_orders_the_rest():
     """``field_source`` never collapses coverage into the source label.
 
     ``source`` is the one provider whose reading went into ``data``;
-    ``compared`` is every provider that supplied a reading, in display order
-    even when passed out of order; ``agreement`` survives unchanged so the
-    caller cannot tell a cross-check (True/False) from a single reading (None).
+    ``supplied`` is every provider that returned a reading, in display order
+    even when passed out of order; ``compared`` is narrower when pairs could not
+    be judged; ``agreement`` survives unchanged so the caller cannot tell a
+    cross-check (True/False) from a single reading (None).
     """
     descriptor = field_source(
         YAHOO, [YAHOO, TRADINGVIEW, FINVIZ], False
     )
     assert descriptor == {
         "source": YAHOO,
+        "supplied": [TRADINGVIEW, FINVIZ, YAHOO],
         "compared": [TRADINGVIEW, FINVIZ, YAHOO],
         "agreement": False,
     }
+
+
+def test_field_source_separates_who_answered_from_who_was_judged():
+    """``supplied`` and ``compared`` answer different questions.
+
+    Five providers can have a price while only some pairs were comparable.
+    Reading ``agreement: true`` as "every provider agreed" is exactly the
+    mistake the split exists to stop, so ``compared`` must not be filled from
+    the supplied set.
+    """
+    from tapebasis.reconcile import SA
+
+    descriptor = field_source(
+        TRADINGVIEW,
+        [FINVIZ, YAHOO],
+        True,
+        supplied=[TRADINGVIEW, FINVIZ, YAHOO, SA],
+    )
+    assert descriptor["supplied"] == [TRADINGVIEW, FINVIZ, YAHOO, SA]
+    assert descriptor["compared"] == [FINVIZ, YAHOO]
+    assert descriptor["agreement"] is True
+
+
+def test_field_source_leaves_compared_empty_when_nothing_was_judged():
+    """A single reading was never cross-checked, so it claims no comparison."""
+    descriptor = field_source(FINVIZ, (), None, supplied=[FINVIZ])
+    assert descriptor == {
+        "source": FINVIZ,
+        "supplied": [FINVIZ],
+        "compared": [],
+        "agreement": None,
+    }
+
+
+def test_compared_providers_excludes_pairs_that_reached_no_verdict():
+    """Only providers on a side of a judged pair are counted as compared."""
+    from tapebasis.reconcile import compare_values, compared_providers
+
+    row = compare_values(
+        {TRADINGVIEW: 10.0, FINVIZ: 10.0, YAHOO: 10.0},
+        times={
+            TRADINGVIEW: "2026-11-03T20:00:00+00:00",
+            FINVIZ: "2026-11-03T20:00:00+00:00",
+            YAHOO: "2026-11-04T20:00:00+00:00",
+        },
+        session_boundary=True,
+    )
+    assert row["match"] is True
+    # Yahoo sits a session away from the other two, so its pairs were not
+    # judged: it supplied a reading but corroborated nothing.
+    assert compared_providers(row) == [TRADINGVIEW, FINVIZ]
+    assert compared_providers(None) == []
 
 
 def test_field_source_keeps_an_unknown_source_visible():
@@ -194,7 +248,8 @@ def test_field_source_keeps_an_unknown_source_visible():
     descriptor = field_source("MY_FEED", [], None)
     assert descriptor == {
         "source": "MY_FEED",
-        "compared": ["MY_FEED"],
+        "supplied": ["MY_FEED"],
+        "compared": [],
         "agreement": None,
     }
 
@@ -235,6 +290,7 @@ def test_field_of_a_compared_reading_still_names_one_source():
     )
     assert merged.fields["price"] == {
         "source": FINVIZ,
+        "supplied": [TRADINGVIEW, FINVIZ, YAHOO, SA],
         "compared": [TRADINGVIEW, FINVIZ, YAHOO, SA],
         "agreement": True,
     }
@@ -244,7 +300,7 @@ def test_field_of_a_compared_reading_still_names_one_source():
         specs=specs,
     )
     assert all(
-        set(entry) == {"source", "compared", "agreement"}
+        set(entry) == {"source", "supplied", "compared", "agreement"}
         for entry in body["fields"].values()
     )
 
@@ -297,6 +353,7 @@ def test_merge_three_providers_resolves_to_freshest_print():
     # the field is a reported disagreement, not a joint product.
     assert merged.fields["price"] == {
         "source": YAHOO,
+        "supplied": [TRADINGVIEW, FINVIZ, YAHOO],
         "compared": [TRADINGVIEW, FINVIZ, YAHOO],
         "agreement": False,
     }
@@ -321,7 +378,8 @@ def test_merge_falls_back_to_single_provider():
     assert merged.data == {"price": 10.0}
     assert merged.fields["price"] == {
         "source": FINVIZ,
-        "compared": [FINVIZ],
+        "supplied": [FINVIZ],
+        "compared": [],
         "agreement": None,
     }
 
@@ -343,12 +401,14 @@ def test_merge_keeps_fields_only_one_side_offers():
     assert merged.data["fv_only"] == "y"
     assert merged.fields["tv_only"] == {
         "source": TRADINGVIEW,
-        "compared": [TRADINGVIEW],
+        "supplied": [TRADINGVIEW],
+        "compared": [],
         "agreement": None,
     }
     assert merged.fields["fv_only"] == {
         "source": FINVIZ,
-        "compared": [FINVIZ],
+        "supplied": [FINVIZ],
+        "compared": [],
         "agreement": None,
     }
 
@@ -362,7 +422,8 @@ def test_merge_carries_yahoo_only_fields():
     assert merged.data["yh_only"] == "z"
     assert merged.fields["yh_only"] == {
         "source": YAHOO,
-        "compared": [YAHOO],
+        "supplied": [YAHOO],
+        "compared": [],
         "agreement": None,
     }
 
@@ -393,7 +454,8 @@ def test_uncontested_field_comes_from_the_freshest_provider():
     assert merged.data["sector"] == "fresh-sector"
     assert merged.fields["sector"] == {
         "source": FINVIZ,
-        "compared": [FINVIZ],
+        "supplied": [FINVIZ],
+        "compared": [],
         "agreement": None,
     }
 
@@ -433,6 +495,12 @@ def test_single_tradingview_marks_others_not_attempted():
 
 @pytest.mark.asyncio
 async def test_ask_runs_all_and_survives_one_failure():
+    """One leg erroring is served, but the coverage claim must not say ALL.
+
+    This used to assert ``ALL``, which was a false coverage claim: Finviz was
+    asked, Finviz failed, and the response still told the reader every provider
+    had answered.
+    """
     async def good():
         return {"v": 1}
 
@@ -441,7 +509,8 @@ async def test_ask_runs_all_and_survives_one_failure():
 
     pair = await ask(good, bad, good)
     assert pair.tv.ok and not pair.fv.ok and pair.yh.ok
-    assert pair.provider is DataProvider.ALL
+    assert pair.asked == [TRADINGVIEW, FINVIZ, YAHOO]
+    assert pair.provider is DataProvider.PARTIAL
     assert pair.errors[0]["provider"] == FINVIZ
 
 

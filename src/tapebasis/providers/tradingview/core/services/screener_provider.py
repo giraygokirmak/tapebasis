@@ -1,6 +1,5 @@
 from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple
-from ..utils.validators import get_market_type
 from .indicators import AVERAGE_VOLUME, RELATIVE_VOLUME
 import json as _json
 import os as _os
@@ -444,9 +443,14 @@ def _scan_with_retry(
 
 
 # Scanner columns the indicator helpers read that tradingview_ta doesn't
-# request: the volume baseline (TradingView has no volume-SMA column).
-# tradingview_ta adds the interval suffix to them, as to its own columns.
-TA_EXTRA_COLUMNS = (RELATIVE_VOLUME, AVERAGE_VOLUME)
+# request: the volume baseline (TradingView has no volume-SMA column) and the
+# print time. ``update_time`` is the one the comparison layer needs: without it
+# a TradingView price has no observation timestamp of its own, so every
+# cross-check had to either compare it across sessions or drop it. The library's
+# own ``Analysis.time`` is not a substitute: it is stamped when the analysis
+# object is built, not when the market printed.
+# tradingview_ta adds the interval suffix to these, as to its own columns.
+TA_EXTRA_COLUMNS = (RELATIVE_VOLUME, AVERAGE_VOLUME, "update_time")
 
 
 def resilient_get_multiple_analysis(screener, interval, symbols):

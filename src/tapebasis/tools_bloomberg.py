@@ -52,7 +52,12 @@ def _label(
     MONITOR.ensure_started()
     fields = None
     if isinstance(data, dict):
-        fields = {key: field_source(bb_access.PROVIDER, [bb_access.PROVIDER], None) for key in data}
+        fields = {
+            key: field_source(
+                bb_access.PROVIDER, (), None, supplied=[bb_access.PROVIDER]
+            )
+            for key in data
+        }
     return envelope(
         data,
         provider=DataProvider.BLOOMBERG,

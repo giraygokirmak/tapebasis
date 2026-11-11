@@ -11,11 +11,11 @@ about which price is more current.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
-from tapebasis.freshness import freshest, parse_market_timestamp
+from tapebasis.freshness import freshest, parse_market_timestamp, session_date
 from tapebasis.reconcile import FINVIZ, TRADINGVIEW, FieldSpec, merge
 
 
@@ -64,9 +64,16 @@ def test_parses_iso_timestamps():
 
 
 def test_parses_compact_finviz_index_date():
-    assert parse_market_timestamp("20261103") == datetime(
-        2026, 11, 3, tzinfo=timezone.utc
-    )
+    """A bare ``YYYYMMDD`` is a market calendar date, pinned at ET midnight.
+
+    Reading it as UTC midnight puts it 04:00-05:00 earlier in US/Eastern, which
+    lands on the previous date and makes the session guard treat today's Finviz
+    index print as yesterday's. The instant is therefore ET midnight, so
+    ``session_date`` returns the date the value actually names.
+    """
+    parsed = parse_market_timestamp("20261103")
+    assert session_date(parsed) == date(2026, 11, 3)
+    assert parsed == datetime(2026, 11, 3, 5, 0, tzinfo=timezone.utc)
 
 
 def test_parses_compact_index_date_sent_as_an_integer():
@@ -76,9 +83,9 @@ def test_parses_compact_index_date_sent_as_an_integer():
     index print to the wrong year, which then makes every cross-provider
     session check fail.
     """
-    assert parse_market_timestamp(20261105) == datetime(
-        2026, 11, 5, tzinfo=timezone.utc
-    )
+    parsed = parse_market_timestamp(20261105)
+    assert session_date(parsed) == date(2026, 11, 5)
+    assert parsed == datetime(2026, 11, 5, 5, 0, tzinfo=timezone.utc)
     # A real epoch second is still an epoch second.
     assert parse_market_timestamp(1793739601) == datetime(
         2026, 11, 3, 21, 0, 1, tzinfo=timezone.utc

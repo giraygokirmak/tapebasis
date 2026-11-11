@@ -429,11 +429,42 @@ def test_fx_is_detected_from_any_providers_asset_class():
     assert _is_fx(stock, yahoo_fx) is True   # Finviz never carries FX
     assert _is_fx(stock) is False
 
-    fx_spec = next(s for s in _quote_specs(day_change_comparable=False)
+    fx_spec = next(s for s in _quote_specs(spot_fx=True)
                    if s.name == "change_percent")
     equity_spec = next(s for s in _quote_specs() if s.name == "change_percent")
     assert fx_spec.not_comparable_reason
     assert equity_spec.not_comparable_reason is None
+
+
+def test_fx_previous_close_and_volume_are_the_same_structural_boundary():
+    """The FX rule must cover the close the change is measured from, and volume.
+
+    Refusing to compare an FX day change while still calling the previous close
+    a disagreement is the tool contradicting itself: the close *is* the baseline
+    the day change lacks. Volume has no exchange session to accumulate over, and
+    Yahoo reports 0 for every pair, so the 1 % tolerance scored a 100 % conflict
+    on every FX quote. All three are reported, none is a conflict, and an
+    equity keeps all three compared.
+    """
+    from tapebasis.tools_market import _quote_specs
+
+    fx = {s.name: s for s in _quote_specs(spot_fx=True)}
+    equity = {s.name: s for s in _quote_specs()}
+
+    for name in ("change_percent", "previous_close", "volume"):
+        assert fx[name].not_comparable_reason, name
+        assert equity[name].not_comparable_reason is None, name
+
+    # The reasons are distinct facts, not one sentence reused three times.
+    reasons = {
+        name: fx[name].not_comparable_reason
+        for name in ("change_percent", "previous_close", "volume")
+    }
+    assert len(set(reasons.values())) == 3
+
+    # Fields that do have a shared definition on FX stay comparable.
+    for name in ("price", "week_52_high", "day_high", "day_low"):
+        assert fx[name].not_comparable_reason is None, name
 
 
 # ── snapshot join keys ─────────────────────────────────────────────────────

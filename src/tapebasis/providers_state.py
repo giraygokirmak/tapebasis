@@ -57,6 +57,7 @@ class DataProvider(str, Enum):
     """Which provider(s) supplied the data in a response."""
 
     ALL = "ALL"
+    PARTIAL = "PARTIAL"
     TRADINGVIEW = "TRADINGVIEW"
     FINVIZ = "FINVIZ"
     YAHOO = "YAHOO"
@@ -68,7 +69,7 @@ class DataProvider(str, Enum):
 class Verification(str, Enum):
     """How strongly the payload is corroborated.
 
-    ``MULTI_SOURCE``  two or more providers answered (``ALL``).
+    ``MULTI_SOURCE``  two or more providers answered (``ALL``, ``PARTIAL``).
     ``SINGLE_SOURCE`` exactly one provider answered (a provider name).
     ``UNAVAILABLE``   no provider answered (``NONE``).
     """
@@ -98,7 +99,7 @@ PROVIDER_NAMES: dict[str, str] = {
 
 def verification_for(provider: DataProvider) -> Verification:
     """Map a provider label onto its corroboration strength."""
-    if provider is DataProvider.ALL:
+    if provider in (DataProvider.ALL, DataProvider.PARTIAL):
         return Verification.MULTI_SOURCE
     if provider is DataProvider.NONE:
         return Verification.UNAVAILABLE
@@ -111,6 +112,13 @@ PROVIDER_MEANING: dict[DataProvider, str] = {
         "Every provider that was asked answered this request. Coverage is "
         "``ALL``. Agreement is a separate axis: check `comparisons` for "
         "whether the readings match."
+    ),
+    DataProvider.PARTIAL: (
+        "Some of the providers that were asked did not answer this request, so "
+        "coverage is ``PARTIAL``: the values are served, but a provider was "
+        "asked and produced nothing. `providers_answered` names the legs that "
+        "did answer and `errors` states why the others did not. Agreement is a "
+        "separate axis: check `comparisons` for whether the readings match."
     ),
     DataProvider.TRADINGVIEW: (
         "Data came from TRADINGVIEW only. The other providers did not supply "
@@ -283,7 +291,7 @@ def envelope(
 
     answered = list(providers_answered)
     notice = PROVIDER_MEANING[provider]
-    if provider is not DataProvider.ALL and provider is not DataProvider.NONE:
+    if provider not in (DataProvider.ALL, DataProvider.PARTIAL, DataProvider.NONE):
         notice += " Treat this as single-source data and say so when reporting it."
     if degraded:
         notice += (
@@ -310,15 +318,36 @@ def envelope(
     return payload
 
 
-def provider_from_answered(answered: Iterable[str]) -> DataProvider:
+def provider_from_answered(
+    answered: Iterable[str],
+    asked: Iterable[str] | None = None,
+) -> DataProvider:
     """Map the set of providers that answered onto a :class:`DataProvider`.
 
     ``ALL`` is coverage: it means every provider that was *asked* answered.
-    Callers pass every label that answered here.
+    ``PARTIAL`` means at least two answered but at least one provider that was
+    asked produced nothing (a failure or ``NO_DATA``), so the coverage claim
+    would be false. A single answer is labelled with that provider's name, which
+    already says the response is not corroborated.
+
+    Args:
+        answered: Provider labels that produced data.
+        asked: Provider labels this call actually asked. ``None`` means "the
+            caller has not said", in which case the answered set is treated as
+            the whole of what was asked and the result can only be ``ALL``,
+            a single provider, or ``NONE``. Callers that know the ask set must
+            pass it, otherwise a failed leg reads as ``ALL``.
+
+    Returns:
+        The coverage label for the response.
     """
     present = {str(p).upper() for p in answered if p}
     if not present:
         return DataProvider.NONE
+    if asked is not None:
+        missing = {str(p).upper() for p in asked if p} - present
+        if missing and len(present) >= 2:
+            return DataProvider.PARTIAL
     if len(present) >= 2:
         return DataProvider.ALL
     return DataProvider(next(iter(present)))

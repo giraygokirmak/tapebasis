@@ -54,11 +54,12 @@ from .http_pool import shared_client
 from .providers_state import NoDataError
 from .ratelimit import RateLimited, call
 from . import singleflight
+from .utils import BROWSER_UA
 
-UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
-)
+#: The browser identity TradingView's symbol search and scanner accept. Named
+#: ``UA`` here for historical reasons; the string itself has one home in
+#: :mod:`tapebasis.utils` so every leg cannot drift to a different version.
+UA = BROWSER_UA
 
 #: Venues that carry the canonical, most-liquid listing for an instrument, in
 #: preference order. When several exchanges quote the same ticker, the first

@@ -131,12 +131,19 @@ async def test_quote_all_when_every_provider_answers(fake_providers):
 
 @pytest.mark.asyncio
 async def test_all_is_reported_for_two_of_three(fake_providers):
-    """Coverage means every provider *asked* answered, not that all of them exist."""
+    """A leg that was asked and failed makes coverage PARTIAL, never ALL.
+
+    This used to assert ``ALL`` with a Yahoo error in the same response, which
+    told the reader every provider asked had answered. Coverage is a claim about
+    the ask set, and Yahoo was in it.
+    """
     fake_providers["yh"] = RuntimeError("yahoo outage")
     result = await tools_market.stock_quote("AAPL")
-    assert result["data_provider"] == "ALL"
+    assert result["data_provider"] == "PARTIAL"
+    assert result["verification"] == "MULTI_SOURCE"
     assert result["providers_answered"] == ["TRADINGVIEW", "FINVIZ"]
     assert [e["provider"] for e in result["errors"]] == ["YAHOO"]
+    assert "PARTIAL" in result["notice"]
 
 
 @pytest.mark.asyncio
@@ -369,6 +376,12 @@ async def test_bloomberg_never_wins_the_freshness_tie_break(fake_providers):
 
 @pytest.mark.asyncio
 async def test_bloomberg_failure_is_an_error_not_a_lost_response(fake_providers):
+    """A blocked Bloomberg leg is reported, and it costs the ALL claim.
+
+    Bloomberg was asked, Bloomberg failed, so the response is PARTIAL. Calling
+    that ``ALL`` would claim complete coverage while listing the failure in the
+    same payload.
+    """
     from tapebasis.providers_state import ProviderError
 
     # The fixture raises whatever exception object the state holds.
@@ -376,7 +389,7 @@ async def test_bloomberg_failure_is_an_error_not_a_lost_response(fake_providers)
         "BLOOMBERG", "HTTP 403 bot wall", code="UPSTREAM_BLOCKED"
     )
     result = await tools_market.stock_quote("AAPL")
-    assert result["data_provider"] == "ALL"
+    assert result["data_provider"] == "PARTIAL"
     assert result["providers_answered"] == ["TRADINGVIEW", "FINVIZ", "YAHOO"]
     assert [e["provider"] for e in result["errors"]] == ["BLOOMBERG"]
     assert result["data"]["price"] == pytest.approx(331.9)
@@ -489,16 +502,20 @@ async def test_prices_state_the_source_of_every_field(fake_providers, monkeypatc
     fields = row["fields"]
 
     assert row["data_provider"] == "ALL"
-    # The compared fields carry every provider that supplied a reading.
+    # ``supplied`` is who answered; ``compared`` is who was actually judged.
+    assert set(fields["price"]["supplied"]) == {"TRADINGVIEW", "FINVIZ", "YAHOO"}
     assert set(fields["price"]["compared"]) == {"TRADINGVIEW", "FINVIZ", "YAHOO"}
     assert fields["price"]["agreement"] is True
     assert fields["price"]["source"] == row["price_source"]
-    # A field this tool does not compare names its one source, and does not
-    # claim a cross-check that never happened.
+    # A field this tool does not compare says who supplied a reading and claims
+    # no cross-check, because none ran. ``previous_close`` is shaped by more than
+    # one provider, which is exactly why ``supplied`` had to be separate from
+    # ``source``: the value is one print, the coverage is wider.
     for name in ("previous_close", "volume"):
-        assert len(fields[name]["compared"]) == 1
-        assert fields[name]["compared"] == [fields[name]["source"]]
+        assert fields[name]["source"] in fields[name]["supplied"]
+        assert fields[name]["compared"] == []
         assert fields[name]["agreement"] is None
+    assert fields["previous_close"]["supplied"] == ["FINVIZ", "YAHOO"]
     assert set(fields) == {"price", "change_percent", "previous_close", "volume"}
 
 
@@ -831,7 +848,8 @@ async def test_tradingview_states_its_own_feed_delay(fake_providers):
     # It rides along labelled with the provider that shaped it, not as ALL.
     assert result["fields"]["feed_mode"] == {
         "source": "TRADINGVIEW",
-        "compared": ["TRADINGVIEW"],
+        "supplied": ["TRADINGVIEW"],
+        "compared": [],
         "agreement": None,
     }
 
@@ -872,6 +890,141 @@ async def test_quote_carries_the_income_breakdown_finviz_already_downloaded(
     assert breakdown["statement"]["scale_applied"] == 1_000_000.0
     assert result["fields"]["income_breakdown"] == {
         "source": "FINVIZ",
-        "compared": ["FINVIZ"],
+        "supplied": ["FINVIZ"],
+        "compared": [],
         "agreement": None,
     }
+
+
+# ── coverage and the supplied/compared split ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_leg_that_was_asked_and_errored_is_partial_not_all(fake_providers):
+    """The measured bug: ``ALL`` served beside a provider error.
+
+    A live response reported ``data_provider: ALL`` while listing a Yahoo error
+    and only three answers. Coverage is a claim about the providers that were
+    asked, and Yahoo was one of them, so the honest label is ``PARTIAL``.
+    """
+    fake_providers["yh"] = RuntimeError("yahoo outage")
+    result = await tools_market.stock_quote("AAPL")
+
+    assert result["data_provider"] == "PARTIAL"
+    assert result["verification"] == "MULTI_SOURCE"
+    assert result["providers_answered"] == ["TRADINGVIEW", "FINVIZ"]
+    # The failure is still explained rather than hidden behind the label.
+    assert [e["provider"] for e in result["errors"]] == ["YAHOO"]
+    assert "PARTIAL" in result["notice"]
+
+
+@pytest.mark.asyncio
+async def test_an_unasked_leg_does_not_turn_coverage_partial(fake_providers):
+    """``NOT_ATTEMPTED`` means the provider was never asked, so ALL still holds.
+
+    This is the difference the ask set exists for: a provider with no endpoint
+    for the request, or one that does not carry the instrument, must not be
+    counted as a failure that downgrades the response. Bloomberg's fixture is a
+    ``NoDataError`` and rides as ``NOT_ATTEMPTED``, so the response stays ``ALL``.
+    """
+    result = await tools_market.stock_quote("AAPL")
+
+    assert result["data_provider"] == "ALL"
+    assert result["providers_answered"] == ["TRADINGVIEW", "FINVIZ", "YAHOO"]
+    assert "BLOOMBERG" not in result["providers_answered"]
+    # Nothing was reported as a failed leg, because none was asked and failed.
+    assert [e for e in result["errors"] if e["code"] != "NOT_ATTEMPTED"] == []
+
+
+@pytest.mark.asyncio
+async def test_compared_is_narrower_than_supplied_when_pairs_were_not_judged():
+    """``supplied`` names who answered; ``compared`` only who was judged.
+
+    Two prints a session apart are two observations, so the pair reached no
+    verdict. Reading ``agreement`` as "every provider agreed" is the mistake the
+    split exists to stop, so the field must say every supplier and fewer
+    comparands.
+    """
+    from tapebasis.reconcile import (
+        FINVIZ,
+        TRADINGVIEW,
+        YAHOO,
+        compare_values,
+        compared_providers,
+    )
+
+    row = compare_values(
+        {TRADINGVIEW: 10.0, FINVIZ: 10.0, YAHOO: 10.0},
+        times={
+            TRADINGVIEW: "2026-11-03T20:00:00+00:00",
+            FINVIZ: "2026-11-03T20:00:00+00:00",
+            YAHOO: "2026-11-04T20:00:00+00:00",
+        },
+        session_boundary=True,
+    )
+    assert row["match"] is True
+    compared = compared_providers(row)
+    assert compared == [TRADINGVIEW, FINVIZ]
+    assert YAHOO in row["values"]
+
+
+@pytest.mark.asyncio
+async def test_the_two_quote_tools_reach_the_same_verdict(fake_providers, monkeypatch):
+    """One symbol, one answer: an undatable print is not a disagreement.
+
+    Finviz's screener row carries no print time (its quote page does), so the
+    session guard used to never fire for that leg and the two tools reported
+    different verdicts on the same three readings: ``stock_quote`` said "not
+    comparable", ``stock_prices`` said ``agrees: false``.
+    """
+    from tapebasis import fv_access, tv_access, yh_access
+
+    async def tv_quotes(symbols):
+        return {
+            "AAPL": {
+                "ticker": "NASDAQ:AAPL",
+                "close": 348.51,
+                "change": -0.62,
+                "volume": 29756060,
+                "update_time": "2026-11-10T21:00:00+00:00",
+            }
+        }
+
+    async def fv_rows(symbols):
+        # No ``last_update``: the screener endpoint omits it, and that omission
+        # is the whole point of the test. The price is also a session stale,
+        # which is exactly what an undatable reading looks like.
+        return [{"ticker": "AAPL", "price": 346.82, "change": -0.62, "prevClose": 349.0}]
+
+    async def yh_quote(symbol):
+        return {
+            "price": 348.51,
+            "change_pct": -0.62,
+            "previous_close": 350.69,
+            "market_time": "2026-11-10T21:00:00+00:00",
+            "shortName": "Apple Inc.",
+        }
+
+    monkeypatch.setattr(tv_access, "quotes", tv_quotes)
+    monkeypatch.setattr(fv_access, "screener_rows", fv_rows)
+    monkeypatch.setattr(yh_access, "quote", yh_quote)
+
+    prices = (await tools_market.stock_prices("AAPL"))["data"][0]
+    quote = await tools_market.stock_quote("AAPL")
+
+    prices_match = prices["comparisons"]["price"]["match"]
+    quote_match = next(
+        row["match"] for row in quote["comparisons"] if row["field"] == "price"
+    )
+
+    # Neither tool may call this a conflict, and both must reach that conclusion
+    # from the same readings: a print with no timestamp cannot be shown to be
+    # the same observation as one with a timestamp, so the Finviz pair is not
+    # judged while the two dated readings still corroborate each other.
+    assert prices_match is not False
+    assert quote_match is not False
+    assert prices_match is quote_match
+    assert prices["agrees"] is True
+    # The undated leg still appears in ``supplied``: it answered, it just could
+    # not be judged, which is a different fact from silence.
+    assert "FINVIZ" in prices["fields"]["price"]["supplied"]

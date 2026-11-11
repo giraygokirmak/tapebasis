@@ -26,6 +26,7 @@ from .http_pool import shared_client
 from .providers_state import NoDataError, ProviderError
 from .ratelimit import RateLimited, call, limiter
 from .symbols import INSTRUMENTS, INDEX_SNAPSHOT
+from .utils import BROWSER_UA
 
 PROVIDER = "YAHOO"
 _POOL = "yahoo"
@@ -39,10 +40,9 @@ _POOL = "yahoo"
 #: Yahoo was the only one without it.
 _CACHE_TTL = float(os.environ.get("TAPEBASIS_YAHOO_CACHE_TTL", "15"))
 _CHART = "https://query1.finance.yahoo.com/v8/finance/chart"
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
-)
+#: Yahoo's chart API serves the same browser identity the other legs present;
+#: the string lives in :mod:`tapebasis.utils` so refreshing it is one edit.
+_UA = BROWSER_UA
 
 #: 5 days (not 2): when the newest session has no trades yet its close is None,
 #: and a 2-day window then leaves only ONE usable close, too few to derive a

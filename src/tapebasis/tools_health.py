@@ -123,8 +123,10 @@ async def tapebasis_tool_map() -> dict[str, Any]:
         {"tools": rows, "count": len(rows), "by_provider": counts},
         provider=DataProvider.ALL,
         providers_answered=[*PROVIDERS, "BLOOMBERG"],
-        fields={name: field_source(provider, [provider], None)
-                for name, provider in tool_providers.items()},
+        fields={
+            name: field_source(provider, (), None, supplied=[provider])
+            for name, provider in tool_providers.items()
+        },
         warnings=[
             *MONITOR.warnings_for(PROVIDERS),
             "All providers in `providers_answered` are reconciliation legs of at "

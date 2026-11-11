@@ -5,6 +5,21 @@ from typing import Any
 
 _SUFFIXES = {"K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}
 
+#: The one browser identity this server presents to every upstream.
+#:
+#: It lives here rather than beside any single provider because every leg sends
+#: the same string: TradingView's scanner and symbol search, Finviz's HTML and
+#: JSON routes, Yahoo's chart API, StockAnalysis's quote API and the health
+#: probes. Seven copies of the literal had already drifted apart (six on one
+#: Chrome version, one on an older one), so refreshing the version was a
+#: seven-file edit that could silently leave one leg fingerprintable. A single
+#: constant makes that one edit, and makes the health probe present the identity
+#: the real request presents.
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+)
+
 
 def to_float(value: Any) -> float | None:
     """Best-effort numeric coercion, or ``None`` when the value is not numeric.
