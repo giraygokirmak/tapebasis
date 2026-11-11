@@ -490,7 +490,10 @@ def fetch_multi_timeframe_patterns(
             return []
 
         results = []
-        for _, row in df.iterrows():
+        # ``to_dict("records")`` avoids building a pandas Series per row; the
+        # loop only reads a handful of keys, and ``iterrows`` paid for a full
+        # indexed Series on every one.
+        for row in df.to_dict("records"):
             symbol = row.get("ticker", "")
             try:
                 ind = {

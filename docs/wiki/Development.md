@@ -40,6 +40,7 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_bloomberg.py` | Symbol mapping, `print_time` from the intraday series, sentinel rejection, the tie-break, declared-delay comparability, single-source envelope |
 | `test_stockanalysis.py` | Quote shaping (epoch-ms conversion, `cl` vs `pd`, extended block), mechanical plus not-carried resolution, transport status mapping |
 | `test_finviz_breakdown.py` | The `income-breakdown` island (statement scale, bank row sets, `converted` axes, absent/ETF cases) and the classification-chip markup |
+| `test_indicators_calc.py` | The pure indicator calculators: window means and band values (rolling sums, monotonic deques), warmup `None` regions, Wilder smoothing, the bisect percentile rank and the EGX rank equivalence |
 | `test_yahoo_shaping.py` | Yahoo `meta` fields that were previously dropped: session open/high/low, volume, company name |
 | `test_extended_hours.py` | Pre/post session volumes from the scanner row, and the Yahoo-session fallback |
 | `test_server.py` | Tool registration, MCP surface |

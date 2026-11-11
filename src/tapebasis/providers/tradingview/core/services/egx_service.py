@@ -9,6 +9,7 @@ without the MCP layer.
 """
 from __future__ import annotations
 
+from bisect import bisect_left
 from typing import Any, Dict, List, Optional
 
 from tapebasis.providers.tradingview.core.services.coinlist import load_symbols
@@ -347,13 +348,15 @@ def run_egx_sector_scanner(
     if not raw_data:
         return {"error": "No data returned for EGX stocks", "timeframe": timeframe}
 
-    # Step C: cross-sectional percentile ranks
-    all_changes = sorted([d["change"] for d in raw_data.values()])
+    # Step C: cross-sectional percentile ranks. ``bisect_left`` on the sorted
+    # list counts the strictly-smaller changes in O(log n) per stock; the old
+    # linear scan over the list per stock made the step quadratic in the
+    # number of names.
+    all_changes = sorted(d["change"] for d in raw_data.values())
     n_total = len(all_changes)
 
     def _pct_rank(val: float) -> float:
-        count_below = sum(1 for c in all_changes if c < val)
-        return count_below / n_total if n_total > 0 else 0.5
+        return bisect_left(all_changes, val) / n_total if n_total else 0.5
 
     # Step D: per-stock scoring
     stock_scores: Dict[str, Dict[str, Any]] = {}
@@ -813,11 +816,13 @@ def screen_egx_stocks(
     if not raw_results:
         return {"error": "No data returned for EGX stocks", "timeframe": timeframe}
 
-    changes = sorted([r[2] for r in raw_results])
+    changes = sorted(r[2] for r in raw_results)
     n = len(changes)
 
+    # Same rank definition as the sector scanner: strictly-smaller count via
+    # ``bisect_left``, O(log n) per stock instead of a linear rescan.
     def _pct_rank(val: float) -> float:
-        return sum(1 for c in changes if c < val) / n if n > 0 else 0.5
+        return bisect_left(changes, val) / n if n else 0.5
 
     scored_stocks: List[dict] = []
     for sym, ind, change in raw_results:

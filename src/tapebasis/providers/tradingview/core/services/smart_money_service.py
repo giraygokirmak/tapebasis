@@ -19,9 +19,10 @@ fetcher. EGX symbols map to Yahoo's ``.CA`` suffix (COMI -> COMI.CA).
 """
 from __future__ import annotations
 
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 from tapebasis.providers.tradingview.core.errors import ErrorCode, make_error
 from tapebasis.providers.tradingview.core.services.backtest_service import _fetch_ohlcv
@@ -140,10 +141,27 @@ def compute_banker_fund_oscillator(candles: List[dict]) -> Dict[str, Any]:
     lows = [c["low"] for c in candles]
     highs = [c["high"] for c in candles]
 
+    # Rolling 34-bar extremes through monotonic deques: each index enters and
+    # leaves once, so the window scan is O(n) total instead of O(n*lookback),
+    # and the extremes returned are exactly the window's min and max.
+    max_q: Deque[int] = deque()
+    min_q: Deque[int] = deque()
     raw: List[Optional[float]] = [None] * n
-    for i in range(lookback - 1, n):
-        lo = min(lows[i - lookback + 1 : i + 1])
-        hi = max(highs[i - lookback + 1 : i + 1])
+    for i in range(n):
+        while max_q and highs[max_q[-1]] <= highs[i]:
+            max_q.pop()
+        max_q.append(i)
+        while min_q and lows[min_q[-1]] >= lows[i]:
+            min_q.pop()
+        min_q.append(i)
+        if i < lookback - 1:
+            continue
+        while max_q[0] <= i - lookback:
+            max_q.popleft()
+        while min_q[0] <= i - lookback:
+            min_q.popleft()
+        lo = lows[min_q[0]]
+        hi = highs[max_q[0]]
         raw[i] = ((typ[i] - lo) / (hi - lo) * 100) if hi > lo else 50.0
 
     valid = [(i, v) for i, v in enumerate(raw) if v is not None]

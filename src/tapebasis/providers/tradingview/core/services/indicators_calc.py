@@ -17,6 +17,7 @@ Indicators:
 from __future__ import annotations
 
 import math
+from collections import deque
 from typing import Optional
 
 
@@ -39,10 +40,22 @@ def calc_ema(closes: list[float], period: int) -> list[Optional[float]]:
 # ─── SMA ──────────────────────────────────────────────────────────────────────
 
 def calc_sma(closes: list[float], period: int) -> list[Optional[float]]:
-    """Simple Moving Average."""
+    """Simple Moving Average, in O(n): a rolling window sum.
+
+    The window sum is maintained incrementally (add the entering bar,
+    subtract the leaving one) instead of re-summing ``period`` values per
+    bar, which made an SMA200 over hourly history quadratic. The value is
+    ``window_sum / period`` either way; the running sum accumulates float
+    rounding differently than a fresh sum, and the tests pin the tolerance.
+    """
     result: list[Optional[float]] = [None] * len(closes)
-    for i in range(period - 1, len(closes)):
-        result[i] = sum(closes[i - period + 1 : i + 1]) / period
+    if period <= 0 or len(closes) < period:
+        return result
+    window_sum = sum(closes[:period])
+    result[period - 1] = window_sum / period
+    for i in range(period, len(closes)):
+        window_sum += closes[i] - closes[i - period]
+        result[i] = window_sum / period
     return result
 
 
@@ -93,18 +106,32 @@ def calc_bollinger(
     closes: list[float], period: int = 20, std_mult: float = 2.0
 ) -> dict[str, list[Optional[float]]]:
     """
-    Bollinger Bands.
+    Bollinger Bands, in O(n): rolling window sums for mean and variance.
     Returns dict with 'upper', 'middle' (SMA), 'lower' lists.
+
+    Each bar's mean and population variance come from the window's running
+    sum and running sum of squares, maintained incrementally, instead of a
+    second O(period) pass per bar. ``sum_sq / period - mean * mean`` is the
+    textbook identity for the population variance; on real price series it
+    is stable, and the tests pin the band values to 1e-9.
     """
     middle = calc_sma(closes, period)
     upper: list[Optional[float]] = [None] * len(closes)
     lower: list[Optional[float]] = [None] * len(closes)
+    if period <= 0 or len(closes) < period:
+        return {"upper": upper, "middle": middle, "lower": lower}
 
+    window_sum = sum(closes[:period])
+    sq_sum = sum(x * x for x in closes[:period])
     for i in range(period - 1, len(closes)):
-        window = closes[i - period + 1 : i + 1]
-        mean = middle[i]
-        variance = sum((x - mean) ** 2 for x in window) / period
-        std = math.sqrt(variance)
+        if i > period - 1:
+            entering, leaving = closes[i], closes[i - period]
+            window_sum += entering - leaving
+            sq_sum += entering * entering - leaving * leaving
+        mean = window_sum / period
+        variance = sq_sum / period - mean * mean
+        # A near-zero negative from cancellation is a zero-variance window.
+        std = math.sqrt(variance) if variance > 0 else 0.0
         upper[i] = mean + std_mult * std
         lower[i] = mean - std_mult * std
 
@@ -250,19 +277,40 @@ def calc_donchian(
     highs: list[float], lows: list[float], period: int = 20
 ) -> dict[str, list[Optional[float]]]:
     """
-    Donchian Channel.
+    Donchian Channel, in O(n): monotonic deques, not per-bar window scans.
     Returns dict with 'upper' (highest high), 'lower' (lowest low), 'middle'.
+
+    Each deque holds indices whose extreme value could still be the window's
+    maximum (minimum) after older bars slide out; a new bar evicts every
+    smaller (larger) queued value from the back and every expired index from
+    the front. Each index enters and leaves each deque at most once, and the
+    extremes returned are exactly the window's max and min.
     """
     n = len(highs)
     upper: list[Optional[float]] = [None] * n
     lower: list[Optional[float]] = [None] * n
     middle: list[Optional[float]] = [None] * n
+    if period <= 0 or n < period:
+        return {"upper": upper, "lower": lower, "middle": middle}
 
-    for i in range(period - 1, n):
-        u = max(highs[i - period + 1 : i + 1])
-        l = min(lows[i - period + 1 : i + 1])
-        upper[i]  = u
-        lower[i]  = l
-        middle[i] = (u + l) / 2
+    max_q: deque[int] = deque()  # indices, highs descending
+    min_q: deque[int] = deque()  # indices, lows ascending
+    for i in range(n):
+        while max_q and highs[max_q[-1]] <= highs[i]:
+            max_q.pop()
+        max_q.append(i)
+        while min_q and lows[min_q[-1]] >= lows[i]:
+            min_q.pop()
+        min_q.append(i)
+        if i >= period - 1:
+            # Evict indices that have slid out of the window.
+            while max_q[0] <= i - period:
+                max_q.popleft()
+            while min_q[0] <= i - period:
+                min_q.popleft()
+            u, l = highs[max_q[0]], lows[min_q[0]]
+            upper[i] = u
+            lower[i] = l
+            middle[i] = (u + l) / 2
 
     return {"upper": upper, "lower": lower, "middle": middle}
