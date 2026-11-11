@@ -691,6 +691,41 @@ price.
 a documented `None`, and that no two rows claim the same provider spelling), and every spelling in
 it was verified against the live upstreams, not copied from another provider's vocabulary.
 
+## 38. One pooled connection per upstream, and one pacing wait per request
+
+**Decision:** each upstream gets one HTTP client per event loop (`http_pool.py`), created on first
+use and closed by the lifespan. Bloomberg, whose transport is `curl_cffi`, gets one pooled session
+by the same rule. Provider requests wait for their turn in the shared limiter exactly once: the
+waiting lives in `call()`, and a request body does not repeat it.
+
+**Why:** every provider built a fresh client per request, so every call paid a new TCP and TLS
+handshake. Measured against the live upstreams, that handshake was the largest single term in a warm
+response: a Yahoo chart request took 1324-2019 ms with a fresh client and 62-70 ms on a reused
+connection, TradingView's symbol search 5555 ms versus 80-284 ms, Yahoo's symbol search 5508 ms versus
+56-61 ms, and Bloomberg's page 325-725 ms versus 176 ms. The equivalent mistake on the pacing side
+was a second `wait_turn` inside the request body after `call` had already taken its turn, which cost
+a whole extra `min_interval` per request (measured: an extra 1000 ms on a Yahoo quote).
+
+**Pacing is not the thing to optimise.** A slower knock rate protects an undocumented upstream, and
+dropping a connection does nothing for it, so pooling changes no `min_interval`, no `max_inflight`
+and no cooldown. What the change removes is the cost the server added on top of the pace.
+
+**A slow first call is a resolver problem, not a request problem.** On a host whose
+`/etc/nsswitch.conf` tries mDNS before DNS, the first `getaddrinfo` of a process costs about 5 s
+while every later one costs ~20 ms. The lifespan and `/health` therefore start a background
+`warm_origins()` that resolves every httpx upstream once, so that second is not on the first user
+request's critical path.
+
+**What was deliberately not done.** Yahoo's multi-symbol endpoints would answer the six index quotes
+in one request, but they report different numbers: `/v7/finance/quote` gives
+`regularMarketPreviousClose` equal to the current price for `^VIX` (a 0.0 % day change where the chart
+path reports -2.31 %), and `/v8/finance/spark` reported 281.88 for `IWM` where the chart path reports
+280.58. One request is not worth a wrong day change, so the snapshot asks the six quotes
+concurrently and keeps the chart path.
+
+**Consequence:** a warm `stock_quote` fell from 1.3-2.0 s to tens of milliseconds once caches are
+warm, and the parallel provider legs from 1328 ms to 986 ms with the same providers answering.
+
 ---
 
 ## Related

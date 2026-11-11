@@ -22,7 +22,9 @@ from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
 
 from . import __version__
+from . import bb_access
 from .health import MONITOR
+from .http_pool import aclose_all, warm_origins
 from .providers_state import PROVIDER_MEANING
 
 logger = logging.getLogger("tapebasis")
@@ -73,7 +75,15 @@ INSTRUCTIONS = (
 
 @asynccontextmanager
 async def lifespan(_server: FastMCP):
-    """Start the health monitor on transports that honour the lifespan (stdio)."""
+    """Start the health monitor and warm the HTTP pools, then shut both down.
+
+    The warm-up is what keeps the first tool call cheap: on a host whose
+    resolver tries mDNS before DNS, the first ``getaddrinfo`` of a process costs
+    about 5 s. Paying it here rather than on the first request is the whole
+    point, and the task runs in the background so a slow resolver never delays
+    readiness.
+    """
+    warm_origins()
     if os.environ.get("TAPEBASIS_HEALTH_ENABLED", "true").lower() != "false":
         await MONITOR.start()
         logger.info(
@@ -85,6 +95,8 @@ async def lifespan(_server: FastMCP):
         yield {}
     finally:
         await MONITOR.stop()
+        await bb_access.aclose()
+        await aclose_all()
 
 
 mcp = FastMCP(
@@ -154,8 +166,11 @@ async def _health(_request):
     from starlette.responses import JSONResponse
 
     # FastMCP's streamable-HTTP app ignores the lifespan passed to FastMCP, so
-    # the monitor is started on first request instead of at startup.
+    # the monitor is started on first request instead of at startup. The HTTP
+    # pool warm-up rides along here for the same reason: this route is the only
+    # hook those transports run early.
     MONITOR.ensure_started()
+    warm_origins()
     return JSONResponse(
         {
             "status": "ok",

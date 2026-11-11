@@ -32,10 +32,12 @@ from typing import Any
 
 import httpx
 
+from ...http_pool import shared_client
 from ...ratelimit import RateLimited, call, limiter
 from ...symbols import INSTRUMENTS, INDEX_SNAPSHOT
 
 PROVIDER = "TRADINGVIEW"
+_POOL = "tradingview"
 
 SCANNER_URL = "https://scanner.tradingview.com/{market}/scan"
 WS_URL = "wss://data.tradingview.com/socket.io/websocket?from=chart%2F&type=chart"
@@ -120,12 +122,13 @@ async def _scan_market(
         "columns": list(columns),
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(25.0)) as client:
-        response = await client.post(
-            SCANNER_URL.format(market=market),
-            json=body,
-            headers={"User-Agent": _UA, "Content-Type": "application/json"},
-        )
+    client = shared_client(_POOL, timeout=25.0)
+    response = await client.post(
+        SCANNER_URL.format(market=market),
+        json=body,
+        headers={"User-Agent": _UA, "Content-Type": "application/json"},
+        timeout=25.0,
+    )
     if response.status_code == 429:
         raise RateLimited(PROVIDER, "scanner HTTP 429")
     response.raise_for_status()

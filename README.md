@@ -264,9 +264,11 @@ facts keep that honest:
 
 `stock_prices` asks Bloomberg about at most four tickers per call (`TAPEBASIS_BLOOMBERG_BATCH_MAX`),
 because its page path is paced at 10 s per request; the rest are named in `warnings` instead of
-quietly missing. `stock_quote` bounds the leg with `TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE`, so a slow or
-blocked page becomes a stated `TIMEOUT` / `UPSTREAM_BLOCKED` error while the other readings
-still go out.
+quietly missing. The leg also has a total budget (`TAPEBASIS_BLOOMBERG_BATCH_BUDGET`): once it is
+spent the remaining tickers are named in `warnings` rather than waited out, so four tickers no longer
+hold a batch open for four pacing intervals. `stock_quote` bounds the leg with
+`TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE`, so a slow or blocked page becomes a stated `TIMEOUT` /
+`UPSTREAM_BLOCKED` error while the other readings still go out.
 
 ### StockAnalysis as a reconciliation leg
 
@@ -309,6 +311,10 @@ per-provider limiter ([`ratelimit.py`](src/tapebasis/ratelimit.py)):
 | `max_inflight` | Bounds concurrent requests per provider |
 | shared cooldown | After a `429` (or a websocket `invalid symbol`) every caller waits an exponentially growing, jittered pause, so one blocked request protects the whole process |
 | TTL cache | Absorbs the duplicate questions an agent naturally asks in one turn |
+
+Each provider's requests share one pooled connection per event loop
+([`http_pool.py`](src/tapebasis/http_pool.py)), so a warm call does not pay a TLS handshake before
+every request. Pacing, not a fresh connection, is what keeps an upstream from blocking this server.
 
 Yahoo is paced slowly (1 request at a time, 1 s apart) because it starts answering `429` after a short
 burst; Bloomberg is slowest of all (10 s apart). TradingView's websocket treats `invalid symbol` /
@@ -493,6 +499,7 @@ Everything is optional. See [`.env.example`](.env.example) for the full list.
 | `TAPEBASIS_FINVIZ_MAX_INFLIGHT` | `2` | Finviz concurrent requests |
 | `TAPEBASIS_YAHOO_MIN_INTERVAL` | `1.0` | Yahoo request spacing (s) |
 | `TAPEBASIS_YAHOO_MAX_INFLIGHT` | `1` | Yahoo concurrent requests |
+| `TAPEBASIS_YAHOO_CACHE_TTL` | `15` | Yahoo quote cache lifetime (s) |
 | `TAPEBASIS_SA_MIN_INTERVAL` | `0.5` | StockAnalysis request spacing (s) |
 | `TAPEBASIS_SA_MAX_INFLIGHT` | `2` | StockAnalysis concurrent requests |
 | `TAPEBASIS_SA_MAX_RETRIES` | `2` | Retries per StockAnalysis request |
@@ -506,6 +513,7 @@ Everything is optional. See [`.env.example`](.env.example) for the full list.
 | `TAPEBASIS_BLOOMBERG_CACHE_TTL` | `60` | Bloomberg page cache lifetime (s) |
 | `TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE` | `12.0` | Longest `stock_quote` waits for the Bloomberg leg before recording a `TIMEOUT` |
 | `TAPEBASIS_BLOOMBERG_BATCH_MAX` | `4` | Tickers per `stock_prices` call asked of Bloomberg (its page path is paced at 10 s) |
+| `TAPEBASIS_BLOOMBERG_BATCH_BUDGET` | `12.0` | Total seconds one `stock_prices` call spends on the Bloomberg leg before naming the rest in `warnings` |
 | `TAPEBASIS_TV_MAX_RETRIES`, `TAPEBASIS_FINVIZ_MAX_RETRIES`, `TAPEBASIS_YAHOO_MAX_RETRIES` | `2` | Retries per provider request (the shared cooldown is not tunable) |
 | `MARKETAUX_API_TOKEN` | - | Optional. Enables licensed Marketaux news + entity sentiment |
 | `MARKETAUX_DAILY_BUDGET` | `90` | Marketaux request cap per day (free plan is 100) |
@@ -548,7 +556,29 @@ No proxy configuration exists: every provider reaches its upstream directly.
    ticker each provider was asked for, and why.
 ```
 
+## Latency: what is optimised, and what is not
+
+Three things dominate a response, and only two of them are the server's to fix:
+
+| Cost | Where it comes from | Handled by |
+| --- | --- | --- |
+| One HTTP handshake per request | A fresh client per call | One pooled client per upstream (`http_pool.py`), closed by the lifespan |
+| Duplicate identical asks in one turn | No cache on a leg | A short TTL cache on every provider (`TAPEBASIS_YAHOO_CACHE_TTL` and its peers) |
+| The slowest provider leg | Fan-out waits for every leg | Pacing bounds, not concurrency, so a slow leg is stated (deadline / budget) rather than hidden |
+
+Measured on a warm process after those changes: the five legs run in parallel in ~1 s, a repeated
+`stock_quote` answers in tens of milliseconds, and a repeated `market_indices` is served from cache.
+
+What is **not** optimised is the pace itself. Yahoo is asked one request at a time 1 s apart, and
+Bloomberg 10 s apart, because a faster knock rate turns into a `429` or a bot wall that outlasts the
+burst. Pooling changes how expensive each knock is, never how often it happens.
+
+Two costs stay visible instead of being papered over: a provider that does not answer inside its
+deadline becomes a stated `TIMEOUT`, and a Bloomberg batch names the tickers its budget cut off in
+`warnings`. A slow answer is reported, never silently dropped.
+
 ## Development
+
 
 ```bash
 pip install -e ".[dev]"     # or, with uv: uv venv && uv pip install -e ".[dev]"
@@ -575,6 +605,7 @@ src/tapebasis/
 ├── reconcile.py          concurrent fan-out, comparison, freshness arbitration, notice text
 ├── freshness.py          market-print timestamps + freshest-print selection
 ├── ratelimit.py          per-provider pacing, shared cooldown, TTL cache
+├── http_pool.py          one pooled HTTP client and resolver warm-up per upstream
 ├── merge_helpers.py      pure payload shapers (raw provider dict -> fields)
 ├── sentiment.py          token-free headline scoring (VADER + finance lexicon)
 ├── symbols.py            dynamic per-provider symbol resolution + index aliases

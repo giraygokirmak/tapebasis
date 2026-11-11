@@ -103,7 +103,6 @@
     "utils.py::to_int",
     "yh_access.py::_first_result",
     "yh_access.py::_format_quote",
-    "yh_access.py::_get",
     "yh_access.py::_quote_is_stale",
     "yh_access.py::_valid_closes",
     "yh_access.py::limiter_state"

@@ -39,6 +39,7 @@ Bloomberg quote pages) passes through a per-provider limiter ([`ratelimit.py`](h
 | `TAPEBASIS_YAHOO_MIN_INTERVAL` | `1.0` | Minimum seconds between Yahoo request starts |
 | `TAPEBASIS_YAHOO_MAX_INFLIGHT` | `1` | Max concurrent Yahoo requests |
 | `TAPEBASIS_YAHOO_MAX_RETRIES` | `2` | Retries per Yahoo request |
+| `TAPEBASIS_YAHOO_CACHE_TTL` | `15` | Quote cache lifetime (s); absorbs the duplicate asks of one agent turn |
 | `TAPEBASIS_SA_MIN_INTERVAL` | `0.5` | Minimum seconds between StockAnalysis request starts |
 | `TAPEBASIS_SA_MAX_INFLIGHT` | `2` | Max concurrent StockAnalysis requests |
 | `TAPEBASIS_SA_MAX_RETRIES` | `2` | Retries per StockAnalysis request |
@@ -52,6 +53,7 @@ Bloomberg quote pages) passes through a per-provider limiter ([`ratelimit.py`](h
 | `TAPEBASIS_BLOOMBERG_CACHE_TTL` | `60` | Bloomberg page cache lifetime (s) |
 | `TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE` | `12.0` | Longest `stock_quote` waits for its Bloomberg leg before recording a `TIMEOUT` |
 | `TAPEBASIS_BLOOMBERG_BATCH_MAX` | `4` | Tickers per `stock_prices` call asked of Bloomberg |
+| `TAPEBASIS_BLOOMBERG_BATCH_BUDGET` | `12.0` | Total seconds one `stock_prices` call may spend inside the Bloomberg leg; the rest is reported, not waited out |
 
 Some behaviours are not configurable, because they are safety properties rather than tuning knobs:
 
@@ -60,6 +62,11 @@ Some behaviours are not configurable, because they are safety properties rather 
   jitter, decaying on success. One blocked request protects every later caller instead of each one
   rediscovering the block.
 - **A short TTL cache**, so a quote asked twice in one agent turn does not reach the network twice.
+  Every provider has one: TradingView 15 s (scanner) and 120 s (chart), Finviz 30 s, Yahoo 15 s,
+  StockAnalysis 20 s, Bloomberg 60 s.
+- **A paced request, waited for once.** A provider request waits its turn in the shared limiter, and
+  the request body does not wait a second time. Waiting in both places cost a full extra
+  `min_interval` on every single call.
 - **A per-process gate.** Limiter state is process-local; running several containers multiplies the
   effective request rate.
 
@@ -71,8 +78,10 @@ cost of a block that outlasts the burst.
 
 Because that pace is slow, the quote tools bound the cost instead of hiding it:
 `TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE` turns a queued or blocked leg into a stated `TIMEOUT` while the
-other readings still go out, and `TAPEBASIS_BLOOMBERG_BATCH_MAX` caps how many tickers one
-`stock_prices` call asks Bloomberg about, naming the rest in `warnings`.
+other readings still go out, `TAPEBASIS_BLOOMBERG_BATCH_MAX` caps how many tickers one
+`stock_prices` call asks Bloomberg about, and `TAPEBASIS_BLOOMBERG_BATCH_BUDGET` stops the leg once
+the time is spent: four tickers at 10 s pacing used to hold a batch open for 30.5 s. Tickers the
+budget cut off are named in `warnings`, so they never look like instruments Bloomberg does not carry.
 
 StockAnalysis sits in the middle (`0.5 s`, two at a time): it fronts its API with Cloudflare and
 advertises a 3 s shared cache, so a normal pace is fine, while a burst from one IP is still punished.
@@ -152,6 +161,7 @@ TAPEBASIS_FINVIZ_MIN_INTERVAL=0.35
 TAPEBASIS_FINVIZ_MAX_INFLIGHT=2
 TAPEBASIS_YAHOO_MIN_INTERVAL=1.0
 TAPEBASIS_YAHOO_MAX_INFLIGHT=1
+TAPEBASIS_YAHOO_CACHE_TTL=15
 TAPEBASIS_SA_MIN_INTERVAL=0.5
 TAPEBASIS_SA_MAX_INFLIGHT=2
 TAPEBASIS_SA_CACHE_TTL=20
@@ -159,6 +169,7 @@ TAPEBASIS_BLOOMBERG_MIN_INTERVAL=10.0
 TAPEBASIS_BLOOMBERG_MAX_INFLIGHT=1
 TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE=12.0
 TAPEBASIS_BLOOMBERG_BATCH_MAX=4
+TAPEBASIS_BLOOMBERG_BATCH_BUDGET=12.0
 
 # Optional: licensed news + sentiment
 # MARKETAUX_API_TOKEN=

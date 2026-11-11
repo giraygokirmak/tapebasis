@@ -9,19 +9,34 @@ Everything goes through :mod:`tapebasis.ratelimit`: Yahoo starts answering
 ``429`` after a short burst and then stays angry, so the limiter enforces one
 request at a time with a shared cooldown, and a short TTL cache absorbs the
 duplicate asks an agent naturally makes.
+
+Transport is a pooled client from :mod:`tapebasis.http_pool`, not a client per
+request: the TLS handshake to Yahoo cost 1324-2019 ms per call against 62-70 ms
+on a reused connection, which was the dominant term in a warm ``stock_quote``.
+Pacing still bounds the request rate, so the connection is safe to keep.
 """
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
-import httpx
-
+from .http_pool import shared_client
 from .providers_state import NoDataError, ProviderError
 from .ratelimit import RateLimited, call, limiter
 from .symbols import INSTRUMENTS, INDEX_SNAPSHOT
 
 PROVIDER = "YAHOO"
+_POOL = "yahoo"
+
+#: How long a shaped response may be served from memory. Yahoo's chart endpoint
+#: answers with a quote that moves within the minute, so this is deliberately
+#: short: it exists to absorb the duplicate asks one agent turn makes (a quote,
+#: then a comparison of the same quote) and to make a repeated ``market_indices``
+#: free, not to serve a stale price. The other providers carry the same kind of
+#: cache (TradingView 15 s, Finviz 30 s, StockAnalysis 20 s, Bloomberg 60 s);
+#: Yahoo was the only one without it.
+_CACHE_TTL = float(os.environ.get("TAPEBASIS_YAHOO_CACHE_TTL", "15"))
 _CHART = "https://query1.finance.yahoo.com/v8/finance/chart"
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -42,23 +57,51 @@ class _YahooError(ProviderError):
     pass
 
 
-async def _get(url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+async def _get(
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    cache_key: str | None = None,
+) -> dict[str, Any]:
+    """Fetch one Yahoo JSON endpoint under the limiter, with a short TTL cache.
+
+    Args:
+        url: Absolute endpoint URL.
+        params: Query parameters.
+        cache_key: Cache identity. Defaults to the URL plus its parameters, so a
+            second identical ask within ``_CACHE_TTL`` never reaches the network.
+
+    Returns:
+        The decoded JSON payload.
+
+    Raises:
+        NoDataError: Yahoo answered 404 for the symbol.
+        ProviderError: Yahoo rate limited this server, or the request failed.
+    """
     paced = limiter(PROVIDER)
+    key = cache_key or f"get|{url}|{sorted((params or {}).items())}"
+    cached = paced.cache_get(key, _CACHE_TTL)
+    if isinstance(cached, dict):
+        return cached
 
     async def _once() -> dict[str, Any]:
-        await paced.wait_turn()
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(15.0), follow_redirects=True
-        ) as client:
-            response = await client.get(
-                url, params=params, headers={"User-Agent": _UA, "Accept": "application/json"}
-            )
+        # ``call`` already waited its turn, so waiting again here would spend a
+        # second ``min_interval`` on every single request.
+        client = shared_client(_POOL)
+        response = await client.get(
+            url,
+            params=params,
+            headers={"User-Agent": _UA, "Accept": "application/json"},
+            timeout=15.0,
+        )
         if response.status_code == 429:
             raise RateLimited(PROVIDER, "chart HTTP 429")
         if response.status_code == 404:
             raise NoDataError(PROVIDER, f"Yahoo has no chart for {url.rsplit('/', 1)[-1]}")
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+        paced.cache_set(key, payload)
+        return payload
 
     try:
         return await call(PROVIDER, _once)
@@ -157,7 +200,9 @@ def _format_quote(symbol: str, result: dict[str, Any]) -> dict[str, Any]:
 async def quote(symbol: str) -> dict[str, Any]:
     """Latest quote for one Yahoo symbol (``AAPL``, ``XAUUSD=X``, ``^GSPC``)."""
     payload = await _get(
-        f"{_CHART}/{symbol}", params={"interval": "1d", "range": _QUOTE_RANGE}
+        f"{_CHART}/{symbol}",
+        params={"interval": "1d", "range": _QUOTE_RANGE},
+        cache_key=f"quote|{symbol}",
     )
     return _format_quote(symbol, _first_result(payload))
 
@@ -176,6 +221,7 @@ async def history(
             "range": period,
             "includeAdjustedClose": "true",
         },
+        cache_key=f"history|{symbol}|{interval}|{period}",
     )
     result = _first_result(payload)
     stamps = result.get("timestamp") or []
@@ -273,24 +319,43 @@ INDEX_SYMBOLS: dict[str, str] = {
 
 
 async def index_snapshot() -> dict[str, Any]:
-    """Level and day change for the major US indices, from Yahoo's chart API."""
-    indices: list[dict[str, Any]] = []
-    for canonical, symbol in INDEX_SYMBOLS.items():
+    """Level and day change for the major US indices, from Yahoo's chart API.
+
+    The six quotes are asked concurrently: they share one limiter, so the pacing
+    that protects Yahoo still applies, but the per-request handshake and latency
+    no longer add up. Measured sequentially this loop was 11.3 s and was the
+    whole cost of ``market_indices``.
+
+    A multi-symbol endpoint was evaluated instead and rejected: Yahoo's
+    ``/v7/finance/quote`` reports ``regularMarketPreviousClose`` equal to the
+    current price for ``^VIX`` (a 0.0 % day change where the chart path reports
+    -2.31 %), and ``/v8/finance/spark`` reported 281.88 for ``IWM`` where the
+    chart path reports 280.58. One request is not worth a wrong day change.
+
+    Returns:
+        ``{"indices": [...]}`` in the registry's snapshot order, one row per
+        index that answered.
+    """
+
+    async def _one(canonical: str, symbol: str) -> dict[str, Any] | None:
         try:
             data = await quote(symbol)
         except (ProviderError, NoDataError):
-            continue
-        indices.append(
-            {
-                "symbol": symbol,
-                "canonical": canonical,
-                "name": canonical,
-                "price": data.get("price"),
-                "change_pct": data.get("change_pct"),
-                "currency": data.get("currency"),
-                "price_timestamp": data.get("market_time"),
-            }
-        )
+            return None
+        return {
+            "symbol": symbol,
+            "canonical": canonical,
+            "name": canonical,
+            "price": data.get("price"),
+            "change_pct": data.get("change_pct"),
+            "currency": data.get("currency"),
+            "price_timestamp": data.get("market_time"),
+        }
+
+    rows = await asyncio.gather(
+        *(_one(canonical, symbol) for canonical, symbol in INDEX_SYMBOLS.items())
+    )
+    indices = [row for row in rows if row is not None]
     if not indices:
         raise NoDataError(PROVIDER, "Yahoo returned no index rows")
     return {"indices": indices}
@@ -307,18 +372,15 @@ async def extended_hours(symbol: str) -> dict[str, Any]:
         _shape_extended_hours,
     )
 
-    paced = limiter(PROVIDER)
-
     async def _once() -> dict[str, Any]:
-        await paced.wait_turn()
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(20.0), follow_redirects=True
-        ) as client:
-            response = await client.get(
-                f"{_CHART}/{symbol}",
-                params={"interval": "1m", "range": "1d", "includePrePost": "true"},
-                headers={"User-Agent": _UA, "Accept": "application/json"},
-            )
+        # ``call`` did the pacing; see ``_get`` for why not to wait twice.
+        client = shared_client(_POOL)
+        response = await client.get(
+            f"{_CHART}/{symbol}",
+            params={"interval": "1m", "range": "1d", "includePrePost": "true"},
+            headers={"User-Agent": _UA, "Accept": "application/json"},
+            timeout=20.0,
+        )
         if response.status_code == 429:
             raise RateLimited(PROVIDER, "extended-hours HTTP 429")
         response.raise_for_status()
@@ -348,10 +410,8 @@ async def options(symbol: str, expiry: str | None = None) -> dict[str, Any]:
     """
     from .providers.tradingview.core.services.options_service import get_options_chain
 
-    paced = limiter(PROVIDER)
-
     async def _once() -> dict[str, Any]:
-        await paced.wait_turn()
+        # ``call`` did the pacing; the handshake is inside the thread, not here.
         return await asyncio.to_thread(get_options_chain, symbol, expiry)
 
     data = await call(PROVIDER, _once)
@@ -365,22 +425,20 @@ async def options(symbol: str, expiry: str | None = None) -> dict[str, Any]:
 async def news(symbol: str, limit: int = 20) -> dict[str, Any]:
     """Yahoo's own headline feed for one symbol (``/v1/finance/search``)."""
     url = "https://query1.finance.yahoo.com/v1/finance/search"
-    paced = limiter(PROVIDER)
 
     async def _once() -> dict[str, Any]:
-        await paced.wait_turn()
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(15.0), follow_redirects=True
-        ) as client:
-            response = await client.get(
-                url,
-                params={
-                    "q": symbol,
-                    "quotesCount": 0,
-                    "newsCount": max(1, min(int(limit), 50)),
-                },
-                headers={"User-Agent": _UA, "Accept": "application/json"},
-            )
+        # ``call`` did the pacing; see ``_get`` for why not to wait twice.
+        client = shared_client(_POOL)
+        response = await client.get(
+            url,
+            params={
+                "q": symbol,
+                "quotesCount": 0,
+                "newsCount": max(1, min(int(limit), 50)),
+            },
+            headers={"User-Agent": _UA, "Accept": "application/json"},
+            timeout=15.0,
+        )
         if response.status_code == 429:
             raise RateLimited(PROVIDER, "news search HTTP 429")
         response.raise_for_status()

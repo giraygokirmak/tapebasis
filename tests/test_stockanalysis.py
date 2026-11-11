@@ -240,7 +240,7 @@ class _Response:
 
 
 class _Client:
-    """Minimal stand-in for ``httpx.AsyncClient`` used by ``sa_access._fetch``."""
+    """Minimal stand-in for the pooled ``httpx.AsyncClient`` ``sa_access`` uses."""
 
     def __init__(self, response):
         self.response = response
@@ -252,7 +252,7 @@ class _Client:
     async def __aexit__(self, *_exc):
         return False
 
-    async def get(self, url):
+    async def get(self, url, **_kwargs):
         self.urls.append(url)
         return self.response
 
@@ -262,7 +262,7 @@ def _patch_transport(monkeypatch, response, real_fetch):
 
     The autouse network guard replaces ``_fetch`` itself, so the real one is
     handed back here by the ``_no_stockanalysis_network`` fixture; only the
-    HTTP client underneath it is faked.
+    pooled client underneath it is faked.
     """
     client = _Client(response)
 
@@ -270,7 +270,7 @@ def _patch_transport(monkeypatch, response, real_fetch):
         return client
 
     monkeypatch.setattr(sa_access, "_fetch", real_fetch)
-    monkeypatch.setattr(sa_access.httpx, "AsyncClient", factory)
+    monkeypatch.setattr(sa_access, "shared_client", factory)
     sa_access.limiter("SA").cache_clear()
     return client
 

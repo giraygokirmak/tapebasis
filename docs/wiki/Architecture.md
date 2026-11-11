@@ -55,6 +55,7 @@ src/tapebasis/
 ├── reconcile.py          concurrent fan-out, field comparison, freshness arbitration, notice text
 ├── freshness.py          market-print timestamps + freshest-print selection
 ├── ratelimit.py          per-provider pacing, shared cooldown, TTL cache
+├── http_pool.py          one pooled HTTP client and resolver warm-up per upstream
 ├── merge_helpers.py      pure payload shapers (raw provider dict → normalised fields)
 ├── sentiment.py          token-free headline scoring (VADER + finance lexicon)
 ├── symbols.py            dynamic per-provider symbol resolution, the instrument registry
@@ -220,6 +221,27 @@ The details matter in two places:
 - **TradingView's websocket** signals a block as `invalid symbol` or `resolve error`, not `429`. Those
   are treated as rate limiting (they are IP-scoped, not ticker-scoped), so a busy process does not
   report a valid symbol as nonexistent.
+
+The pace is applied once per request. A request body that waits for its turn again after the
+limiter already did would spend a whole extra `min_interval` on every call, so the waiting lives in
+`call()` only.
+
+### `http_pool.py` is one connection pool per upstream
+
+Pacing bounds how often the process knocks, so there is no reason to throw the connection away in
+between. Each upstream gets one `httpx.AsyncClient` (one `curl_cffi` session for Bloomberg) per
+event loop, created on first use and closed by the lifespan. Pools are keyed weakly by loop, so a
+closed loop's connections go with it and the hermetic suite never inherits one test's socket.
+
+Measured against the live upstreams, the handshake a fresh client paid per request was the largest
+single term in a warm response: Yahoo chart 1324-2019 ms versus 62-70 ms reused, TradingView symbol
+search 5555 ms versus 80-284 ms, Yahoo symbol search 5508 ms versus 56-61 ms, Bloomberg's page
+325-725 ms versus 176 ms. Pooling changed no upstream contract and no pacing value.
+
+The module also warms the resolver at startup (`warm_origins`). On a host whose `/etc/nsswitch.conf`
+tries mDNS before DNS, the first `getaddrinfo` of a process costs about 5 s while every later one
+costs ~20 ms; paying that on the first tool call makes the first user request 5 s slower than the
+second.
 
 ### `merge_helpers.py` is pure
 

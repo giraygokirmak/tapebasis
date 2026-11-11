@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -87,6 +88,16 @@ BLOOMBERG_DEADLINE_SECONDS = _env_number("TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE", 1
 #: path is paced at 10 s per request, so an unbounded fan-out would take
 #: minutes; the remainder is reported as skipped rather than silently missing.
 BLOOMBERG_BATCH_MAX = max(0, int(_env_number("TAPEBASIS_BLOOMBERG_BATCH_MAX", 4)))
+
+#: Total time one ``stock_prices`` call may spend inside the Bloomberg leg.
+#: ``BLOOMBERG_DEADLINE_SECONDS`` bounds a single page; without a batch budget
+#: four tickers at the 10 s pacing took 30.5 s, which was the dominant term in a
+#: cold 45.5 s call. When the budget runs out the remaining tickers are reported
+#: as not answered for this call, exactly like a single-page timeout; the pacing
+#: itself is untouched, because it exists to keep the bot wall from closing.
+BLOOMBERG_BATCH_BUDGET_SECONDS = _env_number(
+    "TAPEBASIS_BLOOMBERG_BATCH_BUDGET", 12.0
+)
 
 #: Largest print-time gap still treated as the same observation. Applies to a
 #: session-relative field (a day change, a previous close, accumulated volume)
@@ -710,7 +721,13 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             extra={"symbols": []},
         )
 
-    resolved = {symbol: await _symbols_for(symbol) for symbol in requested}
+    resolved = {
+        symbol: entry
+        for symbol, entry in zip(
+            requested,
+            await asyncio.gather(*(_symbols_for(symbol) for symbol in requested)),
+        )
+    }
 
     tv_tickers = [
         r["TRADINGVIEW"].symbol
@@ -733,18 +750,39 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         return {"rows": {str(r.get("ticker", "")).upper(): r for r in rows}}
 
     async def yh_call() -> dict[str, Any]:
-        rows: dict[str, dict[str, Any]] = {}
-        misses: dict[str, str] = {}
-        for symbol, entry in resolved.items():
-            if not entry["YAHOO"].found:
-                misses[symbol] = entry["YAHOO"].note or "no Yahoo ticker"
-                continue
+        """One Yahoo quote per ticker, asked concurrently.
+
+        The limiter still paces Yahoo, so this buys the per-request handshake
+        and latency overlap, not a burst. Measured sequentially, four quotes
+        spent 7.4 s before the pooling change.
+        """
+        askable = [
+            (symbol, entry["YAHOO"].symbol)
+            for symbol, entry in resolved.items()
+            if entry["YAHOO"].found
+        ]
+        misses = {
+            symbol: (entry["YAHOO"].note or "no Yahoo ticker")
+            for symbol, entry in resolved.items()
+            if not entry["YAHOO"].found
+        }
+
+        async def _one(symbol: str, ticker: str) -> tuple[str, dict[str, Any] | None, str | None]:
             try:
-                rows[symbol] = await yh_access.quote(entry["YAHOO"].symbol)
+                return symbol, await yh_access.quote(ticker), None
             except NoDataError as exc:
-                misses[symbol] = exc.message
+                return symbol, None, exc.message
             except Exception as exc:  # noqa: BLE001 - a single miss must not sink the batch
-                misses[symbol] = f"{type(exc).__name__}: {exc}"
+                return symbol, None, f"{type(exc).__name__}: {exc}"
+
+        rows: dict[str, dict[str, Any]] = {}
+        for symbol, row, miss in await asyncio.gather(
+            *(_one(symbol, ticker) for symbol, ticker in askable)
+        ):
+            if row is not None:
+                rows[symbol] = row
+            else:
+                misses[symbol] = miss or "no Yahoo data"
         if not rows:
             detail = "; ".join(f"{s}: {m}" for s, m in misses.items())
             raise NotApplicable(YAHOO, f"no Yahoo data ({detail})")
@@ -763,21 +801,34 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
     ]
 
     async def sa_call() -> dict[str, Any]:
+        """One StockAnalysis quote per ticker, asked concurrently."""
         if not sa_slugs:
             raise NotApplicable(
                 SA, "StockAnalysis carries none of these instruments"
             )
+
+        async def _one(symbol: str, slug: str) -> tuple[str, dict[str, Any] | None, str | None]:
+            try:
+                return symbol, await sa_access.quote(slug), None
+            except NoDataError as exc:
+                return symbol, None, exc.message
+            except Exception as exc:  # noqa: BLE001 - one miss must not sink the batch
+                return symbol, None, getattr(exc, "message", None) or f"{type(exc).__name__}: {exc}"
+
+        found = {
+            symbol: resolved[symbol]["SA"].symbol
+            for symbol in requested
+            if resolved[symbol]["SA"].found
+        }
         rows: dict[str, dict[str, Any]] = {}
         misses: dict[str, str] = {}
-        for symbol in sa_slugs:
-            try:
-                rows[symbol] = await sa_access.quote(
-                    resolved[symbol]["SA"].symbol
-                )
-            except NoDataError as exc:
-                misses[symbol] = exc.message
-            except Exception as exc:  # noqa: BLE001 - one miss must not sink the batch
-                misses[symbol] = getattr(exc, "message", None) or f"{type(exc).__name__}: {exc}"
+        for symbol, row, miss in await asyncio.gather(
+            *(_one(symbol, slug) for symbol, slug in found.items())
+        ):
+            if row is not None:
+                rows[symbol] = row
+            else:
+                misses[symbol] = miss or "no StockAnalysis data"
         if not rows:
             detail = "; ".join(f"{s}: {m}" for s, m in misses.items())
             raise NotApplicable(SA, f"no StockAnalysis data ({detail})")
@@ -791,16 +842,33 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
                 if not bb_symbols
                 else f"Bloomberg is asked about at most {BLOOMBERG_BATCH_MAX} tickers per batch",
             )
+        # One budget for the whole leg, not one per page: four tickers at the
+        # 10 s pacing used to hold the call open for 30.5 s. Each page keeps its
+        # own deadline, but the batch stops asking once the budget is spent and
+        # reports the rest as unanswered, so the other providers' readings go out
+        # on time. The pacing itself is untouched.
+        deadline = time.monotonic() + BLOOMBERG_BATCH_BUDGET_SECONDS
         rows: dict[str, dict[str, Any]] = {}
         misses: dict[str, str] = {}
         for symbol in bb_asked:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                misses[symbol] = (
+                    "not asked: the Bloomberg leg's "
+                    f"{BLOOMBERG_BATCH_BUDGET_SECONDS:.0f}s batch budget was spent "
+                    "on the earlier tickers, and its page path is paced at 10 s"
+                )
+                continue
             try:
                 data, _source = await asyncio.wait_for(
-                    bb_access.quote(symbol), timeout=BLOOMBERG_DEADLINE_SECONDS
+                    bb_access.quote(symbol),
+                    timeout=min(remaining, BLOOMBERG_DEADLINE_SECONDS),
                 )
                 rows[symbol] = data
             except asyncio.TimeoutError:
-                misses[symbol] = f"no answer within {BLOOMBERG_DEADLINE_SECONDS:.0f}s"
+                misses[symbol] = (
+                    f"no answer within {min(remaining, BLOOMBERG_DEADLINE_SECONDS):.0f}s"
+                )
             except NoDataError as exc:
                 misses[symbol] = exc.message
             except Exception as exc:  # noqa: BLE001 - one miss must not sink the batch
@@ -999,6 +1067,22 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             + f": its page path is paced at 10 s per request, so a batch asks it "
             f"about at most {BLOOMBERG_BATCH_MAX} tickers. Those rows are not "
             "counted as Bloomberg-answered."
+        )
+    bb_payload = pair.bb.payload or {}
+    budget_misses = [
+        symbol
+        for symbol, reason in (bb_payload.get("misses") or {}).items()
+        if "budget" in str(reason)
+    ]
+    if budget_misses:
+        # Stated, never silent: a ticker the budget cut off looks exactly like a
+        # ticker Bloomberg had no page for, unless the response says which.
+        skip_warnings.append(
+            "Bloomberg did not answer for "
+            + ", ".join(budget_misses)
+            + f" within the leg's {BLOOMBERG_BATCH_BUDGET_SECONDS:.0f}s batch budget "
+            "(its page path is paced at 10 s per request). Those rows are not "
+            "counted as Bloomberg-answered; ask again for a fresh attempt."
         )
 
     return finalize(

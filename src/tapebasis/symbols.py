@@ -50,10 +50,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-import httpx
-
+from .http_pool import shared_client
 from .providers_state import NoDataError
-from .ratelimit import RateLimited, call, limiter
+from .ratelimit import RateLimited, call
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -212,12 +211,15 @@ async def _tradingview_search(query: str) -> list[Candidate]:
     }
 
     async def _once() -> list[Candidate]:
-        paced = limiter("TRADINGVIEW")
-        await paced.wait_turn()
-        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
-            response = await client.get(
-                url, params=params, headers={"User-Agent": UA, "Origin": "https://www.tradingview.com"}
-            )
+        # ``call`` below waits its turn; a second wait here would spend an extra
+        # pacing interval on every search.
+        client = shared_client("tradingview")
+        response = await client.get(
+            url,
+            params=params,
+            headers={"User-Agent": UA, "Origin": "https://www.tradingview.com"},
+            timeout=15.0,
+        )
         if response.status_code == 429:
             raise RateLimited("TRADINGVIEW", "symbol search HTTP 429")
         response.raise_for_status()
@@ -363,14 +365,15 @@ async def _yahoo_search(query: str) -> list[Candidate]:
     url = "https://query2.finance.yahoo.com/v1/finance/search"
 
     async def _once() -> list[Candidate]:
-        paced = limiter("YAHOO")
-        await paced.wait_turn()
-        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
-            response = await client.get(
-                url,
-                params={"q": query, "quotesCount": 10, "newsCount": 0},
-                headers={"User-Agent": UA, "Accept": "application/json"},
-            )
+        # ``call`` below waits its turn; a second wait here would spend an extra
+        # pacing interval on every search.
+        client = shared_client("yahoo")
+        response = await client.get(
+            url,
+            params={"q": query, "quotesCount": 10, "newsCount": 0},
+            headers={"User-Agent": UA, "Accept": "application/json"},
+            timeout=15.0,
+        )
         if response.status_code == 429:
             raise RateLimited("YAHOO", "search HTTP 429")
         response.raise_for_status()

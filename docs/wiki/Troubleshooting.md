@@ -236,6 +236,37 @@ whole response.
 
 ---
 
+## The first tool call after a restart is about 5 s slower than the rest
+
+**Cause:** the host's name resolver, not the server. On a machine whose `/etc/nsswitch.conf` tries
+mDNS before DNS (`hosts: files mdns4_minimal [NOTFOUND=return] dns`), the very first `getaddrinfo` of
+a process costs about 5 s, and every later one about 20 ms. `getent hosts` is fast because it is a
+separate process, so the delay only shows up in-process.
+
+The server resolves every httpx upstream in the background at startup (`warm_origins()` in the
+lifespan, and from `/health` on transports that ignore the lifespan), so the cost is normally paid
+before the first request. If the first call is still slow, the warm-up was cut short: the transport
+may not have run either hook, or the resolver is slower than the warm-up allowed.
+
+**Fix, when it matters:** keep `mdns4_minimal` out of the `hosts:` line on a server that does not
+need mDNS, or give the container a resolver that answers directly. This is an environment setting;
+the server does not change `/etc/nsswitch.conf`.
+
+---
+
+## `stock_prices` names a ticker in `warnings` as not answered by Bloomberg
+
+**Cause:** the Bloomberg leg has both a per-page deadline (`TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE`) and
+a total batch budget (`TAPEBASIS_BLOOMBERG_BATCH_BUDGET`, default 12 s). Its page path is paced at
+10 s per request by design, so four tickers used to hold a batch open for 30.5 s. Once the budget is
+spent the remaining tickers are named instead of waited out.
+
+That is not a coverage gap: the same ticker answers on the next call, and the page cache (60 s) makes
+a follow-up cheap. Raise the budget if you would rather wait; do not lower the pacing, which is what
+keeps the bot wall from closing.
+
+---
+
 ## `/health` says healthy but tool calls fail
 
 `/health` reads the **cached** verdict and makes no upstream call, by design, so a Finviz outage does

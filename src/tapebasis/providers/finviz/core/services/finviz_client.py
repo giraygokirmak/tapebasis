@@ -45,6 +45,7 @@ from typing import Any, Optional
 
 import httpx
 
+from tapebasis.http_pool import shared_client
 from tapebasis.providers.finviz.core.errors import ErrorCode, FinvizServiceError
 
 BASE_URL = "https://finviz.com"
@@ -58,6 +59,10 @@ DEFAULT_USER_AGENT = (
 DEFAULT_TIMEOUT = float(os.environ.get("FINVIZ_TIMEOUT", "25"))
 DEFAULT_TTL = float(os.environ.get("FINVIZ_CACHE_TTL", "30"))
 MAX_RETRIES = int(os.environ.get("FINVIZ_MAX_RETRIES", "2"))
+
+#: Pool name for the shared client. finviz.com is the only host this layer
+#: fetches, so all of its requests share one connection.
+_POOL = "finviz"
 
 #: Markers Cloudflare injects into its interstitial / JS challenge page.
 _CHALLENGE_MARKERS = (
@@ -189,12 +194,8 @@ async def fetch_text(
 
     for attempt in range(MAX_RETRIES + 1):
         try:
-            async with httpx.AsyncClient(
-                follow_redirects=True,
-                timeout=httpx.Timeout(DEFAULT_TIMEOUT),
-                http2=False,
-            ) as client:
-                response = await _request_once(client, url, accept=accept)
+            client = shared_client(_POOL, timeout=DEFAULT_TIMEOUT)
+            response = await _request_once(client, url, accept=accept)
 
             status = response.status_code
 
@@ -336,12 +337,12 @@ async def fetch_bytes(url: str, *, ttl: Optional[float] = None) -> bytes:
     last_error: Optional[BaseException] = None
     for attempt in range(MAX_RETRIES + 1):
         try:
-            async with httpx.AsyncClient(
-                follow_redirects=True,
-                timeout=httpx.Timeout(DEFAULT_TIMEOUT),
-                http2=False,
-            ) as client:
-                response = await client.get(url, headers=_headers("image/png,image/*,*/*"))
+            client = shared_client(_POOL, timeout=DEFAULT_TIMEOUT)
+            response = await client.get(
+                url,
+                headers=_headers("image/png,image/*,*/*"),
+                timeout=DEFAULT_TIMEOUT,
+            )
             if response.status_code == 200:
                 return response.content
             last_error = FinvizServiceError(
