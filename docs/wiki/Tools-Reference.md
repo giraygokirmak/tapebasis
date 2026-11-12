@@ -40,14 +40,21 @@ StockAnalysis getter: its quote API carries price, range, volume and the 52-week
 on a separate stock page this tool does not fetch.
 
 `data.session` (also at the envelope level) names the window `data.price` is a print from:
-`pre_market`, `regular`, `post_market` or `overnight`. Each provider's live print is resolved before
-comparison, because the obvious price field goes stale the moment the regular session ends:
+`pre_market`, `regular`, `post_market` or `overnight`, and `data.price_field` names the provider field it
+was read from. Each provider's live print is resolved before comparison, because the obvious price field
+goes stale the moment the regular session ends:
 TradingView's `close` is the regular feed's last trade while its `premarket_close` keeps streaming,
 Yahoo's `regularMarketPrice` freezes while `fulldayPrice` does not, and StockAnalysis keeps the regular
 close in `price` and the current extended print in `extended_hours`. Reading the obvious field is what
 let a quote sit hours behind the market and still be labelled current. The day change and the previous
 close move with the price, so a row's three numbers describe one session rather than mixing a live
 price with a baseline from two sessions back.
+
+The session is taken from the winning provider's own print, never from another leg's label. A delayed
+feed states the session it is in, and while it lags that statement describes a print the row is not
+serving: measured at 09:42 ET, the scanner still said `pre_market` because its feed is 15 minutes
+delayed, while the winning print was a regular-session one. Labelling from the scanner made
+`stock_quote` and `stock_prices` name different sessions for the same symbol at the same moment.
 
 #### `income_breakdown` (a field of `stock_quote`)
 
@@ -95,14 +102,14 @@ be `ALL` while another is single-source or `NONE` in the same response. Multi-so
 `comparisons` and `freshness` blocks. Rows where every provider came up empty carry a `misses` map
 explaining why. The FX day change is reported but never compared, exactly as in `stock_quote`.
 
-Each row also names its `session`, the window its `price` is a print from. The price itself is the
-live print rather than the obvious field: TradingView's scanner `close` stops moving when the regular
-feed's last trade falls behind the market while `premarket_close` keeps streaming, Yahoo's
-`regularMarketPrice` freezes while `fulldayPrice` does not, and StockAnalysis keeps the current
-extended print in its own block. The row's `change_percent` and `previous_close` are measured against
-the same session's baseline, so the row's own three numbers are consistent. Before this, a pre-market
-price could be paired with a close two sessions old, implying a day change that neither the
-`change_percent` beside it nor any provider reported.
+Each row also names its `session`, the window its `price` is a print from, and the `price_field` it was
+read from. The price itself is the live print rather than the obvious field: TradingView's scanner
+`close` stops moving when the regular feed's last trade falls behind the market while `premarket_close`
+keeps streaming, Yahoo's `regularMarketPrice` freezes while `fulldayPrice` does not, and StockAnalysis
+keeps the current extended print in its own block. The row's `change_percent` and `previous_close` are
+measured against the same session's baseline, so the row's own three numbers are consistent. Before
+this, a pre-market price could be paired with a close two sessions old, implying a day change that
+neither the `change_percent` beside it nor any provider reported.
 
 `fields` states provenance per value, because `data_provider` describes the row rather than each
 number in it:

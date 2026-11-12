@@ -283,60 +283,56 @@ def _shape_overnight(block: dict[str, Any] | None) -> dict[str, Any] | None:
     return shaped
 
 
-def _live_reading(provider: str, shaped: dict[str, Any]) -> dict[str, Any]:
+def _live_reading(
+    provider: str,
+    shaped: dict[str, Any],
+    raw: dict[str, Any],
+) -> dict[str, Any]:
     """One provider's reading, with its price moved to the session's live print.
 
-    Providers publish the regular session's price in the obvious field and the
-    current extended-hours print in a session-specific one. Reading only the
-    obvious field is what let ``stock_prices`` serve TradingView's ``close``
-    hours after it stopped moving, while the market traded away from it: the
-    scanner keeps that field on the regular feed and streams the live number in
-    ``premarket_close``.
+    This is the bulk-lookup counterpart of :func:`tapebasis.sessions.live_print`.
+    Both tools have to serve the same number for the same symbol, so the rule
+    lives in one place: *raw* is handed to it untouched, and only the resulting
+    price, session, change and baseline are merged onto *shaped*, which already
+    carries the rest of the row (volume, company, the 52-week range, and so on).
 
     The swap happens only when the provider itself names a session other than
-    ``regular`` and carries a number for it. A row that says nothing about its
-    session keeps exactly the value it always had, so a provider is never
-    credited with a print it did not send.
-
-    The reference close travels with the swap. ``change_percent`` is recomputed
-    against that same reference so the three numbers in a row describe one
-    session; before this, a row could take its price from today's pre-market and
-    its ``previous_close`` from two sessions back, and imply a day change that
-    matched neither.
+    ``regular`` and carries a number for it. A provider that says nothing about
+    its session keeps exactly the value it always had, so a row is never credited
+    with a print the provider did not send.
 
     Args:
         provider: The provider label.
-        shaped: That provider's reading, already normalised to this server's
-            field names, plus whatever session fields the provider sent.
+        shaped: That provider's reading, normalised to this server's field names.
+        raw: That provider's own payload, in the shape its accessor returns.
 
     Returns:
         The reading, with ``price`` replaced by the session's live print when
-        the provider named a different session, its own ``change_percent` for
-        that print, and the reference close it is measured against. A copy is
+        the provider named a different session, that print's own
+        ``change_percent`` and reference close, and the session name. A copy is
         always returned; the caller's payload is not mutated.
     """
     reading = dict(shaped)
-    raw_session = str(reading.get("session") or "").lower()
-    session = _SESSION_NAMES.get(raw_session) if raw_session else None
-    if session is None or session == REGULAR:
-        return reading
-    live_field = "premarket_close" if session == PRE_MARKET else "postmarket_close"
-    live_price = reading.get(live_field)
-    if live_price is None:
-        return reading
-    regular_close = reading.get("price")
-    reading["price"] = live_price
-    reading["session"] = session
-    reading["price_field"] = live_field
-    # The scanner measures the extended print against the regular session's
-    # close, and sends that change on the same row.
-    reading["previous_close"] = regular_close
-    live_change = reading.get(f"{live_field.split('_')[0]}market_change")
-    reading["change_percent"] = live_change if live_change is not None else (
-        round((live_price - regular_close) / regular_close * 100, 4)
-        if regular_close
-        else None
-    )
+    live = live_print(provider, raw)
+    if live.get("price") is not None:
+        reading["price"] = live["price"]
+        reading["session"] = live["session"]
+        # The print's own clock, which may be ``None``. A live print that the
+        # provider publishes without a time (Yahoo's ``fulldayPrice``) stays
+        # undated rather than inheriting the regular close's time, which belongs
+        # to a different print and would date this one a session early.
+        reading["price_timestamp"] = live["timestamp"]
+        if live.get("change_percent") is not None:
+            reading["change_percent"] = live["change_percent"]
+        if live.get("reference_close") is not None:
+            reading["previous_close"] = live["reference_close"]
+        reading["price_field"] = live.get("field")
+    else:
+        # No usable price from this provider: keep the session it named, if any,
+        # so a row with a missing number still says which window it looked at.
+        reading["session"] = _SESSION_NAMES.get(
+            str(reading.get("session") or "").lower()
+        )
     return reading
 
 
@@ -588,7 +584,11 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         Envelope whose ``data_provider`` is ``ALL`` when every provider asked
         answered, a provider name when only one did (the notice then states the
         data is single-source), or ``NONE`` when none did. ``resolutions``
-        records how each provider's ticker was derived.
+        records how each provider's ticker was derived. ``session`` names the
+        window the served ``price`` printed in (``pre_market``, ``regular``,
+        ``post_market`` or ``overnight``), and it is taken from the winning
+        provider's own print rather than from another leg's label, so a delayed
+        feed cannot describe a print it did not supply.
     """
     resolved = await _symbols_for(symbol)
     ticker = strip_exchange(resolved["ticker"]).upper()
@@ -809,14 +809,26 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             "is_exchange_delayed": payload.get("is_exchange_delayed"),
         }
 
-    # Which session the price is a print from, resolved before finalize so it
-    # can travel inside ``data`` where a caller reads the number. TradingView
-    # states its session directly; the clock of the newest print is the fallback.
-    session_now = _SESSION_NAMES.get(
-        str((pair.tv.payload or {}).get("current_session") or "").lower()
-    ) or market_session(
-        parse_market_timestamp((pair.tv.payload or {}).get("update_time"))
-    )
+    # Which session ``data.price`` is a print from. Derived from the winning
+    # provider's own print, not from TradingView's label: the scanner states a
+    # session, but its feed can be 15 minutes delayed, so at 09:34 ET it still
+    # said ``pre_market`` while the served print was a regular-session one. A
+    # row that names the wrong session is worse than one that names none, so the
+    # label follows the number the caller actually reads.
+    served_sessions: dict[str, str | None] = {}
+    served_fields: dict[str, str | None] = {}
+    for label, payload in (
+        (TRADINGVIEW, pair.tv.payload),
+        (FINVIZ, pair.fv.payload),
+        (YAHOO, pair.yh.payload),
+        (SA, pair.sa.payload),
+        (BLOOMBERG, pair.bb.payload),
+    ):
+        if not payload:
+            continue
+        live = live_print(label, payload)
+        served_sessions[label] = live.get("session")
+        served_fields[label] = live.get("field")
 
     result = finalize(
         pair,
@@ -855,21 +867,34 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         },
         extra={
             "symbol": ticker,
-            # Which session ``data.price`` is a print from, mirrored at the
-            # envelope level as well as inside ``data`` so it is visible however
-            # the caller walks the response. Without it a caller cannot tell the
-            # regular session's last trade from the live pre-market print, and
-            # on an active symbol those differ by more than this tool's own
-            # comparison tolerance.
-            "session": session_now,
             "resolutions": resolved["resolutions"],
         },
         **_health({"providers": providers_in(pair) or ALL_PROVIDERS}),
     )
+    # The session of the print that was actually served, mirrored at the
+    # envelope level as well as inside ``data`` so it is visible however the
+    # caller walks the response. Without it a caller cannot tell the regular
+    # session's last trade from the live pre-market print, and on an active
+    # symbol those differ by more than this tool's own comparison tolerance.
+    winner_label = (result.get("fields", {}).get("price") or {}).get("source")
+    session_now = served_sessions.get(winner_label) if winner_label else None
+    if session_now is None and winner_label:
+        # A provider that names no session still prints at a time, and the clock
+        # of that print is a better answer than no label at all.
+        session_now = market_session(
+            parse_market_timestamp((result.get("freshness") or {}).get(winner_label))
+        )
+    # ``None`` rather than an absent key: the contract says a print whose session
+    # cannot be determined carries ``session: null`` instead of a guess, and a
+    # missing key would read as "this tool has no such field".
+    result["session"] = session_now
     if isinstance(result.get("data"), dict) and result["data"]:
         # Only when there is a quote to describe: on the NONE path ``data`` is
         # empty and a ``session`` key would claim a print no provider sent.
         result["data"]["session"] = session_now
+        # The provider field the price was read from, so the swap from a stale
+        # regular value to a live session print is auditable rather than implied.
+        result["data"]["price_field"] = served_fields.get(winner_label) if winner_label else None
     return result
 
 
@@ -899,8 +924,11 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         the provider the row's values were taken from, and ``fields`` states it
         per field, because only ``price`` and ``change_percent`` are compared:
         a row can read ``ALL`` while ``previous_close`` was shaped by one
-        provider. On an FX symbol the day change is reported but not compared,
-        because spot FX has no single official previous close.
+        provider. ``session`` names the window the row's ``price`` printed in,
+        and ``price_field`` names the provider field it was read from, so a swap
+        from a stale regular value to a live session print is auditable rather
+        than implied. On an FX symbol the day change is reported but not
+        compared, because spot FX has no single official previous close.
     """
     requested = [t.strip().upper() for t in tickers.split(",") if t.strip()]
     if not requested:
@@ -1095,92 +1123,72 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
 
         readings: dict[str, dict[str, Any]] = {}
         if tv_row:
-            readings[TRADINGVIEW] = _live_reading(TRADINGVIEW, {
-                "price": tv_row.get("close"),
-                "change_percent": tv_row.get("change"),
-                "volume": tv_row.get("volume"),
-                "company": tv_row.get("description"),
-                "price_timestamp": tv_row.get("update_time"),
-                # The scanner names its own session and carries the extended
-                # session's print separately; ``_live_reading`` moves the price
-                # to that print when it is the live one.
-                "session": tv_row.get("current_session"),
-                "premarket_close": tv_row.get("premarket_close"),
-                "premarket_change": tv_row.get("premarket_change"),
-                "postmarket_close": tv_row.get("postmarket_close"),
-                "postmarket_change": tv_row.get("postmarket_change"),
-            })
+            readings[TRADINGVIEW] = _live_reading(
+                TRADINGVIEW,
+                {
+                    "volume": tv_row.get("volume"),
+                    "company": tv_row.get("description"),
+                    "price_timestamp": tv_row.get("update_time"),
+                },
+                tv_row,
+            )
         if fv_row:
-            readings[FINVIZ] = _live_reading(FINVIZ, {
-                "price": fv_row.get("price"),
-                "change_percent": fv_row.get("change"),
-                "previous_close": fv_row.get("prevClose"),
-                "volume": fv_row.get("volume"),
-                "company": fv_row.get("company"),
-                # ``fetched_at`` is when the screener was read, not when the
-                # instrument traded. Using it as a print time let a stale
-                # Finviz price claim to be the freshest reading in the row.
-                "price_timestamp": fv_row.get("last_update"),
-            })
+            readings[FINVIZ] = _live_reading(
+                FINVIZ,
+                {
+                    "change_percent": fv_row.get("change"),
+                    "previous_close": fv_row.get("prevClose"),
+                    "volume": fv_row.get("volume"),
+                    "company": fv_row.get("company"),
+                    # ``fetched_at`` is when the screener was read, not when the
+                    # instrument traded. Using it as a print time let a stale
+                    # Finviz price claim to be the freshest reading in the row.
+                    "price_timestamp": fv_row.get("last_update"),
+                },
+                # The screener row has no ``last_close`` header, so it is shaped
+                # into the one ``live_print`` reads. Its ``price`` is already the
+                # live print, extended hours included, and ``prevClose`` is the
+                # baseline it is measured against.
+                {
+                    "last_close": {
+                        "price": fv_row.get("price"),
+                        "date": fv_row.get("last_update"),
+                        "change_percent": fv_row.get("change"),
+                    },
+                    "snapshot_numeric": {"Prev Close": fv_row.get("prevClose")},
+                },
+            )
         if yh_row:
-            # Yahoo's chart ``meta`` carries no ``marketState``, so the session
-            # cannot be read off a label here. It does publish the
-            # session-inclusive price (``fulldayPrice``) beside the regular one,
-            # and the regular one is frozen whenever the market is outside its
-            # session. Taking whichever print is newer is therefore the only
-            # rule that works without guessing, and it degrades to the regular
-            # value during the regular session, when the two are the same
-            # number anyway.
-            fullday = yh_row.get("fullday_price")
-            regular = yh_row.get("price")
-            live = fullday if fullday is not None and fullday != regular else None
-            readings[YAHOO] = _live_reading(YAHOO, {
-                "price": live if live is not None else regular,
-                "change_percent": yh_row.get("fullday_change_percent")
-                if live is not None
-                else yh_row.get("change_pct"),
-                # The session-inclusive print is measured against the regular
-                # session's own price, which is what Yahoo states as
-                # ``fulldayChange``'s baseline.
-                "previous_close": regular
-                if live is not None
-                else yh_row.get("previous_close"),
-                "company": yh_row.get("shortName"),
-                "price_timestamp": yh_row.get("market_time"),
-            })
+            readings[YAHOO] = _live_reading(
+                YAHOO,
+                {
+                    "volume": yh_row.get("volume"),
+                    "company": yh_row.get("shortName"),
+                    "price_timestamp": yh_row.get("market_time"),
+                },
+                yh_row,
+            )
         if sa_row:
-            readings[SA] = _live_reading(SA, {
-                "price": sa_row.get("price"),
-                "change_percent": sa_row.get("change_percent"),
-                "previous_close": sa_row.get("previous_close"),
-                "volume": sa_row.get("volume"),
-                "price_timestamp": sa_row.get("price_timestamp"),
-                # StockAnalysis says ``fms``: pre/post/closed. Its extended
-                # block carries the print that belongs to it.
-                "session": sa_row.get("session"),
-                "premarket_close": (sa_row.get("extended_hours") or {}).get("price")
-                if "pre" in str((sa_row.get("extended_hours") or {}).get("session") or "").lower()
-                else None,
-                "postmarket_close": (sa_row.get("extended_hours") or {}).get("price")
-                if "post" in str((sa_row.get("extended_hours") or {}).get("session") or "").lower()
-                else None,
-            })
+            readings[SA] = _live_reading(
+                SA,
+                {
+                    "volume": sa_row.get("volume"),
+                },
+                sa_row,
+            )
         bb_row = bb_rows.get(symbol)
         if bb_row:
             week_52 = bb_row.get("week_52_range") or [None, None]
-            readings[BLOOMBERG] = _live_reading(BLOOMBERG, {
-                "price": bb_row.get("price"),
-                "change_percent": bb_row.get("change_percent"),
-                "previous_close": bb_row.get("previous_close"),
-                "week_52_low": week_52[0] if len(week_52) > 0 else None,
-                "week_52_high": week_52[1] if len(week_52) > 1 else None,
-                "company": bb_row.get("name"),
-                # Derived from the intraday series by ``bb_access``, never the
-                # ``lastUpdate`` sentinel, so it can be ordered against the
-                # other providers' prints.
-                "price_timestamp": bb_row.get("print_time"),
-                "exchange_delay": bb_row.get("exchange_delay"),
-            })
+            readings[BLOOMBERG] = _live_reading(
+                BLOOMBERG,
+                {
+                    "week_52_low": week_52[0] if len(week_52) > 0 else None,
+                    "week_52_high": week_52[1] if len(week_52) > 1 else None,
+                    "company": bb_row.get("name"),
+                    "exchange_delay": bb_row.get("exchange_delay"),
+                },
+                bb_row,
+            )
 
         if not readings:
             out_rows.append(
@@ -1392,6 +1400,10 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             # pre-market print, and the two differ by however far the market
             # has moved since, which is the whole reason this field exists.
             "session": winner_session,
+            # Which provider field the price was read from. The swap from a
+            # stale regular value to a session print is invisible otherwise, so
+            # the field name makes the provenance auditable instead of implied.
+            "price_field": source.get("price_field"),
             "fields": fields,
             "company": next(
                 (r.get("company") for r in readings.values() if r.get("company")), None
@@ -1413,7 +1425,6 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             # instead of only being visible in ``comparisons``.
             row["exchange_delay"] = readings[BLOOMBERG]["exchange_delay"]
         out_rows.append(row)
-
     answering_rows = [r for r in out_rows if r["data_provider"] != "NONE"]
     answered = {
         p for r in answering_rows for p in r.get("providers_answered", [])

@@ -100,6 +100,18 @@ them, not an older session's close, so the three numbers in a row are internally
 `(price - previous_close) / previous_close` reproduces `change_percent`. A row that paired a live
 pre-market price with a baseline two sessions old would report a day change no provider published.
 
+The baseline is recovered from the print's own change, as `price / (1 + change/100)`. That is the number
+the provider itself divided by, so it is exact rather than approximate, and it keeps the reference
+session right: a regular print is measured against the prior session's close and an extended print
+against the last regular close. Those are different numbers, so one branch's baseline is never reused
+for another's.
+
+The session names the print that was served, not a leg that was merely asked. A delayed feed states the
+window it is in, and while it lags, that statement describes a print the row is not serving. The label
+therefore follows the winner's own print, so two tools asked about the same symbol at the same instant
+cannot disagree about its session. `data.price_field` names the provider field that print was read from,
+so the move away from a stale regular value is visible on the payload rather than only in the docs.
+
 ### `fields`
 Per-field provenance, one descriptor per key in `data`:
 

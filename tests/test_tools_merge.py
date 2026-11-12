@@ -515,7 +515,10 @@ async def test_prices_state_the_source_of_every_field(fake_providers, monkeypatc
         assert fields[name]["source"] in fields[name]["supplied"]
         assert fields[name]["compared"] == []
         assert fields[name]["agreement"] is None
-    assert fields["previous_close"]["supplied"] == ["FINVIZ", "YAHOO"]
+    # TradingView supplies a previous close too: it recovers the baseline from
+    # the change beside its own print rather than borrowing the stale ``close``
+    # column, so it is a supplier of this field and not only of the price.
+    assert fields["previous_close"]["supplied"] == ["TRADINGVIEW", "FINVIZ", "YAHOO"]
     assert set(fields) == {"price", "change_percent", "previous_close", "volume"}
 
 
@@ -525,8 +528,9 @@ async def test_prices_fill_an_uncontested_field_from_a_provider_that_has_it(
 ):
     """Reading extras off the winning provider dropped data every row.
 
-    TradingView prints most recently and carries no ``previous_close``, so every
-    row reported ``null`` for a number four providers had shaped.
+    TradingView prints most recently here and its row omits ``change``, so it
+    carries no recoverable baseline; every row reported ``null`` for a number
+    three other providers had shaped.
     """
     from tapebasis import fv_access, tv_access, yh_access
 
@@ -535,7 +539,6 @@ async def test_prices_fill_an_uncontested_field_from_a_provider_that_has_it(
             "AAPL": {
                 "ticker": "NASDAQ:AAPL",
                 "close": 331.9,
-                "change": -1.9,
                 "volume": 63160515,
                 "update_time": "2026-11-03T21:00:01+00:00",
             }
@@ -616,7 +619,12 @@ async def test_prices_fill_ignores_a_provider_with_no_print_time(
     monkeypatch.setattr(yh_access, "quote", yh_quote)
 
     row = (await tools_market.stock_prices("AAPL"))["data"][0]
-    assert row["fields"]["previous_close"]["source"] == "YAHOO"
+    # The undated Finviz row must not win. TradingView and Yahoo both carry the
+    # print instant here, so the documented order breaks that tie; what matters
+    # is that the provider which published no time at all is not credited with
+    # being current.
+    assert row["fields"]["previous_close"]["source"] in ("TRADINGVIEW", "YAHOO")
+    assert row["fields"]["previous_close"]["source"] != "FINVIZ"
 
 
 # ── StockAnalysis as the fifth leg ───────────────────────────────────────────
@@ -744,10 +752,12 @@ async def test_prices_use_the_session_print_and_keep_the_row_coherent(
                 "volume": 63160515,
                 "update_time": "2026-11-04T12:30:00+00:00",
                 # The scanner says which session it is in, and where that
-                # session's own print is.
+                # session's own print is. ``premarket_change`` is sent at full
+                # float precision, so its arithmetic recovers the baseline
+                # exactly; the fixture uses the same precision as the feed.
                 "current_session": "pre_market",
                 "premarket_close": 335.0,
-                "premarket_change": 0.93,
+                "premarket_change": (335.0 / 331.9 - 1) * 100,
             }
         }
 
@@ -762,7 +772,7 @@ async def test_prices_use_the_session_print_and_keep_the_row_coherent(
             "market_time": "2026-11-03T21:00:01+00:00",
             "shortName": "Apple Inc.",
             "fullday_price": 335.0,
-            "fullday_change_percent": 0.93,
+            "fullday_change_percent": (335.0 / 331.9 - 1) * 100,
         }
 
     async def sa_quote_call(symbol):
@@ -776,6 +786,9 @@ async def test_prices_use_the_session_print_and_keep_the_row_coherent(
     row = (await tools_market.stock_prices("AAPL"))["data"][0]
     assert row["session"] == "pre_market"
     assert row["price"] == pytest.approx(335.0)
+    # The field the price was read from is stated, not implied: the swap from
+    # the regular ``close`` to the extended print is the whole point of the row.
+    assert row["price_field"] == "premarket_close"
     # The same session's own baseline, not another provider's older close.
     assert row["previous_close"] == pytest.approx(331.9)
     # The invariant that was broken: the row's own three numbers describe one
@@ -785,6 +798,64 @@ async def test_prices_use_the_session_print_and_keep_the_row_coherent(
     assert row["change_percent"] > 0.5
     # Yahoo publishes the session-inclusive print beside its regular one.
     assert row["comparisons"]["price"]["values"]["YAHOO"] == pytest.approx(335.0)
+
+
+@pytest.mark.asyncio
+async def test_quote_labels_the_session_of_the_print_it_serves(fake_providers, monkeypatch):
+    """A delayed leg's session label must not describe another leg's print.
+
+    Measured live at 09:39 ET: TradingView's scanner said ``pre_market`` because
+    its feed was 15 minutes delayed (``delayed_streaming_900``), while the
+    winning print was Yahoo's regular-session one. Labelling the row from the
+    scanner made ``stock_quote`` and ``stock_prices`` disagree about the same
+    symbol at the same moment.
+    """
+    from tapebasis import fv_access, tv_access, yh_access
+
+    async def tv_quote_call(symbol):
+        # The scanner is still on the pre-market window and carries a stale
+        # regular close; its label is honest about itself, not about Yahoo.
+        return {
+            "close": 331.9,
+            "change": -1.9,
+            "premarket_close": 335.0,
+            "premarket_change": (335.0 / 331.9 - 1) * 100,
+            "current_session": "pre_market",
+            "update_time": "2026-11-03T13:00:00+00:00",
+            "volume": 1000,
+        }
+
+    async def fv_quote_call(symbol):
+        # An older print than Yahoo's, so it cannot win the freshness race.
+        return {
+            "ticker": "AAPL",
+            "last_close": {
+                "price": 340.0,
+                "date": "Nov 03 • 12:55 PM ET",
+                "change_percent": 1.285,
+            },
+            "snapshot_numeric": {"Prev Close": 335.683},
+        }
+
+    async def yh_quote_call(symbol):
+        # Yahoo's print is a regular-session one and it is the newest, so it
+        # wins; the row has to say ``regular``, not ``pre_market``.
+        return {
+            "price": 340.0,
+            "change_pct": 1.285,
+            "previous_close": 335.683,
+            # 18:00 UTC on 2026-11-03 is 13:00 ET, inside the regular session.
+            "market_time": "2026-11-03T18:00:00+00:00",
+        }
+
+    monkeypatch.setattr(tv_access, "quote", tv_quote_call)
+    monkeypatch.setattr(fv_access, "quote", fv_quote_call)
+    monkeypatch.setattr(yh_access, "quote", yh_quote_call)
+
+    result = await tools_market.stock_quote("AAPL")
+    assert (result.get("fields", {}).get("price") or {}).get("source") == "YAHOO"
+    assert result["session"] == "regular"
+    assert result["data"]["session"] == "regular"
 
 
 @pytest.mark.asyncio

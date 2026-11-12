@@ -89,6 +89,28 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
+def _baseline(price: Any, change_percent: Any) -> float | None:
+    """The close a print's own percent change was computed against.
+
+    Recovered as ``price / (1 + change/100)``, which is exact rather than
+    approximate: it is the number the provider itself divided by, so no extra
+    request is needed to learn the baseline a print is measured against.
+
+    Args:
+        price: The print.
+        change_percent: That print's own change, in percent.
+
+    Returns:
+        The implied reference close, or ``None`` when either input is missing or
+        the change is exactly -100 (a total loss has no recoverable base).
+    """
+    number = _number(price)
+    change = _number(change_percent)
+    if number is None or change is None or change == -100:
+        return None
+    return number / (1 + change / 100)
+
+
 def live_print(provider: str, payload: dict[str, Any]) -> dict[str, Any]:
     """The live price one provider's shaped quote carries, with its session.
 
@@ -192,47 +214,43 @@ def _tradingview(payload: dict[str, Any]) -> dict[str, Any]:
     using it as a print time is exactly the mistake that made a stale price
     look like the newest one.
 
-    The reference close is the previous official close, which is what the
-    scanner measures ``premarket_change`` against. It is **not** ``close``:
-    that column is the regular feed's last trade and can sit behind the official
-    close (measured 355.36 against an official 355.63 for the same symbol), so
-    using it as the baseline would report a pre-market move against a stale
-    print. The exact previous close is recovered from the row's own arithmetic,
-    ``close / (1 + change/100)``, which is the baseline ``change`` was computed
-    against and needs no extra request.
-
-    The scanner publishes no trade time for the extended fields, so
-    ``update_time`` is what dates them. That is the row's refresh instant, the
-    only clock the scanner offers for that number.
+    The reference close is the close each print's own change was computed
+    against, recovered from that print's arithmetic: ``price / (1 + change/100)``.
+    It is **not** interchangeable between branches. The regular ``close`` is a
+    regular-session print and its ``change`` is measured against the prior
+    session's close, while ``premarket_close``/``postmarket_close`` are extended
+    prints and their changes are measured against the last regular close. Those
+    are different reference sessions by construction, so a branch derives from
+    its own change and never reuses another branch's baseline. Measured on a live
+    pre-market session, the extended branch's arithmetic reproduced the official
+    previous close exactly, while reusing the regular branch's baseline was off
+    by the whole of the regular move.
     """
     session = _TV_SESSIONS.get(str(payload.get("current_session") or "").lower())
     regular_close = _number(payload.get("close"))
     change = _number(payload.get("change"))
     stamp = payload.get("update_time")
-    # The official previous close, recovered from the row's own change. A
-    # percent change of exactly -100 has no recoverable base, so it is skipped.
-    previous = (
-        regular_close / (1 + change / 100)
-        if regular_close is not None and change is not None and change != -100
-        else None
-    )
     if session == PRE_MARKET and _number(payload.get("premarket_close")) is not None:
+        live_change = _number(payload.get("premarket_change"))
         return _pack(
             payload.get("premarket_close"), stamp, PRE_MARKET, "premarket_close",
-            reference_close=previous,
-            change_percent=payload.get("premarket_change"),
+            reference_close=_baseline(payload.get("premarket_close"), live_change),
+            change_percent=live_change,
         )
     if session == POST_MARKET and _number(payload.get("postmarket_close")) is not None:
+        live_change = _number(payload.get("postmarket_change"))
         return _pack(
             payload.get("postmarket_close"), stamp, POST_MARKET, "postmarket_close",
-            reference_close=previous,
-            change_percent=payload.get("postmarket_change"),
+            reference_close=_baseline(payload.get("postmarket_close"), live_change),
+            change_percent=live_change,
         )
-    # Regular session, or a scanner row with no session label at all: ``close``
-    # is that provider's own last trade and its ``update_time`` dates it.
+    # ``close`` is the regular feed's last trade, so it is a regular-session
+    # print whenever it is served. Labelling it with the scanner's current
+    # session would call a regular print pre-market just because the symbol has
+    # no extended print yet, which is the same conflation one step over.
     return _pack(
-        regular_close, stamp, session, "close",
-        reference_close=previous,
+        regular_close, stamp, REGULAR, "close",
+        reference_close=_baseline(regular_close, change),
         change_percent=change,
     )
 

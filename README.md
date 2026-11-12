@@ -142,11 +142,14 @@ streaming, Yahoo's `regularMarketPrice` freezes while `fulldayPrice` does not, a
 the current extended print in `extended_hours`. Each provider's live print is therefore resolved before
 anything is compared, and `stock_quote` / `stock_prices` publish the session it belongs to
 (`pre_market`, `regular`, `post_market`, `overnight`) with the day change and previous close measured
-against that same session's baseline. The overnight window is TradingView-only, and is labelled as
-single-source rather than presented as cross-checked.
+against that same session's baseline, recovered from the print's own change. The label follows the print
+that was served rather than a nominated leg, so a delayed feed cannot name a session the served number
+does not belong to. The overnight window is TradingView-only, and is labelled as single-source rather
+than presented as cross-checked.
 
 Implementation: [`reconcile.py`](src/tapebasis/reconcile.py) (fan-out + comparison),
 [`freshness.py`](src/tapebasis/freshness.py) (print-time parsing),
+[`sessions.py`](src/tapebasis/sessions.py) (which session a print belongs to, and which print is live),
 [`providers_state.py`](src/tapebasis/providers_state.py) (envelope + labels).
 
 ---

@@ -979,14 +979,30 @@ rather than invented.
 **The scanner's `close` is not the previous close either.** TradingView computes `change` against the
 official previous close while its `close` column holds a stale last trade: measured 355.36 against an
 official 355.63 for AAPL. Using `close` as the pre-market baseline reported a move against a print that
-was never the close. The exact baseline is recovered from the row's own arithmetic,
-`close / (1 + change/100)`, which is the number `change` was computed against and needs no extra
-request.
+was never the close.
+
+**Each print's baseline is recovered from that print's own change.** The scanner publishes a change
+beside every price column, and the number it divided by is exactly `price / (1 + change/100)`. The
+regular column's `close / (1 + change/100)` reaches the *prior* session's close, which is what a regular
+print is measured against; the extended columns' `premarket_close / (1 + premarket_change/100)` reach the
+last regular close, which is what an extended print is measured against. They are different reference
+sessions, so a branch must derive from its own change and never reuse another branch's baseline.
+Measured on a live pre-market session, the pre-market branch reproduced the official previous close
+exactly on every symbol probed, while reusing the regular branch's derivation was off by the whole of
+the regular move.
 
 **`update_time` is a refresh heartbeat, not a print time.** It was observed advancing while `close`
 stayed frozen at the same value, and for NVDA it carried 20:00 ET from the previous evening. It dates
 the row's refresh, so it is used as the timestamp of a scanner-sourced print only because it is the
 only clock that feed offers, and it is not used to make a stale value win a freshness race.
+
+**The session is read off the served print, not off a nominated leg.** A feed can state a session that
+describes where *it* is, while lagging behind the print that wins. Measured at 09:42 ET: the scanner
+said `pre_market` because its feed is 15 minutes delayed (`delayed_streaming_900`), and the winning print
+was a regular-session one. Labelling from the scanner made `stock_quote` report `pre_market` while
+`stock_prices` reported `regular` for the same symbol at the same moment. Both now label the print they
+serve, so the two tools cannot disagree, and `price_field` names the provider field that print was read
+from.
 
 **Consequence:** `stock_prices` and `stock_quote` return the print the market is actually trading on,
 label its session, and a row can no longer imply a day change that contradicts its own
@@ -1007,10 +1023,11 @@ and `previous_close` 348.51 from Yahoo. Those two imply +1.97 %, while the `chan
 read -0.076 %. The row was internally inconsistent, and the number an agent would compute from it was
 reported by no provider at all.
 
-**Why the baseline is exact:** TradingView's extended print is measured against the previous official
-close, so the recovered `close / (1 + change/100)` is not an approximation. Across five providers the
-`previous_close` field now agrees at 0.0 % difference, which is the check that the derivation is exact
-rather than close enough.
+**Why the baseline is exact:** the baseline travels with the print it belongs to, recovered from that
+print's own change as `price / (1 + change/100)` rather than borrowed from another column or another
+provider. That is the number the provider itself divided by, so it is exact instead of close enough,
+and it keeps the reference session right too: a regular print is measured against the prior session's
+close and an extended print against the last regular close, which are different numbers by construction.
 
 **Consequence:** a row is a self-consistent observation. Reading `price`, `change_percent` and
 `previous_close` from one row and computing the change gives the same answer as the field, whichever

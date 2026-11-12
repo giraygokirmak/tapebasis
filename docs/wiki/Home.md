@@ -165,8 +165,11 @@ resolved before anything is compared, and the session travels with the number.
 
 `stock_quote` and `stock_prices` publish the resolved session (`pre_market`, `regular`, `post_market`
 or `overnight`) and measure the day change and previous close against the same session's baseline, so a
-row's own three numbers describe one observation. A provider that names no session keeps its old value
-rather than being credited with a print it did not send.
+row's own three numbers describe one observation. The session is read off the print that was served, not
+off a nominated leg: a delayed feed can be describing the previous window while another provider's newer
+print wins, and labelling the row from the delayed feed would name a session the number does not belong
+to. A provider that names no session keeps its old value rather than being credited with a print it did
+not send.
 
 The overnight window (20:00-04:00 ET on the alternative venues) is TradingView-only and labelled as
 such: no other provider in the set carries it. Details: [Design Decisions](Design-Decisions).
