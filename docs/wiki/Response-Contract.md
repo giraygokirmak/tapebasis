@@ -86,6 +86,20 @@ newest. Every original stays in `comparisons`, and `freshness` records which one
 agent never has to reconcile several numbers to answer "what is the price", but it can always audit
 the choice.
 
+**The price is the live print, and it names its session.** The field that looks like "the price" is
+the regular session's value, and it stops moving when that session ends. Before comparison, each
+provider's reading is moved to the print that provider would call current: TradingView's
+`premarket_close`/`postmarket_close` when it says so in `current_session`, Yahoo's `fulldayPrice`
+when it differs from `regularMarketPrice`, StockAnalysis's `extended_hours` block when it names a
+session. `stock_quote` publishes the result as `data.session` (mirrored at the envelope level), and
+`stock_prices` per row. `pre_market`, `regular`, `post_market` and `overnight` are the values; a print
+whose session cannot be determined carries `session: null` rather than a guess.
+
+The same session owns the baseline. `change_percent` and `previous_close` describe the print beside
+them, not an older session's close, so the three numbers in a row are internally consistent: computing
+`(price - previous_close) / previous_close` reproduces `change_percent`. A row that paired a live
+pre-market price with a baseline two sessions old would report a day change no provider published.
+
 ### `fields`
 Per-field provenance, one descriptor per key in `data`:
 

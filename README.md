@@ -136,6 +136,15 @@ each provider derives its own daily roll and the day-change figures answer diffe
 FX, `change_percent` is therefore always reported from every provider but never compared, with that
 reason in the pair. Instrument-level, not provider-level: no tolerance can make it a conflict.
 
+**A price is a print, and it carries its session.** The obvious price field goes stale as soon as the
+regular session ends: TradingView's scanner `close` stops moving while its `premarket_close` keeps
+streaming, Yahoo's `regularMarketPrice` freezes while `fulldayPrice` does not, and StockAnalysis keeps
+the current extended print in `extended_hours`. Each provider's live print is therefore resolved before
+anything is compared, and `stock_quote` / `stock_prices` publish the session it belongs to
+(`pre_market`, `regular`, `post_market`, `overnight`) with the day change and previous close measured
+against that same session's baseline. The overnight window is TradingView-only, and is labelled as
+single-source rather than presented as cross-checked.
+
 Implementation: [`reconcile.py`](src/tapebasis/reconcile.py) (fan-out + comparison),
 [`freshness.py`](src/tapebasis/freshness.py) (print-time parsing),
 [`providers_state.py`](src/tapebasis/providers_state.py) (envelope + labels).
@@ -188,8 +197,8 @@ served and clearly labelled, not hidden.
 
 | Tool | Providers | Fields cross-checked |
 | --- | --- | --- |
-| `stock_quote` | every provider that carries the instrument | price, change %, previous close, volume, session open/high/low, 52-w high/low, P/E, RSI(14) |
-| `stock_prices` | every provider, per ticker (Bloomberg capped by batch) | price and change % per ticker (per-row `data_provider`) |
+| `stock_quote` | every provider that carries the instrument | price, change %, previous close, volume, session open/high/low, 52-w high/low, P/E, RSI(14); each price carries its `session` |
+| `stock_prices` | every provider, per ticker (Bloomberg capped by batch) | price and change % per ticker (per-row `data_provider`, `session`) |
 | `stock_screener` | TradingView + Finviz | per-row price for the tickers both return |
 | `market_indices` | TradingView + Finviz indices feed + Yahoo | S&P 500, Dow, Nasdaq Composite, Russell 2000, VIX levels |
 | `stock_options_chain` | Finviz + Yahoo (+ TV underlying) | volume per contract, matched by strike; OI when both report it |

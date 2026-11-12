@@ -46,6 +46,11 @@ dependencies = [
   # preset filter that silently returns 0 rows for crypto/futures scans.
   "tradingview-screener==3.0.0",
   "tradingview-ta>=3.3.0",
+  # Feeds TradingView's chart feed (``_history_blocking``). Declared because the
+  # import there is local: without it a clean install raised
+  # ModuleNotFoundError at the first history call, so the backtest leg answered
+  # NONE while the dependency sat undeclared.
+  "websocket-client>=1.7",
   # Sentiment is computed locally when MARKETAUX_API_TOKEN is unset, so the
   # server has a token-free path for market_sentiment/combined_analysis.
   # MIT licensed, ships its 4.5k-entry lexicon as package data (no download).

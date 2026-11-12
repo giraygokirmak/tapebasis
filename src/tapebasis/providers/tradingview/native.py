@@ -73,6 +73,11 @@ QUOTE_COLUMNS: tuple[str, ...] = (
     "ATR",
     "earnings_release_next_date",
     "earnings_release_date",
+    # The scanner names the session it is in and carries each extended
+    # session's own print. ``close`` is the regular feed's last trade, so
+    # without these there is no way to tell a stale regular price from the
+    # live pre-market one, let alone say which session a quote belongs to.
+    "current_session",
     "premarket_close",
     "premarket_change",
     "premarket_volume",
@@ -375,13 +380,20 @@ def _bars_for_period(period: str, interval: str) -> int:
     return max(2, min(5000, width))
 
 
-async def _history_blocking(
+def _history_blocking(
     ticker: str,
     interval: str,
     bars: int,
     timeout: float,
 ) -> list[dict[str, Any]]:
-    """Open one chart socket, ask for *bars* candles, close. Blocking."""
+    """Open one chart socket, ask for *bars* candles, close. Blocking.
+
+    Deliberately a plain function, not a coroutine. It is handed to
+    :func:`tapebasis.blocking_pool.run`, which calls it in a worker thread; when
+    it was declared ``async`` the pool called it without awaiting and returned
+    the coroutine object, so every history read failed with ``'coroutine' object
+    is not subscriptable`` and the TradingView leg of every backtest was dead.
+    """
     import websocket  # local import: optional dependency, only needed for history
 
     resolution = RESOLUTIONS.get(interval.lower(), "1D")

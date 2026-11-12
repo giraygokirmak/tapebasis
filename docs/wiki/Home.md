@@ -151,6 +151,26 @@ always reported from every provider and never judged.
 
 Full detail: [Response Contract](Response-Contract).
 
+## A price is a print, and it belongs to a session
+
+The obvious price field goes stale the moment the regular session ends, and a quote that does not say
+which session it came from reads as current when it is hours old. So each provider's live print is
+resolved before anything is compared, and the session travels with the number.
+
+- TradingView's scanner keeps `close` on the regular feed and streams the live extended print in
+  `premarket_close` / `postmarket_close`, naming the window in `current_session`.
+- Yahoo's `regularMarketPrice` freezes at the regular close while `fulldayPrice` does not.
+- StockAnalysis keeps the regular close in `price` and the current extended print in `extended_hours`.
+- Finviz's `Last Close` header is already the live print, extended hours included.
+
+`stock_quote` and `stock_prices` publish the resolved session (`pre_market`, `regular`, `post_market`
+or `overnight`) and measure the day change and previous close against the same session's baseline, so a
+row's own three numbers describe one observation. A provider that names no session keeps its old value
+rather than being credited with a print it did not send.
+
+The overnight window (20:00-04:00 ET on the alternative venues) is TradingView-only and labelled as
+such: no other provider in the set carries it. Details: [Design Decisions](Design-Decisions).
+
 ---
 
 ## StockAnalysis: the leg that covers US equities and ETFs

@@ -39,6 +39,16 @@ scanner's own delay, the same fact Bloomberg's `exchange_delay` reports for its 
 StockAnalysis getter: its quote API carries price, range, volume and the 52-week range, and P/E lives
 on a separate stock page this tool does not fetch.
 
+`data.session` (also at the envelope level) names the window `data.price` is a print from:
+`pre_market`, `regular`, `post_market` or `overnight`. Each provider's live print is resolved before
+comparison, because the obvious price field goes stale the moment the regular session ends:
+TradingView's `close` is the regular feed's last trade while its `premarket_close` keeps streaming,
+Yahoo's `regularMarketPrice` freezes while `fulldayPrice` does not, and StockAnalysis keeps the regular
+close in `price` and the current extended print in `extended_hours`. Reading the obvious field is what
+let a quote sit hours behind the market and still be labelled current. The day change and the previous
+close move with the price, so a row's three numbers describe one session rather than mixing a live
+price with a baseline from two sessions back.
+
 #### `income_breakdown` (a field of `stock_quote`)
 
 The Finviz "Revenue & Expenses Breakdown" table and the product / region / segment revenue split ship
@@ -84,6 +94,15 @@ be `ALL` while another is single-source or `NONE` in the same response. Multi-so
 `price_source` (whose print the single `price` came from), a `fields` map and their own
 `comparisons` and `freshness` blocks. Rows where every provider came up empty carry a `misses` map
 explaining why. The FX day change is reported but never compared, exactly as in `stock_quote`.
+
+Each row also names its `session`, the window its `price` is a print from. The price itself is the
+live print rather than the obvious field: TradingView's scanner `close` stops moving when the regular
+feed's last trade falls behind the market while `premarket_close` keeps streaming, Yahoo's
+`regularMarketPrice` freezes while `fulldayPrice` does not, and StockAnalysis keeps the current
+extended print in its own block. The row's `change_percent` and `previous_close` are measured against
+the same session's baseline, so the row's own three numbers are consistent. Before this, a pre-market
+price could be paired with a close two sessions old, implying a day change that neither the
+`change_percent` beside it nor any provider reported.
 
 `fields` states provenance per value, because `data_provider` describes the row rather than each
 number in it:
@@ -200,6 +219,17 @@ at 0.5 %; each provider's raw reading stays in `after_hours_readings`. Each sess
 session's `volume` when the feed reports one, so a pre-market print can be told apart from a single
 lot. StockAnalysis's block is also served whole as `stockanalysis_extended_hours`, next to
 `stockanalysis_regular_close`.
+
+`data.session` names the window the instrument is in right now (`pre_market`, `regular`,
+`post_market`, `overnight`), so a caller asking "pre or post" does not have to infer it from which block
+happens to be populated. It comes from TradingView's own `current_session` statement, with the newest
+Yahoo block as the fallback.
+
+The `overnight` block is the 20:00-04:00 ET window that the alternative venues trade. Only TradingView
+reaches it, through the quote websocket rather than the scanner, which has no row for those venues at
+all (`BOATS:AAPL` is rejected on every scanner market). The block carries the venue's own print time,
+its session label, its volume and `feed_mode`. `overnight_source` names where it came from, because it
+is single-source by nature: Finviz, Yahoo and StockAnalysis stop at the after-hours close.
 
 Yahoo's candles are requested over two days, not one: `range=1d` stopped returning a `timestamp`
 array, so every call reported `NO_DATA` with "unexpected response shape: 'timestamp'" and the session

@@ -947,6 +947,103 @@ is correct across the midnight roll that the wider window introduced.
 
 ---
 
+## 49. The price is the session's live print, not the obvious field
+
+**Decision:** `tapebasis.sessions.live_print()` resolves, per provider, which number that provider
+would call the price right now, and which session it printed in. `stock_quote` and `stock_prices` serve
+that number and publish its `session`. The row's `change_percent` and `previous_close` come from the
+same session as the price, so the three numbers in a row describe one observation.
+
+**Why:** the obvious price field goes stale the moment the regular session ends, and nothing in the
+response said so. Measured at 08:15 ET on a live pre-market session, `stock_prices("NVDA")` returned
+`price: 173.73`, `change_percent: +2.87` while the instrument was trading near 158.90, down 8.5 %.
+The provider readings in the same row showed it: TradingView 173.73, Finviz 158.9, Yahoo 173.73, SA
+173.73. The winner was TradingView's `close`, which is the regular feed's last trade and had stopped
+moving, while TradingView's own `premarket_close` column on the same row streamed 356.7 to 357.4 for
+AAPL.
+
+Each provider states the live print somewhere, just not where the plain field is:
+
+| Provider | Stale field | Live field | Own label |
+| --- | --- | --- | --- |
+| TradingView scanner | `close` | `premarket_close` / `postmarket_close` | `current_session` |
+| Yahoo chart `meta` | `regularMarketPrice` | `fulldayPrice` | none, inferred from the clock |
+| StockAnalysis | `price` | `extended_hours.price` | `fms` (`pre` / `post`) |
+| Finviz quote page | none: `last_close` is already the live print | same | timestamp beside it |
+
+**A provider without a session field keeps its old value.** The swap happens only when the provider
+itself names a session other than `regular` and carries a number for it. A provider is never credited
+with a print it did not send, so a row from a feed that publishes no extended-hours surface is unchanged
+rather than invented.
+
+**The scanner's `close` is not the previous close either.** TradingView computes `change` against the
+official previous close while its `close` column holds a stale last trade: measured 355.36 against an
+official 355.63 for AAPL. Using `close` as the pre-market baseline reported a move against a print that
+was never the close. The exact baseline is recovered from the row's own arithmetic,
+`close / (1 + change/100)`, which is the number `change` was computed against and needs no extra
+request.
+
+**`update_time` is a refresh heartbeat, not a print time.** It was observed advancing while `close`
+stayed frozen at the same value, and for NVDA it carried 20:00 ET from the previous evening. It dates
+the row's refresh, so it is used as the timestamp of a scanner-sourced print only because it is the
+only clock that feed offers, and it is not used to make a stale value win a freshness race.
+
+**Consequence:** `stock_prices` and `stock_quote` return the print the market is actually trading on,
+label its session, and a row can no longer imply a day change that contradicts its own
+`change_percent`. The measured NVDA row afterwards read price 159.04, `session: pre_market`,
+change -8.46 %, previous close 173.73, and the implied change matched the reported change exactly.
+
+---
+
+## 50. A row's baseline belongs to the same session as its price
+
+**Decision:** when the winning provider states the close its own print is measured against, that close
+becomes the row's `previous_close`. It is not borrowed from whichever provider holds the freshest copy
+of a previous close.
+
+**Why:** the previous close and the price were resolved independently, so a row could pair today's
+pre-market price with a close two sessions old. Measured before the fix: price 355.36 from TradingView
+and `previous_close` 348.51 from Yahoo. Those two imply +1.97 %, while the `change_percent` beside them
+read -0.076 %. The row was internally inconsistent, and the number an agent would compute from it was
+reported by no provider at all.
+
+**Why the baseline is exact:** TradingView's extended print is measured against the previous official
+close, so the recovered `close / (1 + change/100)` is not an approximation. Across five providers the
+`previous_close` field now agrees at 0.0 % difference, which is the check that the derivation is exact
+rather than close enough.
+
+**Consequence:** a row is a self-consistent observation. Reading `price`, `change_percent` and
+`previous_close` from one row and computing the change gives the same answer as the field, whichever
+session the row belongs to.
+
+---
+
+## 51. The overnight session is TradingView-only, and says so
+
+**Decision:** `stock_extended_hours` returns an `overnight` block from TradingView's quote websocket,
+plus `overnight_source: "TRADINGVIEW"`. It is never compared, because no other provider has the data.
+
+**Why:** the alternative venues (Blue Ocean ATS among them) trade 20:00-04:00 ET, which is a real
+session with real prints. Measured: BOATS last prints arrived at 03:58-03:59 ET, and 10 of 10 symbols
+resolved in one socket connection in 6.4 s. Only TradingView carries it:
+
+- Yahoo's 2-day 1-minute chart had 0 bars between 20:00 and 04:00, with hours covered 04-19.
+- Finviz has no overnight field, and its quote page's extended block is after-hours only.
+- StockAnalysis's extended block is pre/post only.
+
+**The scanner cannot reach it.** `BOATS:AAPL` is rejected with `symbol_not_exists` on every scanner
+market, and there is no BOATS scan market at all. The public web chart does not use the scanner for
+this: it subscribes on the quote websocket, which is a different upstream inside TradingView. That
+socket resolves symbols the scanner does not index and states each print's session
+(`out_of_session` for the overnight window), so it is TradingView's own data rather than a proxy for
+anyone else's.
+
+**Consequence:** 24-hour coverage exists, is labelled single-source, and is only claimed where it was
+measured. A caller that needs overnight volume gets the venue's own number and knows not to treat it as
+cross-checked. The block is `None` rather than a fabricated zero when the venue has no print.
+
+---
+
 ## Related
 
 - [Architecture](Architecture): how these decisions are implemented

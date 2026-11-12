@@ -203,6 +203,15 @@ def _format_quote(symbol: str, result: dict[str, Any]) -> dict[str, Any]:
         "day_low": meta.get("regularMarketDayLow"),
         "volume": meta.get("regularMarketVolume"),
         "company": meta.get("shortName") or meta.get("longName"),
+        # Yahoo's own statement of the session, and the session-inclusive price
+        # it publishes beside the regular one. ``regularMarketPrice`` freezes
+        # when the regular session ends, so before the open it is the previous
+        # close while ``fulldayPrice`` is the live pre-market print. Both are
+        # Yahoo's, read off the same response; the session field is what lets a
+        # caller tell which one it is holding.
+        "fullday_price": meta.get("fulldayPrice"),
+        "fullday_change_percent": meta.get("fulldayChangePercent"),
+        "has_pre_post": meta.get("hasPrePostMarketData"),
         "quote_stale": _quote_is_stale(result),
         "source": "Yahoo Finance chart API",
     }

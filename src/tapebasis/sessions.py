@@ -1,0 +1,385 @@
+"""Which session a quote's print belongs to, and which print is the live one.
+
+A price is not a fact on its own. "AAPL is 355.36" is either the regular
+session's last trade, a pre-market print, an after-hours print, or an overnight
+print on an alternative venue, and those are different observations of the same
+instrument. Serving one number without saying which is how a frozen regular
+session value gets read as the live price while the market trades elsewhere.
+
+Two things live here:
+
+:func:`market_session`
+    Classify an instant into the US equity trading day. The boundaries are the
+    extended-hours schedule the venues publish, not a guess: pre-market opens
+    04:00 ET, the regular session runs 09:30 to 16:00 ET, after-hours ends
+    20:00 ET, and the overnight venues (Blue Ocean ATS among them) trade
+    20:00 to 04:00 ET.
+
+:func:`live_print`
+    Given one provider's own shaped quote, return the number that provider
+    would call "the price right now", together with the instant it printed and
+    the session it printed in. Every provider already sends this; it is just
+    spread across different field names, and reading the wrong one is what made
+    a stale value look current.
+
+Both are pure: no request is made, nothing is inferred that the provider did not
+say. When a provider carries no session-specific field the regular value is
+returned under the session its own print time implies, so a provider is never
+credited with a print it did not send.
+"""
+from __future__ import annotations
+
+from datetime import datetime, time, timezone
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from .freshness import parse_market_timestamp
+
+_EASTERN = ZoneInfo("America/New_York")
+
+#: Session names. Deliberately the vocabulary an exchange uses, not an invented
+#: one: ``overnight`` is the 20:00-04:00 window the alternative venues run, which
+#: is a real session with real prints, not "the market is closed".
+OVERNIGHT = "overnight"
+PRE_MARKET = "pre_market"
+REGULAR = "regular"
+POST_MARKET = "post_market"
+
+#: Session boundaries in US/Eastern wall-clock time. Half-open: the session
+#: that starts at 09:30 owns 09:30:00 and the one that ends at 16:00 does not.
+_BOUNDARIES: tuple[tuple[time, time, str], ...] = (
+    (time(4, 0), time(9, 30), PRE_MARKET),
+    (time(9, 30), time(16, 0), REGULAR),
+    (time(16, 0), time(20, 0), POST_MARKET),
+    (time(20, 0), time(4, 0), OVERNIGHT),
+)
+
+
+def market_session(moment: datetime | None) -> str | None:
+    """The US equity session an instant falls in, or ``None`` without one.
+
+    Args:
+        moment: A print time. Naive values are read as UTC.
+
+    Returns:
+        ``pre_market``, ``regular``, ``post_market`` or ``overnight``. Weekend
+        instants still classify by clock time: some venues do print then, and
+        inventing a fifth "weekend" state would hide a real print rather than
+        describe it.
+    """
+    if moment is None:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    wall = moment.astimezone(_EASTERN).time()
+    for start, end, name in _BOUNDARIES:
+        if start < end:
+            if start <= wall < end:
+                return name
+        elif wall >= start or wall < end:
+            # The overnight window wraps past midnight.
+            return name
+    return None
+
+
+def _number(value: Any) -> float | None:
+    """A finite float, or ``None``. Strings and bools are not prices."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def live_print(provider: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """The live price one provider's shaped quote carries, with its session.
+
+    Each provider publishes the current print under a different name and
+    leaves the plain ``price``/``close`` field holding the regular session's
+    value. TradingView is the clearest case: its scanner ``close`` is the
+    primary feed's last trade, which stops moving the moment pre-market
+    trading starts on another venue, while its own ``premarket_close`` keeps
+    streaming. Reading ``close`` as the price is what let a quote sit hours
+    behind the market while the response still claimed to be current.
+
+    Args:
+        provider: The provider label, as :mod:`tapebasis.providers_state` uses
+            it (``TRADINGVIEW``, ``FINVIZ``, ``YAHOO``, ``SA``, ``BLOOMBERG``).
+        payload: That provider's shaped quote.
+
+    Returns:
+        ``{"price", "timestamp", "session", "field"}``. ``price`` is ``None``
+        when the provider sent no usable number. ``session`` comes from the
+        provider's own label when it publishes one, otherwise from
+        :func:`market_session` applied to the print time. ``field`` names the
+        provider field the number was read from, so the provenance is auditable
+        rather than implied.
+    """
+    if provider == "TRADINGVIEW":
+        return _tradingview(payload)
+    if provider == "FINVIZ":
+        return _finviz(payload)
+    if provider == "YAHOO":
+        return _yahoo(payload)
+    if provider == "SA":
+        return _stockanalysis(payload)
+    if provider == "BLOOMBERG":
+        return _bloomberg(payload)
+    return _plain(payload)
+
+
+def _pack(
+    price: Any,
+    timestamp: Any,
+    session: str | None,
+    field: str,
+    *,
+    reference_close: Any = None,
+    change_percent: Any = None,
+) -> dict[str, Any]:
+    """Assemble the result, deriving the session from the time when unlabelled.
+
+    ``reference_close`` is the close this print should be measured against, as
+    the provider itself states it. Carrying it is what keeps a row's price and
+    its day change on one reference session; taking the price from one provider
+    and the baseline from another produced rows that implied two different day
+    changes at once.
+    """
+    moment = parse_market_timestamp(timestamp)
+    number = _number(price)
+    if number is None:
+        return {
+            "price": None, "timestamp": None, "session": None, "field": field,
+            "reference_close": None, "change_percent": None,
+        }
+    return {
+        "price": number,
+        "timestamp": moment,
+        "session": session or market_session(moment),
+        "field": field,
+        "reference_close": _number(reference_close),
+        "change_percent": _number(change_percent),
+    }
+
+
+#: TradingView's ``current_session`` value to our session name. The scanner
+#: spells the regular session ``market``; the quote socket spells the overnight
+#: window ``out_of_session``. Exported because the tool layer maps the same
+#: labels when it has already normalised a provider's row itself.
+SESSION_NAMES: dict[str, str] = {
+    "premarket": PRE_MARKET,
+    "pre": PRE_MARKET,
+    "pre_market": PRE_MARKET,
+    "market": REGULAR,
+    "regular": REGULAR,
+    "postmarket": POST_MARKET,
+    "post": POST_MARKET,
+    "post_market": POST_MARKET,
+    "out_of_session": OVERNIGHT,
+    "overnight": OVERNIGHT,
+}
+
+_TV_SESSIONS = SESSION_NAMES
+
+
+def _tradingview(payload: dict[str, Any]) -> dict[str, Any]:
+    """TradingView: the session the scanner names, and that session's print.
+
+    The scanner states which session it is in (``current_session``) and carries
+    one field per extended session. When it says ``pre_market``, ``close`` is
+    not the pre-market print, so ``premarket_close`` is the number that answers
+    "what is the price". The scanner sends no print time for those extended
+    fields, so that value is returned untimestamped rather than being stamped
+    with ``update_time``: ``update_time`` is when the row was refreshed, and
+    using it as a print time is exactly the mistake that made a stale price
+    look like the newest one.
+
+    The reference close is the previous official close, which is what the
+    scanner measures ``premarket_change`` against. It is **not** ``close``:
+    that column is the regular feed's last trade and can sit behind the official
+    close (measured 355.36 against an official 355.63 for the same symbol), so
+    using it as the baseline would report a pre-market move against a stale
+    print. The exact previous close is recovered from the row's own arithmetic,
+    ``close / (1 + change/100)``, which is the baseline ``change`` was computed
+    against and needs no extra request.
+
+    The scanner publishes no trade time for the extended fields, so
+    ``update_time`` is what dates them. That is the row's refresh instant, the
+    only clock the scanner offers for that number.
+    """
+    session = _TV_SESSIONS.get(str(payload.get("current_session") or "").lower())
+    regular_close = _number(payload.get("close"))
+    change = _number(payload.get("change"))
+    stamp = payload.get("update_time")
+    # The official previous close, recovered from the row's own change. A
+    # percent change of exactly -100 has no recoverable base, so it is skipped.
+    previous = (
+        regular_close / (1 + change / 100)
+        if regular_close is not None and change is not None and change != -100
+        else None
+    )
+    if session == PRE_MARKET and _number(payload.get("premarket_close")) is not None:
+        return _pack(
+            payload.get("premarket_close"), stamp, PRE_MARKET, "premarket_close",
+            reference_close=previous,
+            change_percent=payload.get("premarket_change"),
+        )
+    if session == POST_MARKET and _number(payload.get("postmarket_close")) is not None:
+        return _pack(
+            payload.get("postmarket_close"), stamp, POST_MARKET, "postmarket_close",
+            reference_close=previous,
+            change_percent=payload.get("postmarket_change"),
+        )
+    # Regular session, or a scanner row with no session label at all: ``close``
+    # is that provider's own last trade and its ``update_time`` dates it.
+    return _pack(
+        regular_close, stamp, session, "close",
+        reference_close=previous,
+        change_percent=change,
+    )
+
+
+def _finviz(payload: dict[str, Any]) -> dict[str, Any]:
+    """Finviz: the quote page's "Last Close" header, which is the live print.
+
+    Despite the label this is the most recent print, extended hours included;
+    the page renders its own timestamp beside it ("Nov 12 • 8:01 AM ET"), which
+    is the only print time Finviz publishes and the reason its readings can be
+    ordered against another provider's at all. Its change is measured against
+    the snapshot's ``Prev Close``, so that is the reference it is published with.
+    """
+    header = payload.get("last_close") or {}
+    snapshot = payload.get("snapshot_numeric") or {}
+    return _pack(
+        header.get("price"), header.get("date"), None, "last_close.price",
+        reference_close=snapshot.get("Prev Close"),
+        change_percent=header.get("change_percent"),
+    )
+
+
+def _yahoo(payload: dict[str, Any]) -> dict[str, Any]:
+    """Yahoo: the freshest print it publishes, session blocks or ``fullday``.
+
+    ``regularMarketPrice`` freezes the moment the regular session ends, so Yahoo
+    publishes the session-inclusive value beside it as ``fulldayPrice``. Which of
+    the two is current depends on the time of day, so the later one wins; during
+    the regular session they are the same number anyway. ``yh_access`` also
+    shapes per-session blocks (``pre_market``/``regular``/``post_market``) with
+    their own print times, and those are preferred when present because they
+    name the session instead of leaving it to the clock.
+    """
+    best: dict[str, Any] | None = None
+    for key, name in (
+        ("pre_market", PRE_MARKET),
+        ("post_market", POST_MARKET),
+        ("regular", REGULAR),
+    ):
+        block = payload.get(key) or {}
+        candidate = _pack(
+            block.get("price"),
+            block.get("as_of_utc") or block.get("price_timestamp"),
+            name,
+            f"{key}.price",
+            reference_close=block.get("reference_close"),
+            change_percent=block.get("change_vs_previous_close_pct")
+            if block.get("change_vs_previous_close_pct") is not None
+            else block.get("change_pct"),
+        )
+        if candidate["price"] is None:
+            continue
+        if best is None or _is_newer(candidate["timestamp"], best["timestamp"]):
+            best = candidate
+    if best is not None:
+        return best
+    # No session blocks: ``fulldayPrice`` is Yahoo's own session-inclusive print
+    # and is measured against the regular session's price. Yahoo publishes no
+    # print time for it, so it is returned undated rather than stamped with
+    # ``regularMarketTime``, which belongs to the regular close and would claim
+    # the extended print happened at the regular session's last tick.
+    regular = _number(payload.get("price"))
+    fullday = _number(payload.get("fullday_price"))
+    if fullday is not None and regular is not None and fullday != regular:
+        return {
+            "price": fullday,
+            "timestamp": None,
+            "session": market_session(
+                parse_market_timestamp(payload.get("market_time"))
+            ),
+            "field": "fullday_price",
+            "reference_close": regular,
+            "change_percent": _number(payload.get("fullday_change_percent")),
+        }
+    return _pack(
+        payload.get("price"), payload.get("market_time"), None, "price",
+        reference_close=payload.get("previous_close"),
+        change_percent=payload.get("change_pct"),
+    )
+
+
+def _stockanalysis(payload: dict[str, Any]) -> dict[str, Any]:
+    """StockAnalysis: its extended-hours block when the regular quote is older.
+
+    The quote API keeps the regular session in ``price`` and publishes the
+    current extended print, with its own timestamp, in ``extended_hours``. That
+    block measures its change against the regular session's price, which is the
+    baseline it is returned with.
+    """
+    block = payload.get("extended_hours") or {}
+    if payload.get("has_extended_hours") and _number(block.get("price")) is not None:
+        labelled = str(block.get("session") or "").lower()
+        name = (
+            POST_MARKET if "post" in labelled
+            else PRE_MARKET if "pre" in labelled
+            else None
+        )
+        return _pack(
+            block.get("price"), block.get("price_timestamp"), name,
+            "extended_hours.price",
+            reference_close=block.get("previous_close"),
+            change_percent=block.get("change_percent"),
+        )
+    return _pack(
+        payload.get("price"), payload.get("price_timestamp"), None, "price",
+        reference_close=payload.get("previous_close"),
+        change_percent=payload.get("change_percent"),
+    )
+
+
+def _bloomberg(payload: dict[str, Any]) -> dict[str, Any]:
+    """Bloomberg: its quote price, whose ``print_time`` dates the same print."""
+    return _pack(
+        payload.get("price"), payload.get("print_time"), None, "price",
+        reference_close=payload.get("previous_close"),
+        change_percent=payload.get("change_percent"),
+    )
+
+
+def _plain(payload: dict[str, Any]) -> dict[str, Any]:
+    """A provider with no session-specific fields: its own price and time."""
+    return _pack(
+        payload.get("price"), payload.get("price_timestamp"), None, "price",
+        reference_close=payload.get("previous_close"),
+        change_percent=payload.get("change_percent"),
+    )
+
+
+def _is_newer(left: datetime | None, right: datetime | None) -> bool:
+    """Whether *left* is strictly later than *right*; an undated value never is.
+
+    A value with no print time cannot claim to be current, so it never displaces
+    a dated one. That asymmetry is deliberate: it is what stops an undated
+    reading from winning the freshness race by default.
+    """
+    if left is None:
+        return False
+    if right is None:
+        return True
+    return left > right
+
+
+__all__ = [
+    "OVERNIGHT",
+    "POST_MARKET",
+    "PRE_MARKET",
+    "REGULAR",
+    "live_print",
+    "market_session",
+]

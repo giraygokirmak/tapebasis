@@ -37,6 +37,14 @@ _PRICE_COLUMNS = (
     "currency",
     "update_time",
     "market_cap_basic",
+    # The session the row is in, and that session's own print. Without these a
+    # bulk lookup served ``close``, which stops moving the moment the regular
+    # feed's last trade is behind the market, and called it the price.
+    "current_session",
+    "premarket_close",
+    "premarket_change",
+    "postmarket_close",
+    "postmarket_change",
 )
 
 
@@ -246,3 +254,45 @@ async def earnings(symbol: str) -> dict[str, Any]:
 
 def limiter_state() -> dict[str, Any]:
     return native.limiter_state()
+
+
+async def live_session_quotes(
+    tickers: list[str], *, timeout: float = 20.0
+) -> dict[str, dict[str, Any]]:
+    """Live prints from TradingView's quote socket, by symbol.
+
+    This is the feed the public web chart streams from. Unlike the scanner it
+    resolves the overnight venues (``BOATS:AAPL`` and peers), and it states the
+    session each print belongs to, which the scanner only does per row and only
+    for the session it happens to be in.
+
+    Args:
+        tickers: TradingView symbols. The scanner's spelling and the overnight
+            venue's both resolve here.
+        timeout: Overall socket timeout in seconds.
+
+    Returns:
+        Each resolved ticker mapped to its value dict. Symbols the upstream
+        refused are absent rather than fabricated.
+
+    Raises:
+        NoDataError: When the socket resolved none of the tickers.
+        ProviderError: On a transport failure or an IP-scoped throttle.
+    """
+    from .providers.tradingview import quote_socket
+
+    try:
+        rows = await quote_socket.quotes(tickers, timeout=timeout)
+    except RateLimited as exc:
+        raise ProviderError(
+            PROVIDER,
+            "TradingView is rate limiting the quote socket; retry later",
+            code="UPSTREAM_RATE_LIMIT",
+        ) from exc
+    except quote_socket.QuoteSocketError as exc:
+        raise ProviderError(
+            PROVIDER, f"quote socket: {exc}", code="PROVIDER_ERROR"
+        ) from exc
+    if not rows:
+        raise NoDataError(PROVIDER, f"quote socket resolved none of {tickers}")
+    return rows

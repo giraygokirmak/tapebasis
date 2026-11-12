@@ -54,6 +54,7 @@ src/tapebasis/
 ├── providers_state.py    DataProvider / Verification enums, error types, envelope()
 ├── reconcile.py          concurrent fan-out, field comparison, freshness arbitration, notice text
 ├── freshness.py          market-print timestamps + freshest-print selection
+├── sessions.py           which session a print belongs to, and which print is the live one
 ├── ratelimit.py          per-provider pacing, shared cooldown, TTL cache
 ├── http_pool.py          one pooled HTTP client and resolver warm-up per upstream
 ├── singleflight.py       merge identical concurrent work (not a cache)
@@ -89,6 +90,7 @@ access module and its own upstream:
 | Leg | Access module | Upstream |
 | --- | --- | --- |
 | TradingView | `tv_access.py` → `providers/tradingview/native.py` | `scanner.tradingview.com` (quotes, screener), `data.tradingview.com` (chart websocket for OHLCV) |
+| TradingView (overnight) | `tv_access.py` → `providers/tradingview/quote_socket.py` | `data.tradingview.com` quote websocket (live prints, session label, overnight venues) |
 | Finviz | `fv_access.py` | `finviz.com` HTML pages and `/api/*` JSON islands |
 | Yahoo Finance | `yh_access.py` | `query1.finance.yahoo.com/v8/finance/chart` |
 | StockAnalysis | `sa_access.py` | `stockanalysis.com/api/quotes/s/<ticker>` |
@@ -210,6 +212,22 @@ ordering by fetch time would select whichever provider answered last, which says
 price is current. Parsing is deliberately forgiving and returns `None` rather than raising, because a
 provider changing its date rendering must degrade to "no freshness arbitration", never to a crash
 or a wrong ordering.
+
+### `sessions.py` decides *which print*
+
+Freshness orders the readings a provider sent. It cannot tell that the number a provider sent first
+is not the one the market is trading on. `sessions.py` answers that: `market_session()` classifies an
+instant into the US equity trading day (04:00 pre-market open, 09:30 regular open, 16:00 close, 20:00
+end of after-hours, with 20:00-04:00 as the overnight window), and `live_print()` returns the number
+each provider would call current, with the session and the field it was read from.
+
+Each provider publishes the live print under a different name while the obvious field holds the
+regular session's value, so the resolution is per provider rather than one rule over a shared field
+name. TradingView states its session in `current_session` and its extended print in
+`premarket_close`/`postmarket_close`; Yahoo publishes `fulldayPrice` beside a frozen
+`regularMarketPrice`; StockAnalysis puts the current extended print in `extended_hours`. The module is
+pure, makes no request, and returns a provider's value unchanged when that provider names no session,
+so a feed is never credited with a print it did not send.
 
 ### `ratelimit.py` is one gate per upstream
 

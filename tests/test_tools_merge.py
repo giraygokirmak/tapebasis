@@ -636,7 +636,12 @@ async def test_quote_counts_stockanalysis_when_it_answers(fake_providers):
     ]
     assert result["errors"] == []
     price_row = next(c for c in result["comparisons"] if c["field"] == "price")
-    assert price_row["values"]["SA"] == pytest.approx(331.9)
+    # StockAnalysis says ``session: post`` and puts the post-market print in
+    # ``extended_hours``. That is the number it calls the price right now, so it
+    # is what the comparison judges; the regular close it also keeps is a
+    # different session's observation and comparing it would pit a stale print
+    # against live ones.
+    assert price_row["values"]["SA"] == pytest.approx(329.8)
 
 
 @pytest.mark.asyncio
@@ -646,7 +651,12 @@ async def test_stockanalysis_disagreement_is_reported_like_any_other(fake_provid
     result = await tools_market.stock_quote("AAPL")
     price_row = next(c for c in result["comparisons"] if c["field"] == "price")
     assert price_row["match"] is False
-    assert "Providers disagree on: price" in result["warnings"]
+    # The warning names every field that disagreed, so asserting the exact string
+    # would break on an unrelated field joining the list.
+    assert any(
+        w.startswith("Providers disagree on:") and "price" in w
+        for w in result["warnings"]
+    )
 
 
 @pytest.mark.asyncio
@@ -704,7 +714,77 @@ async def test_prices_ask_stockanalysis_and_keep_its_row(fake_providers, monkeyp
     result = await tools_market.stock_prices("AAPL")
     row = result["data"][0]
     assert row["providers_answered"] == ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA"]
-    assert row["comparisons"]["price"]["values"]["SA"] == pytest.approx(331.9)
+    # StockAnalysis names its own session (``post``) and carries that session's
+    # print in ``extended_hours``. The comparison has to judge the number the
+    # provider calls the price right now, which is the post-market print, not
+    # the regular close it also keeps. Serving the regular close here made this
+    # provider look hours stale on every extended-hours request.
+    assert row["comparisons"]["price"]["values"]["SA"] == pytest.approx(329.8)
+
+
+@pytest.mark.asyncio
+async def test_prices_use_the_session_print_and_keep_the_row_coherent(
+    fake_providers, monkeypatch
+):
+    """A pre-market row states its session and measures against its own base.
+
+    Before this, a row could hold TradingView's regular-session ``close`` as its
+    price, label no session at all, and take ``previous_close`` from a provider
+    looking at a different day, so the row implied a day change that neither the
+    ``change_percent`` beside it nor any provider reported.
+    """
+    from tapebasis import fv_access, sa_access, tv_access, yh_access
+
+    async def tv_quotes(symbols):
+        return {
+            "AAPL": {
+                "ticker": "NASDAQ:AAPL",
+                "close": 331.9,
+                "change": -1.9,
+                "volume": 63160515,
+                "update_time": "2026-11-04T12:30:00+00:00",
+                # The scanner says which session it is in, and where that
+                # session's own print is.
+                "current_session": "pre_market",
+                "premarket_close": 335.0,
+                "premarket_change": 0.93,
+            }
+        }
+
+    async def fv_rows(symbols):
+        return []
+
+    async def yh_quote_call(symbol):
+        return {
+            "price": 331.9,
+            "change_pct": -1.9,
+            "previous_close": 338.32,
+            "market_time": "2026-11-03T21:00:01+00:00",
+            "shortName": "Apple Inc.",
+            "fullday_price": 335.0,
+            "fullday_change_percent": 0.93,
+        }
+
+    async def sa_quote_call(symbol):
+        return _stockanalysis_quote()
+
+    monkeypatch.setattr(tv_access, "quotes", tv_quotes)
+    monkeypatch.setattr(fv_access, "screener_rows", fv_rows)
+    monkeypatch.setattr(yh_access, "quote", yh_quote_call)
+    monkeypatch.setattr(sa_access, "quote", sa_quote_call)
+
+    row = (await tools_market.stock_prices("AAPL"))["data"][0]
+    assert row["session"] == "pre_market"
+    assert row["price"] == pytest.approx(335.0)
+    # The same session's own baseline, not another provider's older close.
+    assert row["previous_close"] == pytest.approx(331.9)
+    # The invariant that was broken: the row's own three numbers describe one
+    # session, so the day change they imply is the day change reported.
+    implied = (row["price"] - row["previous_close"]) / row["previous_close"] * 100
+    assert row["change_percent"] == pytest.approx(implied, abs=1e-3)
+    assert row["change_percent"] > 0.5
+    # Yahoo publishes the session-inclusive print beside its regular one.
+    assert row["comparisons"]["price"]["values"]["YAHOO"] == pytest.approx(335.0)
 
 
 @pytest.mark.asyncio

@@ -29,11 +29,12 @@ Finviz page would fail for reasons unrelated to the code.
 | File | Covers |
 | --- | --- |
 | `test_reconcile.py` | Fan-out, multi-provider comparison, tolerances, precedence, notice text |
-| `test_tools_merge.py` | End-to-end tool contract with faked providers (`ALL` vs single-source, `not_comparable`) |
+| `test_tools_merge.py` | End-to-end tool contract with faked providers (`ALL` vs single-source, `not_comparable`), plus the live print replacing the stale regular field and a row's price, change and previous close describing one session |
 | `test_upstream_contract.py` | Regression tests for every upstream behaviour found by live probing (see below) |
 | `test_shapers.py` | Pure payload shapers |
 | `test_symbols.py` | BRK-B ↔ BRK.B, the instrument registry (completeness, no colliding spellings), index aliasing, RUT/IWM separation, NDX row boundaries, `WTI=F` futures aliases, snapshot-list exclusion, per-provider `none` resolutions |
 | `test_freshness.py` | Print-time parsing, freshest-print selection, tie and `no_timestamp` handling |
+| `test_tools_merge.py` | also: the live print replaces the stale regular field, and a row's price, change and previous close describe one session |
 | `test_health.py` | Probe verdicts, fingerprints, drift detection, `rate_limits` block |
 | `test_sentiment.py` | Local scoring: direction, neutrality, determinism, aggregation |
 | `test_sentiment_tool.py` | Token-free path, backend switching, no fabricated scores |
@@ -42,7 +43,7 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_finviz_breakdown.py` | The `income-breakdown` island (statement scale, bank row sets, `converted` axes, absent/ETF cases) and the classification-chip markup |
 | `test_indicators_calc.py` | The pure indicator calculators: window means and band values (rolling sums, monotonic deques), warmup `None` regions, Wilder smoothing, the bisect percentile rank and the EGX rank equivalence |
 | `test_yahoo_shaping.py` | Yahoo `meta` fields that were previously dropped: session open/high/low, volume, company name |
-| `test_extended_hours.py` | Pre/post session volumes from the scanner row, and the Yahoo-session fallback |
+| `test_extended_hours.py` | Pre/post session volumes from the scanner row, the Yahoo-session fallback, and the session the instrument reports it is in |
 | `test_server.py` | Tool registration, MCP surface |
 | `test_dockerfile.py` | The deployment contract: `tini` as PID 1, the entrypoint argv, `init: true` in compose |
 | `test_quality_gate.py` | The gate's own documentation checks, against a temporary repository |
@@ -78,6 +79,7 @@ src/tapebasis/
 ├── providers_state.py    DataProvider enum, errors, response envelope
 ├── reconcile.py          concurrent fan-out, comparison, freshness arbitration, notice text
 ├── freshness.py          market-print timestamps + freshest-print selection
+├── sessions.py           session classification + which print is the live one
 ├── ratelimit.py          per-provider pacing, shared cooldown, TTL cache
 ├── merge_helpers.py      pure payload shapers
 ├── sentiment.py          token-free headline scoring
