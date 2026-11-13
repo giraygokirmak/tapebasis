@@ -109,6 +109,21 @@ def _api(url: str, headers: dict) -> dict:
     return document
 
 
+def parse_github_json_file(document: dict) -> dict:
+    """Parse a base64 Contents API file, accepting only its documented line wrapping."""
+    if document.get("encoding") != "base64" or not isinstance(document.get("content"), str):
+        raise SourceError("GitHub file response is not base64-encoded content")
+    encoded = "".join(document["content"].splitlines())
+    try:
+        decoded = base64.b64decode(encoded, validate=True)
+        document = json.loads(decoded)
+    except (ValueError, TypeError) as error:
+        raise SourceError(f"GitHub file content is invalid: {error}") from error
+    if not isinstance(document, dict):
+        raise SourceError("GitHub JSON file does not contain an object")
+    return document
+
+
 def download(artifact: dict, token: str, path: pathlib.Path) -> None:
     """Download and atomically save the exact expected artifact ZIP by size and digest."""
     url = artifact.get("archive_download_url", "")
@@ -160,7 +175,8 @@ def extract(archive_path: pathlib.Path, destination: pathlib.Path, version: str)
         for entry in entries:
             path = pathlib.PurePosixPath(entry.filename)
             mode = entry.external_attr >> 16
-            if path.is_absolute() or ".." in path.parts or "\\" in entry.filename or (mode and not stat.S_ISREG(mode)):
+            file_type = stat.S_IFMT(mode)
+            if path.is_absolute() or ".." in path.parts or "\\" in entry.filename or file_type not in {0, stat.S_IFREG}:
                 raise SourceError(f"source ZIP contains unsafe path {entry.filename!r}")
             target = destination.joinpath(*path.parts)
             with archive.open(entry) as source, target.open("xb") as output:
@@ -212,7 +228,7 @@ def main(argv: list[str]) -> int:
         if target != run["head_sha"]:
             raise SourceError("the immutable tag no longer points to the source commit")
         source_page = _api(f"{base}/contents/server.json?ref={run['head_sha']}", headers)
-        source_server = json.loads(base64.b64decode(source_page["content"], validate=True))
+        source_server = parse_github_json_file(source_page)
         if source_server != local_server:
             raise SourceError("source MCP metadata differs from this recovery checkout")
         download(artifact, args.token, args.zip)

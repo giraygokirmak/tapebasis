@@ -91,6 +91,11 @@ def test_release_checks_are_not_bypassed_by_manual_recovery():
     condition = jobs["build"]["if"]
     assert "github.event_name != 'workflow_dispatch'" in condition
     assert "inputs.recover_source_run == '' && inputs.recover_tag == ''" in condition
+    assert jobs["validate"]["if"] == condition
+    assert "needs" not in jobs["recover-source"]
+    assert "needs" not in jobs["validate"]
+    assert jobs["build"]["needs"] == "validate"
+    assert jobs["publish"]["needs"] == "build"
     for job in jobs.values():
         text = yaml.safe_dump(job)
         for forbidden in ("UV_PUBLISH_TOKEN", "NPM_TOKEN", "NODE_AUTH_TOKEN"):

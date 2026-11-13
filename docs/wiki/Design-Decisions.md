@@ -1287,10 +1287,14 @@ Python server; npm supplies only its launcher, not a separate implementation.
 
 **Decision:** a failed tag run is never retried. Recovery uses `workflow_dispatch` on `main` with
 `recover_source_run` and `recover_tag` inputs, gated by a separate `release-recovery` environment.
-The recovery job validates the source run's tag, commit, and artifact digest, downloads the exact
-tested artifacts, and verifies PyPI, npm, and GHCR content match those artifacts. It can only publish
-missing MCP Registry metadata; it cannot upload packages or modify container images. If any package
-registry differs or is missing, the job stops.
+The recovery job skips new main validation and artifacts. It requires the original tag run's passing
+validation and build, plus its started protected publish job. It validates the source run's tag,
+commit and artifact digest, downloads the exact tested artifacts, and verifies PyPI, npm, and GHCR
+content match those artifacts. It can only publish missing MCP Registry metadata; it cannot upload
+packages or modify container images. If any package registry differs or is missing, the job stops.
+The source bootstrap supplies the required npm bootstrap marker in the `release-recovery` environment.
+GitHub Contents API base64 wrapping and ordinary ZIP files without Unix file-type bits are supported;
+invalid encoding, path traversal, symlinks, missing members and checksum differences remain fatal.
 
 **Why:** retrying a failed tag run reuses the old tag's YAML and risks duplicate uploads or overwriting
 existing packages with different bytes. A main-only recovery path allows fixing workflow bugs without

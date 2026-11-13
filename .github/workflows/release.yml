@@ -42,6 +42,7 @@ env:
 jobs:
   validate:
     name: Validate
+    if: github.event_name != 'workflow_dispatch' || (inputs.recover_source_run == '' && inputs.recover_tag == '')
     uses: ./.github/workflows/test.yml
 
   build:

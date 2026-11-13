@@ -1,7 +1,4 @@
 """Isolated tests for optional GHCR completion in the normal tag job."""
-import hashlib
-import json
-import tarfile
 from pathlib import Path
 
 import yaml

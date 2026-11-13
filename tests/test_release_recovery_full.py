@@ -120,6 +120,80 @@ def test_source_requires_original_tag_build_and_started_approval():
             module.validate_source(run, jobs[:-1] + [publisher], artifact, "1.0.0", "c" * 40)
 
 
+def test_github_json_file_accepts_only_wrapped_base64_objects():
+    """The Contents API's newlines are valid, but other encodings and malformed JSON stop."""
+    module = load("release_artifact_source")
+    server = {"name": "io.github.giraygokirmak/tapebasis", "version": "1.0.0"}
+    encoded = base64.b64encode(json.dumps(server).encode()).decode()
+    wrapped = "\n".join(encoded[index:index + 60] for index in range(0, len(encoded), 60)) + "\n"
+    assert module.parse_github_json_file({"encoding": "base64", "content": wrapped}) == server
+    for document in (
+        {"encoding": "none", "content": encoded},
+        {"encoding": "base64", "content": "not valid base64!"},
+        {"encoding": "base64", "content": base64.b64encode(b"[]").decode()},
+    ):
+        with pytest.raises(module.SourceError):
+            module.parse_github_json_file(document)
+
+
+def test_source_main_accepts_wrapped_contents_base64_before_download(tmp_path, monkeypatch):
+    """A real-shaped Contents response cannot reject recovery before artifact extraction."""
+    module = load("release_artifact_source")
+    run, jobs, artifact = source_fixture()
+    server = module.load_metadata(ROOT)[1]
+    encoded = base64.b64encode(json.dumps(server).encode()).decode()
+    wrapped = "\n".join(encoded[index:index + 60] for index in range(0, len(encoded), 60)) + "\n"
+    tag_object = "b" * 40
+    extracted = tmp_path / "source-artifacts.zip"
+    bodies = {
+        "SHA256SUMS": b"checksums",
+        "tapebasis-image.tar": b"image",
+        "tapebasis-1.0.0-py3-none-any.whl": b"wheel",
+        "tapebasis-1.0.0.tar.gz": b"sdist",
+        "tapebasis-1.0.0.tgz": b"npm",
+    }
+    with zipfile.ZipFile(extracted, "w") as archive:
+        for name, body in bodies.items():
+            archive.writestr(name, body)
+    artifact.update({
+        "size_in_bytes": extracted.stat().st_size,
+        "digest": "sha256:" + hashlib.sha256(extracted.read_bytes()).hexdigest(),
+        "archive_download_url": "https://api.github.com/artifact",
+    })
+    responses = {
+        "/actions/runs/43435266134": run,
+        "/actions/runs/43435266134/jobs?per_page=100": {"total_count": len(jobs), "jobs": jobs},
+        "/actions/runs/43435266134/artifacts": {"total_count": 1, "artifacts": [artifact]},
+        "/git/ref/tags/v1.0.0": {"object": {"sha": tag_object, "type": "tag"}},
+        f"/git/tags/{tag_object}": {"object": {"sha": run["head_sha"]}},
+        f"/contents/server.json?ref={run['head_sha']}": {"encoding": "base64", "content": wrapped},
+    }
+    run = {**run, "repository": {"full_name": "giraygokirmak/tapebasis"}}
+    responses["/actions/runs/43435266134"] = run
+
+    class Opener:
+        def open(self, request, timeout):
+            """Return a matching fixture and reject unexpected network endpoints."""
+            if request.full_url == artifact["archive_download_url"]:
+                return Response(extracted.read_bytes())
+            path = request.full_url.split("/repos/giraygokirmak/tapebasis", 1)[1]
+            return Response(responses[path])
+
+    output = tmp_path / "github-output"
+    monkeypatch.setattr(module, "OPENER", Opener())
+    monkeypatch.setenv("GITHUB_REPOSITORY", "giraygokirmak/tapebasis")
+    monkeypatch.setenv("GITHUB_SHA", "c" * 40)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setenv("REQUIRED_TAG", "v1.0.0")
+    destination = tmp_path / "result.zip"
+    assert module.main(["--run-id", "43435266134", "--token", "test-token", "--zip", str(destination), "--dist", str(tmp_path / "dist"), "--server", str(tmp_path / "server.json")]) == 0
+    assert destination.read_bytes() == extracted.read_bytes()
+    assert (tmp_path / "dist/tapebasis-1.0.0.tgz").read_bytes() == b"npm"
+    assert json.loads((tmp_path / "server.json").read_text()) == server
+    assert "version=1.0.0" in output.read_text()
+    assert "artifact_digest=" + artifact["digest"] in output.read_text()
+
+
 def test_download_checks_size_digest_and_redirect_credential_scope(tmp_path, monkeypatch):
     """Damaged or partial ZIPs are removed and Authorization is stripped cross-host."""
     module = load("release_artifact_source")
@@ -150,6 +224,28 @@ def test_extract_rejects_traversal_symlink_and_incomplete_zip(tmp_path):
         pass
     with pytest.raises(module.SourceError, match="incomplete"):
         module.extract(empty, tmp_path / "empty-dist", "1.0.0")
+
+
+def test_extract_accepts_regular_and_unspecified_unix_file_types(tmp_path):
+    """Normal ZIP writers need not assign Unix regular-file mode bits."""
+    module = load("release_artifact_source")
+    path = tmp_path / "normal.zip"
+    files = {
+        "SHA256SUMS": b"checksums",
+        "tapebasis-image.tar": b"image",
+        "tapebasis-1.0.0-py3-none-any.whl": b"wheel",
+        "tapebasis-1.0.0.tar.gz": b"sdist",
+        "tapebasis-1.0.0.tgz": b"npm",
+    }
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, body in files.items():
+            info = zipfile.ZipInfo(name)
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16 if name == "SHA256SUMS" else 0o644 << 16
+            archive.writestr(info, body)
+    module.extract(path, tmp_path / "normal-dist", "1.0.0")
+    for name, body in files.items():
+        assert (tmp_path / "normal-dist" / name).read_bytes() == body
 
 
 def ghcr_workspace(tmp_path):

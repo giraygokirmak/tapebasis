@@ -15,16 +15,21 @@ and can attempt duplicate uploads. Instead, use the main-only `release-recovery`
 
 1. Create a GitHub environment named `release-recovery` with deployment restricted to `main` and
    required reviewer approval. This is separate from the normal `release` environment.
-2. Ensure `TAPEBASIS_NPM_BOOTSTRAPPED=1` is set as a repository variable (not a secret) if the npm
-   package was manually bootstrapped before the first tag.
+2. Set `TAPEBASIS_NPM_BOOTSTRAPPED=1` as a **release-recovery environment variable**, not a secret,
+   if the npm package was manually bootstrapped before the first tag. The `release` environment's
+   variable is not automatically available to this separate environment. Keep it unset before the
+   bootstrap has actually completed.
 
 ### Recovery procedure
 
 1. Identify the failed source run ID and the immutable tag (e.g., `v1.0.0`).
 2. Dispatch `release.yml` on `main` with `recover_source_run` and `recover_tag` inputs.
-3. The workflow validates the source run's tag, commit, and artifact digest, then downloads the exact
-   tested artifacts. It verifies PyPI, npm, and GHCR content match those artifacts without uploading
-   anything.
+3. Recovery skips ordinary main validation and artifact rebuilding. Instead, it requires the original
+   tag run's validation and build jobs to have passed and its protected publish job to have started.
+   It validates that source run's tag, commit, source metadata and artifact digest, then downloads the
+   exact tested artifacts. GitHub Contents API base64 line wrapping and normal ZIP files without Unix
+   file-type bits are accepted, but checksums, safe paths and expected members remain mandatory. It
+   verifies PyPI, npm, and GHCR content match those artifacts without uploading anything.
 4. Only if all package registries match does it proceed to publish missing MCP Registry metadata.
    If any package is missing or differs, the job stops and cannot modify packages or images.
 5. After completion, verify each registry independently: PyPI files, npm integrity, GHCR tags, and
