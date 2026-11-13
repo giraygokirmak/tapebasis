@@ -141,7 +141,8 @@ reason, and the field is named in `warnings`. Widening the tolerance would repor
 leaving it tight would report a false conflict. Neither is true.
 
 Use `require_all_times=True` when a provider does not expose observation times at all: agreement
-cannot be *proven*, so `match` stays `null`.
+cannot be *proven* for the pair containing it, so that pair's `match` stays `null`. Other dated pairs
+in the same comparison can still reach a verdict; one undated provider must not veto all of them.
 
 Use `not_comparable_reason` when the field has no shared definition at all, so no timestamp check can
 help. FX is the case in the code: spot FX has no single official previous close, each provider picks

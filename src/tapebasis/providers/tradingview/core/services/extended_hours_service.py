@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 import urllib.request
 import urllib.error
 from typing import Optional
@@ -58,9 +59,10 @@ def _change_pct(price: Optional[float], reference: Optional[float]) -> Optional[
 
 
 def _fmt_time(ts: Optional[int]) -> Optional[str]:
+    """Return a candle's own epoch as parseable, UTC-aware second-precision ISO."""
     if ts is None:
         return None
-    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(ts))
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _session_windows(meta: dict) -> list[tuple[str, dict[str, int]]]:

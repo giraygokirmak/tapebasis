@@ -1053,11 +1053,20 @@ scanner has no BOATS row, while its quote socket supplies the venue's price, pri
 exchange and feed mode. Live NVDA observations on 2026-11-13 were 166.52 at 08:59:48 UTC through Yahoo
 and 166.58 at 08:59:59 UTC through TradingView.
 
+**The price and normalized day change use Yahoo's explicit reference.** TradingView's BOATS `ch` and
+`chp` describe its venue baseline and can point in the opposite direction from Yahoo's
+`overnightMarketChangePercent` even when the dollar prices match. Preserve them as `reported_change`
+and `reported_change_percent`. On the same evidenced overnight occurrence, calculate every block's
+`change` and `change_percent` from Yahoo's `reference_close`, and name that fact in `change_reference`.
+Never substitute regular previous close, `fulldayPrice` or post-market price. Without a valid Yahoo
+reference and matching occurrence, the normalized change and reference remain null.
+
 **Comparison has a calendar boundary.** A common `overnight` label is insufficient because the session
 crosses midnight. Each print's 20:00 ET occurrence is calculated, retained as
-`session_window_start_utc`, and compared only with the other provider's same occurrence. Usable print
-times and the ordinary price-time skew limit are still required. Agreement between two readers of BOATS
-is not represented as independent market-venue evidence. Print timestamps retain seconds in `as_of_utc`.
+`session_window_start_utc`, and compared only with the other provider's same occurrence. Two unknown
+window starts are not a matching occurrence. Usable print times and the ordinary price-time skew limit
+are still required. Agreement between two readers of BOATS is not represented as independent
+market-venue evidence. Print timestamps retain seconds in `as_of_utc`.
 
 **Closed-venue evidence stays dated rather than becoming live.** At and after 04:00 ET, a last BOATS
 print is preserved with `is_current: false`; `overnight_is_current` is false and that print cannot
@@ -1165,8 +1174,18 @@ verdict was reached.
 
 `stock_extended_hours` selects the active or latest evidenced pre/post window rather than preferring
 whichever session happens to contain a price. Different named windows and undated reads in a shared
-window are not judged. StockAnalysis's own pre/post label remains useful evidence even without a
-timestamp, but an undated pair cannot agree.
+window are not judged. An undated print affects only its own pairs. In particular, TradingView's
+regular `update_time` cannot date a separate extended print, so that print stays undated while its
+Yahoo and StockAnalysis `as_of_utc`/`price_timestamp` values can establish their own agreement.
+StockAnalysis's own pre/post label remains useful evidence even without a timestamp, but an undated
+pair cannot agree. Yahoo candle times are seconds-preserving, UTC-aware ISO so this evidence reaches
+the existing timestamp parser rather than being discarded by text formatting.
+
+Each `after_hours_readings` entry carries its own print, session, timestamp, normalized `as_of_utc`,
+baseline and derived change. It uses the provider's evidenced regular close or extended-change
+arithmetic. Finviz can supply its snapshot baseline without proving a session or print time, and those
+facts remain null next to the reference instead of suppressing it. The overnight rule of sharing
+Yahoo's reference is deliberately not applied to pre/post sessions.
 
 **Why:** silently dropping invalid pairs made an all-empty agreement aggregate indistinguishable from
 success. A generic comparison of the first populated extended field could turn yesterday's post print
@@ -1200,6 +1219,23 @@ claim `ALL` while listing failed legs or claiming agreement without a judged pai
 last-reported earnings timestamp is likewise not evidence of an upcoming event, so only TradingView
 or Yahoo can populate `next_earnings_date`. `finviz_filters` remains an explicit filter over the
 TradingView-selected screener universe rather than an ignored argument or an independent ranking.
+
+---
+
+## 58. Overnight belongs in `stock_extended_hours` until a separate quote expansion
+
+**Decision:** the two metadata fixes above do not add an overnight capability to `stock_quote`.
+Carrying overnight there requires new TradingView and Yahoo upstream requests, explicit failure and
+coverage semantics, and its own contract tests. It remains separate follow-up work, not an implied
+part of the timestamp or reference-baseline repair.
+
+**Why:** silently widening `stock_quote` during this repair would increase request cost and failure
+surface for every quote, including instruments with no Blue Ocean session. The current contract
+therefore remains explicit: use `stock_extended_hours` for the BOATS price, its other reading,
+normalized change and closed-session status.
+
+**Consequence:** `is_current: false` after 04:00 ET remains an ordinary closed-overnight observation,
+not an outage. The premarket reading and its comparison stay available independently.
 
 ---
 

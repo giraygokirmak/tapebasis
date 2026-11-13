@@ -251,14 +251,30 @@ historical report cannot be reported as a future event.
 
 Pre-/post-market price from every independent source that publishes one: TradingView's
 `premarket_*`/`postmarket_*` scanner columns, Finviz's after-hours print, Yahoo's 1-minute
-extended-hours candles, and StockAnalysis's extended-hours block. The after-hours reading is compared
-at 0.5 %; each provider's raw reading stays in `after_hours_readings`. Only like pre-market or
-post-market windows can be judged. Differing named sessions are `not_comparable`, and agreement on a
-shared window requires a usable print timestamp from every provider in the pair. StockAnalysis's
-pre/post label is retained even if it supplies no timestamp, but an undated pair stays unjudged.
+extended-hours candles, and StockAnalysis's extended-hours block. The after-hours price is compared
+at 0.5 %. Each provider's `after_hours_readings` entry carries `price`, `session`, `timestamp`, a
+normalized UTC `as_of_utc` when parseable, `reference_close`, `change`, `change_percent` and
+`change_reference`. A missing baseline or print time
+stays null. Only like pre-market or post-market windows can be judged. Differing named sessions are
+`not_comparable`, and agreement on a shared window requires a usable `as_of_utc` or `price_timestamp`
+from both providers in that pair. An undated TradingView print therefore cannot veto a dated
+Yahoo/StockAnalysis pair; it remains visible with `match: null` only in its own pairs. StockAnalysis's
+pre/post label is retained even if it supplies no timestamp. Yahoo's `as_of_utc` is seconds-preserving,
+timezone-aware ISO from the candle, not a string the freshness parser has to guess.
+
 Each session block carries the session's `volume` when the feed reports one, so a pre-market print
-can be told apart from a single lot. StockAnalysis's block is also served whole as
+can be told apart from a single lot. Yahoo's pre-market reference comes from `reference_close`, its
+post-market print from the regular block alongside it. StockAnalysis reads its extended
+`previous_close`, Finviz its snapshot's `Prev Close` before falling back to its own extended
+change arithmetic, and TradingView recovers the close from its extended print and reported change.
+A missing Finviz session or print clock stays null without suppressing that available baseline;
+its pairs remain unjudged. These are provider-owned baselines, not an overnight Yahoo baseline
+borrowed for a pre/post print. StockAnalysis's block is also served whole as
 `stockanalysis_extended_hours`, next to `stockanalysis_regular_close`.
+
+`stock_quote` does not itself return the independent BOATS `overnight` block. Request
+`stock_extended_hours` when that session is needed; adding those separate upstream calls to every
+quote remains a distinct contract expansion, not part of this metadata repair.
 
 `data.session` names the window the instrument is in right now (`pre_market`, `regular`,
 `post_market`, `overnight`), so a caller asking "pre or post" does not have to infer it from which block
@@ -275,7 +291,14 @@ header, so its volume is null rather than inferred from regular trading.
 
 `overnight_source` names the provider whose newest eligible print is in `overnight`. Each provider block
 stays in `overnight_readings`, including `print_time`, seconds-preserving ISO `as_of_utc`, the 20:00 ET
-window start in `session_window_start_utc`, `is_current`, and venue identity when reported.
+window start in `session_window_start_utc`, `is_current`, and venue identity when reported. On prints
+sharing that evidenced occurrence, every block's `change` and `change_percent` are calculated from
+Yahoo's `reference_close`; `change_reference` states `YAHOO.reference_close`. TradingView's original
+BOATS `ch` and `chp` readings remain separate as `reported_change` and `reported_change_percent`, since
+they use a different venue baseline. If Yahoo is absent, the reference is invalid, or the occurrences
+cannot be shown to match, the normalized change and reference fields are null rather than borrowed from
+another close. The reported TradingView fields are still retained.
+
 `overnight_comparison` compares only prints from that same overnight occurrence with usable,
 sufficiently close timestamps. These are two readers of one BOATS venue, not independent market venues.
 `overnight_errors` reports a failed secondary

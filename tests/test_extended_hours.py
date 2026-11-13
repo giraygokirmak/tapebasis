@@ -46,10 +46,10 @@ def fake_hours(monkeypatch, tv_quote, fv_quote):
 
     async def fake_resolve(query, provider, **kwargs):
         return {
-            "TRADINGVIEW": _resolved(provider, "NASDAQ:AAPL"),
-            "FINVIZ": _resolved(provider, "AAPL"),
-            "YAHOO": _resolved(provider, "AAPL"),
-            "BLOOMBERG": _resolved(provider, "AAPL:US"),
+            "TRADINGVIEW": _resolved(provider, f"NASDAQ:{query.upper()}"),
+            "FINVIZ": _resolved(provider, query.upper()),
+            "YAHOO": _resolved(provider, query.upper()),
+            "BLOOMBERG": _resolved(provider, f"{query.upper()}:US"),
         }[provider]
 
     monkeypatch.setattr(tv_access, "quote", tv_quote_call)
@@ -59,6 +59,147 @@ def fake_hours(monkeypatch, tv_quote, fv_quote):
     monkeypatch.setattr(tools_market, "resolve", fake_resolve)
     monkeypatch.setattr(tools_market, "_utc_now", lambda: state["now"] or datetime.now(timezone.utc))
     return state
+
+
+def _use_same_premarket_prints(monkeypatch):
+    """Fake an undated TradingView print beside dated Yahoo/SA premarket prints."""
+    from tapebasis import fv_access, sa_access, tv_access
+
+    async def no_overnight(tickers, **kwargs):
+        return {}
+
+    async def empty_finviz(symbol):
+        return {"after_hours": {}}
+
+    async def sa_quote_call(symbol):
+        return {
+            "symbol": "NVDA",
+            "price": 166.19,
+            "extended_hours": {
+                "session": "Pre-market",
+                "price": 169.9225,
+                "previous_close": 166.19,
+                "change_percent": (169.9225 / 166.19 - 1) * 100,
+                "price_timestamp": "2026-11-13T10:08:11.123+00:00",
+            },
+        }
+
+    monkeypatch.setattr(tv_access, "live_session_quotes", no_overnight)
+    monkeypatch.setattr(fv_access, "quote", empty_finviz)
+    monkeypatch.setattr(sa_access, "quote", sa_quote_call)
+
+
+@pytest.mark.asyncio
+async def test_yahoo_and_stockanalysis_premarket_timestamps_compare(
+    fake_hours, monkeypatch
+):
+    """A dated, tight Yahoo/SA premarket pair survives an undated TV print."""
+    _use_same_premarket_prints(monkeypatch)
+    fake_hours["tv"].update({
+        "current_session": "pre_market",
+        "premarket_close": 170.01,
+        "premarket_change": 2.30,
+        "update_time": "2026-11-12T21:00:00Z",
+    })
+    fake_hours["yh"] = {
+        "pre_market": {
+            "price": 169.9275,
+            "as_of_utc": "2026-11-13T10:08:00Z",
+            "reference_close": 166.19,
+        },
+        "regular": {"price": 166.19, "as_of_utc": "2026-11-12T21:00:00Z"},
+    }
+    result = await tools_market.stock_extended_hours("NVDA")
+    data = result["data"]
+    comparison = data["after_hours_comparison"]
+    pair = next(
+        row for row in comparison["pairs"]
+        if row["between"] == ["YAHOO", "SA"]
+    )
+
+    assert comparison["values"]["TRADINGVIEW"] == pytest.approx(170.01)
+    assert pair["match"] is True
+    assert "not_comparable" not in pair
+    assert comparison["match"] is True
+    assert comparison["diff_pct"] == pytest.approx(0.0029)
+    assert "not_comparable" not in comparison
+    assert data["session"] == tools_market.PRE_MARKET
+    assert result["verification"] == "MULTI_SOURCE"
+    assert data["after_hours_readings"]["YAHOO"]["as_of_utc"] == (
+        "2026-11-13T10:08:00Z"
+    )
+    assert data["after_hours_readings"]["SA"]["as_of_utc"] == (
+        "2026-11-13T10:08:11.123000Z"
+    )
+    assert data["after_hours_readings"]["TRADINGVIEW"]["as_of_utc"] is None
+    assert all(
+        reading["as_of_utc"] is not None
+        for provider, reading in data["after_hours_readings"].items()
+        if provider in ("YAHOO", "SA")
+    )
+
+    undated_pairs = [
+        row for row in comparison["pairs"]
+        if "TRADINGVIEW" in row["between"]
+    ]
+    assert all(row["match"] is None and "undated" in row["not_comparable"]
+               for row in undated_pairs)
+
+
+@pytest.mark.asyncio
+async def test_after_hours_reading_schema_and_finviz_reference(
+    fake_hours, fv_quote
+):
+    """Every reading has one schema; Finviz prefers its explicit prior close."""
+    fv_quote["after_hours"]["change_percent"] = -0.63
+    data = (await tools_market.stock_extended_hours("AAPL"))["data"]
+
+    assert set(data["after_hours_readings"]) == {"FINVIZ"}
+    for reading in data["after_hours_readings"].values():
+        assert set(reading) == {
+            "price", "session", "timestamp", "as_of_utc", "reference_close",
+            "change", "change_percent", "change_reference",
+        }
+    finviz = data["after_hours_readings"]["FINVIZ"]
+    assert finviz["session"] is None
+    assert finviz["timestamp"] is None
+    assert finviz["as_of_utc"] is None
+    assert finviz["reference_close"] == pytest.approx(338.32)
+    assert finviz["reference_close"] != pytest.approx(329.8 / (1 - 0.63 / 100))
+    assert finviz["change"] == pytest.approx(329.8 - 338.32)
+    assert finviz["change_percent"] == pytest.approx(
+        (329.8 - 338.32) / 338.32 * 100
+    )
+    assert finviz["change_reference"] == "FINVIZ.snapshot_numeric.Prev Close"
+
+
+@pytest.mark.asyncio
+async def test_extended_hour_changes_use_the_last_regular_close(
+    fake_hours, monkeypatch
+):
+    """These matching premarket prints share the last regular close as baseline."""
+    _use_same_premarket_prints(monkeypatch)
+    fake_hours["tv"].update({
+        "current_session": "pre_market",
+        "premarket_close": 169.92,
+        "premarket_change": (169.92 / 166.19 - 1) * 100,
+        "update_time": "2026-11-12T21:00:00Z",
+    })
+    fake_hours["yh"] = {
+        "pre_market": {
+            "price": 169.9275,
+            "as_of_utc": "2026-11-13T10:08:00Z",
+            "reference_close": 166.19,
+        },
+        "regular": {"price": 166.19, "as_of_utc": "2026-11-12T21:00:00Z"},
+    }
+    data = (await tools_market.stock_extended_hours("NVDA"))["data"]
+    for provider in ("TRADINGVIEW", "YAHOO", "SA"):
+        reading = data["after_hours_readings"][provider]
+        assert reading["reference_close"] == pytest.approx(166.19)
+        assert reading["change_percent"] == pytest.approx(
+            (reading["price"] - 166.19) / 166.19 * 100
+        )
 
 
 @pytest.mark.asyncio
@@ -148,12 +289,14 @@ async def test_only_like_sessions_are_compared(fake_hours, monkeypatch):
 
     assert comparison["values"]["TRADINGVIEW"] == pytest.approx(332.47)
     assert comparison["values"]["YAHOO"] == pytest.approx(332.5)
-    assert data["after_hours_readings"]["FINVIZ"] == pytest.approx(329.8)
+    assert data["after_hours_readings"]["FINVIZ"]["price"] == pytest.approx(329.8)
     tv_yahoo = next(
         pair for pair in comparison["pairs"]
         if pair["between"] == ["TRADINGVIEW", "YAHOO"]
     )
-    assert tv_yahoo["match"] is True
+    assert tv_yahoo["match"] is None
+    assert "undated" in tv_yahoo["not_comparable"]
+    assert "'2026-11-12' and '2026-11-04'" not in str(tv_yahoo)
     tv_finviz = next(
         pair for pair in comparison["pairs"]
         if pair["between"] == ["TRADINGVIEW", "FINVIZ"]
@@ -222,7 +365,7 @@ async def test_undated_extended_print_is_not_comparable(fake_hours, monkeypatch)
     data = (await tools_market.stock_extended_hours("AAPL"))["data"]
     comparison = data["after_hours_comparison"]
 
-    assert data["after_hours_readings"]["YAHOO"] == pytest.approx(350.0)
+    assert data["after_hours_readings"]["YAHOO"]["price"] == pytest.approx(350.0)
     assert comparison["match"] is None
     assert comparison["not_comparable"] is True
     for pair in comparison["pairs"]:
@@ -269,8 +412,8 @@ async def test_stockanalysis_keeps_its_named_session_when_undated(
     )
 
     assert pair["match"] is None
-    assert "post_market" in pair["not_comparable"]
-    assert "no dated print" in pair["not_comparable"]
+    assert "undated" in pair["not_comparable"]
+    assert "as_of_utc/price_timestamp" in pair["not_comparable"]
 
 
 async def _async_value(value):
@@ -294,7 +437,8 @@ async def test_overnight_keeps_each_provider_and_compares_like_prints(
         return {"BOATS:AAPL": {
             "lp": 332.0,
             "lp_time": stamp,
-            "chp": 0.04,
+            "ch": 8.28,
+            "chp": 2.56,
             "current_session": "out_of_session",
             "volume": 1200,
             "exchange": "BOATS",
@@ -307,6 +451,7 @@ async def test_overnight_keeps_each_provider_and_compares_like_prints(
             "price": 332.05,
             "change": 0.15,
             "change_percent": 0.045,
+            "reference_close": 331.9,
             "print_time": stamp,
             "exchange": "Blue Ocean ATS",
             "feed_mode": "streaming",
@@ -331,6 +476,138 @@ async def test_overnight_keeps_each_provider_and_compares_like_prints(
         tools_market.TRADINGVIEW, tools_market.YAHOO
     }
     assert data["overnight"]["session_window_start_utc"] == "2026-11-04T01:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_tradingview_overnight_change_uses_yahoo_reference(
+    fake_hours, monkeypatch
+):
+    """NVDA's BOATS venue percent cannot be confused with a Yahoo-baseline change."""
+    from tapebasis import tv_access, yh_access
+
+    stamp = 1794560399
+    async def tv_overnight(tickers, **kwargs):
+        return {"BOATS:NVDA": {
+            "lp": 166.58, "lp_time": stamp,
+            "ch": 4.65, "chp": 2.87,
+            "current_session": "out_of_session",
+        }}
+
+    async def yahoo_overnight(symbol):
+        return {
+            "session": "overnight", "price": 166.52,
+            "change": 0.33000183,
+            "change_percent": 0.198569,
+            "reference_close": 166.19,
+            "print_time": 1794560388,
+        }
+
+    monkeypatch.setattr(tv_access, "live_session_quotes", tv_overnight)
+    monkeypatch.setattr(yh_access, "overnight", yahoo_overnight)
+    data = (await tools_market.stock_extended_hours("NVDA"))["data"]
+    tv = data["overnight_readings"][tools_market.TRADINGVIEW]
+    yahoo = data["overnight_readings"][tools_market.YAHOO]
+
+    assert tv["price"] == pytest.approx(166.58)
+    assert tv["reported_change_percent"] == pytest.approx(2.87)
+    assert tv["reported_change"] == pytest.approx(4.65)
+    assert tv["reference_close"] == pytest.approx(166.19)
+    assert tv["change"] == pytest.approx(0.39)
+    assert tv["change_percent"] == pytest.approx(0.2346711595)
+    assert tv["change_reference"] == "YAHOO.reference_close"
+    assert data["overnight"]["change_percent"] == pytest.approx(0.2346711595)
+    assert yahoo["change_percent"] == pytest.approx(
+        (yahoo["price"] - yahoo["reference_close"]) / yahoo["reference_close"] * 100
+    )
+
+
+@pytest.mark.asyncio
+async def test_overnight_common_reference_handles_a_negative_change(
+    fake_hours, monkeypatch
+):
+    """AVGO's matching prices keep their sign changes tied to Yahoo's baseline."""
+    from tapebasis import tv_access, yh_access
+
+    stamp = 1794560399
+    async def tv_overnight(tickers, **kwargs):
+        return {"BOATS:AVGO": {
+            "lp": 355.22, "lp_time": stamp, "chp": 0.31,
+            "current_session": "out_of_session",
+        }}
+
+    async def yahoo_overnight(symbol):
+        return {
+            "session": "overnight", "price": 355.22,
+            "change": -9.14573,
+            "change_percent": -2.51,
+            "reference_close": 355.22 + 9.14573,
+            "print_time": 1794560388,
+        }
+
+    monkeypatch.setattr(tv_access, "live_session_quotes", tv_overnight)
+    monkeypatch.setattr(yh_access, "overnight", yahoo_overnight)
+    data = (await tools_market.stock_extended_hours("AVGO"))["data"]
+    tv = data["overnight_readings"][tools_market.TRADINGVIEW]
+
+    assert tv["reported_change_percent"] == pytest.approx(0.31)
+    assert tv["change_percent"] == pytest.approx(
+        tv["change"] / tv["reference_close"] * 100
+    )
+    assert tv["change_percent"] < -2.51
+    assert tv["change"] == pytest.approx(-9.14573)
+    assert tv["change_reference"] == "YAHOO.reference_close"
+
+
+@pytest.mark.asyncio
+async def test_overnight_never_reuses_yesterdays_reference(
+    fake_hours, monkeypatch
+):
+    """A different overnight occurrence cannot borrow Yahoo's close."""
+    from tapebasis import tv_access, yh_access
+
+    async def tv_overnight(tickers, **kwargs):
+        return {"BOATS:NVDA": {
+            "lp": 166.58, "lp_time": 1794560399, "chp": 2.87,
+            "current_session": "out_of_session",
+        }}
+
+    async def yahoo_overnight(symbol):
+        return {
+            "session": "overnight", "price": 166.52,
+            "reference_close": 166.19, "print_time": 1794473999,
+        }
+
+    monkeypatch.setattr(tv_access, "live_session_quotes", tv_overnight)
+    monkeypatch.setattr(yh_access, "overnight", yahoo_overnight)
+    tv = (await tools_market.stock_extended_hours("NVDA"))["data"][
+        "overnight_readings"
+    ][tools_market.TRADINGVIEW]
+
+    assert tv["reference_close"] is None
+    assert tv["change_percent"] is None
+    assert tv["reported_change_percent"] == pytest.approx(2.87)
+
+
+@pytest.mark.asyncio
+async def test_overnight_change_is_unknown_without_yahoo_reference(
+    fake_hours, monkeypatch
+):
+    """A TradingView-only BOATS price is usable without inventing a day change."""
+    from tapebasis import tv_access
+
+    async def tv_overnight(tickers, **kwargs):
+        return {"BOATS:NVDA": {
+            "lp": 166.58, "lp_time": 1794560399, "chp": 2.87,
+            "current_session": "out_of_session",
+        }}
+
+    monkeypatch.setattr(tv_access, "live_session_quotes", tv_overnight)
+    tv = (await tools_market.stock_extended_hours("NVDA"))["data"]["overnight"]
+
+    assert tv["price"] == pytest.approx(166.58)
+    assert tv["change_percent"] is None
+    assert tv["reference_close"] is None
+    assert tv["reported_change_percent"] == pytest.approx(2.87)
 
 
 @pytest.mark.asyncio
@@ -434,7 +711,7 @@ async def test_historical_overnight_is_quoted_but_not_the_live_session(
     fake_hours["now"] = datetime(2026, 11, 13, 9, 31, tzinfo=timezone.utc)
 
     async def tv_overnight(tickers, **kwargs):
-        return {"BOATS:AAPL": {
+        return {tickers[0]: {
             "lp": 166.58, "lp_time": stamp,
             "current_session": "out_of_session", "update_mode": "streaming",
         }}
@@ -714,6 +991,40 @@ def test_yahoo_range_one_day_no_longer_carries_candles():
     assert url.startswith(f"{_CHART}/AAPL?")
     assert "range=2d" in url
     assert "includePrePost=true" in url
+
+
+def test_yahoo_candle_time_is_a_parseable_utc_timestamp():
+    """Yahoo preserves candle seconds in an ISO timestamp the freshness parser reads."""
+    from tapebasis.freshness import parse_market_timestamp
+    from tapebasis.providers.tradingview.core.services.extended_hours_service import (
+        _fmt_time,
+    )
+
+    epoch = int(datetime(2026, 11, 13, 10, 40, tzinfo=timezone.utc).timestamp())
+    rendered = _fmt_time(epoch)
+
+    assert rendered == "2026-11-13T10:40:00Z"
+    parsed = parse_market_timestamp(rendered)
+    assert parsed is not None
+    assert parsed.tzinfo == timezone.utc
+    assert parsed.timestamp() == epoch
+
+
+def test_yahoo_candle_shaping_carries_the_parseable_time():
+    """The public Yahoo premarket block exposes the candle's own ISO timestamp."""
+    from tapebasis.providers.tradingview.core.services.extended_hours_service import (
+        _shape_extended_hours,
+    )
+
+    epoch = 1794395000  # Inside the fixture's actual premarket window.
+    expected = datetime.fromtimestamp(epoch, timezone.utc).isoformat().replace(
+        "+00:00", "Z"
+    )
+    shaped = _shape_extended_hours(
+        "NVDA", _yahoo_chart(candles=[(epoch, 169.9275)])
+    )
+
+    assert shaped["pre_market"]["as_of_utc"] == expected
 
 
 def test_candles_are_classified_by_their_own_day():

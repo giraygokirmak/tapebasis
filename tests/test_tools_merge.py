@@ -983,7 +983,7 @@ async def test_extended_hours_counts_stockanalysis_when_it_answers(
 
     result = await tools_market.stock_extended_hours("AAPL")
     data = result["data"]
-    assert data["after_hours_readings"]["SA"] == pytest.approx(329.8)
+    assert data["after_hours_readings"]["SA"]["price"] == pytest.approx(329.8)
     assert data["stockanalysis_extended_hours"]["session"] == "Post-market"
     # The after-hours comparison is a coverage statement over the legs that
     # actually printed an extended session.

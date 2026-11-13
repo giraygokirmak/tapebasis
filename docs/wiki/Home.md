@@ -127,7 +127,9 @@ older, and StockAnalysis sits just before it because its coverage is the narrowe
 Every original reading stays in `comparisons.values`, and `freshness.decision` states which rule
 applied.
 
-**`ALL` does not mean "the values agree".** It means every provider asked answered. Agreement is a
+**`ALL` does not mean "the values agree".** It means every provider asked answered. `verification:
+MULTI_SOURCE` is likewise a coverage label for multiple answered providers, not evidence that any
+field agreed. Agreement is a
 separate axis, reported per field in `comparisons[].match` and summarised in `notice`/`warnings`. A
 leg that was asked and failed makes the response `PARTIAL`, and `providers_answered` names which
 providers actually answered.
@@ -176,7 +178,10 @@ not send.
 The overnight window (20:00-04:00 ET on Blue Ocean ATS) is read independently from TradingView's
 `BOATS:` quote socket and Yahoo's quote-header fields. The selected print and its source are explicit;
 comparison retains both observations but does not imply that two readers of BOATS are independent
-market venues. A closed overnight print remains visible without claiming to be live. Details:
+market venues. On the same overnight occurrence, normalized changes use Yahoo's `reference_close`
+while TradingView's original venue change remains separately labelled. A closed overnight print
+remains visible without claiming to be live. `stock_quote` does not carry an overnight block: use
+`stock_extended_hours` for it. Details:
 [Design Decisions](Design-Decisions#51-overnight-is-an-independently-read-session-not-a-chart-inference).
 
 ---

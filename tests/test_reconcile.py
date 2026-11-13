@@ -12,6 +12,7 @@ from tapebasis.providers_state import (
 from tapebasis.reconcile import (
     DEFAULT_ORDER,
     FINVIZ,
+    SA,
     TRADINGVIEW,
     YAHOO,
     Attempt,
@@ -201,6 +202,37 @@ def test_session_reason_takes_precedence_over_generic_missing_time():
     assert "different trading sessions" in reason
     assert "post_market" in reason and "None" in reason
     assert "at least one provider reported no print time" not in reason
+
+def test_undated_pair_does_not_block_the_other_dated_pair():
+    """One missing print time invalidates only the pairs that contain it."""
+    row = compare_values(
+        {TRADINGVIEW: 169.92, YAHOO: 169.9275, SA: 169.9225},
+        times={
+            TRADINGVIEW: None,
+            YAHOO: "2026-11-13T10:08:00Z",
+            SA: "2026-11-13T10:08:11.123+00:00",
+        },
+        sessions={
+            TRADINGVIEW: "pre_market",
+            YAHOO: "pre_market",
+            SA: "pre_market",
+        },
+        require_all_times=True,
+        max_skew_seconds=900,
+        session_boundary=True,
+    )
+
+    assert row["match"] is True
+    assert row["diff_pct"] == pytest.approx(0.0029)
+    assert len(row["pairs"]) == 3
+    for pair in row["pairs"]:
+        if TRADINGVIEW in pair["between"]:
+            assert pair["match"] is None
+            assert "undated" in pair["not_comparable"]
+        else:
+            assert pair["match"] is True
+            assert "not_comparable" not in pair
+
 
 # ── merge ───────────────────────────────────────────────────────────────────
 

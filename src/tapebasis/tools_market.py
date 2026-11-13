@@ -2457,7 +2457,11 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
             "session": "overnight",
             "raw_session": values.get("current_session"),
             "price": price,
-            "change_percent": values.get("chp"),
+            # BOATS uses a venue baseline here, not Yahoo's last regular
+            # close. Preserve it as the provider's raw reading, then derive
+            # the common-baseline change from Yahoo's explicit reference.
+            "reported_change": values.get("ch"),
+            "reported_change_percent": values.get("chp"),
             "volume": values.get("volume"),
             "print_time": values.get("lp_time"),
             "exchange": values.get("exchange"),
@@ -2555,6 +2559,38 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
             if session_start is not None
             else None
         )
+    yh_overnight_reference = (
+        overnight_readings.get(YAHOO) or {}
+    ).get("reference_close")
+    for block in overnight_readings.values():
+        yahoo = overnight_readings.get(YAHOO)
+        session_start = block.get("session_window_start_utc")
+        same_occurrence = (
+            yahoo is not None
+            and session_start is not None
+            and session_start == yahoo.get("session_window_start_utc")
+        )
+        if (
+            same_occurrence
+            and isinstance(yh_overnight_reference, (int, float))
+            and math.isfinite(yh_overnight_reference)
+            and yh_overnight_reference > 0
+            and isinstance(block.get("price"), (int, float))
+        ):
+            price = block["price"]
+            block["change"] = price - yh_overnight_reference
+            block["change_percent"] = (
+                block["change"] / yh_overnight_reference * 100
+            )
+            block["reference_close"] = yh_overnight_reference
+            block["change_reference"] = "YAHOO.reference_close"
+        else:
+            # Do not borrow another evening's or session's close merely
+            # because the selected primary print served it earlier.
+            block["change"] = None
+            block["change_percent"] = None
+            block["reference_close"] = None
+            block["change_reference"] = None
     overnight_comparison = compare_values(
         {provider: block["price"] for provider, block in overnight_readings.items()},
         tolerance_pct=0.5,
@@ -2590,8 +2626,20 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
     def _extended_reading(
         price: Any, session: str | None, timestamp: Any,
     ) -> dict[str, Any]:
-        """Return a price with the session and print time needed to judge it."""
-        return {"price": price, "session": session, "timestamp": timestamp}
+        """Return one session print with a normalized clock and its own baseline."""
+        instant = parse_market_timestamp(timestamp)
+        return {
+            "price": price,
+            "session": session,
+            "timestamp": timestamp,
+            "as_of_utc": instant.isoformat().replace("+00:00", "Z")
+            if instant is not None
+            else None,
+            "reference_close": None,
+            "change": None,
+            "change_percent": None,
+            "change_reference": None,
+        }
 
     tv_session = _SESSION_NAMES.get(str(tv.get("current_session") or "").lower())
     tv_block = PRE_MARKET if tv_session == PRE_MARKET else "post_market"
@@ -2601,7 +2649,10 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
         TRADINGVIEW: _extended_reading(
             tv.get("premarket_close" if tv_block == PRE_MARKET else "postmarket_close"),
             tv_session,
-            tv.get("regular_close_time"),
+            # ``update_time`` belongs to ``close``, not the extended print.
+            # The scanner publishes no time for that separate print, so keep
+            # it undated instead of dating it to yesterday's regular close.
+            None,
         ),
         # Finviz calls this block after-hours even during the pre-market. Its
         # own timestamp, not that label, says which session it printed in.
@@ -2644,11 +2695,73 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
             readings[YAHOO] = _extended_reading(
                 yahoo_block.get("price"), yahoo_session, yahoo_stamp,
             )
-    readings = {provider: reading for provider, reading in readings.items() if reading["price"] is not None}
+    readings = {
+        provider: reading
+        for provider, reading in readings.items()
+        if reading["price"] is not None
+    }
+    for provider, reading in readings.items():
+        session = reading["session"]
+        block = yh.get(session) if provider == YAHOO else None
+        reference = None
+        reference_source = None
+        # Finviz calls its extended block after-hours without proving which
+        # named window it belongs to. Keep that session undated, but do not
+        # discard an otherwise usable baseline just because the clock is missing.
+        if session not in (PRE_MARKET, POST_MARKET) and provider != FINVIZ:
+            continue
+        if provider == YAHOO and isinstance(block, dict):
+            reference = block.get("reference_close")
+            reference_source = "YAHOO.reference_close"
+            if reference is None and session == POST_MARKET:
+                reference = (yh.get(REGULAR) or {}).get("price")
+                reference_source = "YAHOO.regular.price"
+        elif provider == SA:
+            reference = sa_extended.get("previous_close") or sa.get("price")
+            reference_source = "SA.extended_hours.previous_close"
+        elif provider == FINVIZ:
+            reference = (fv_quote.get("snapshot_numeric") or {}).get("Prev Close")
+            reference_source = "FINVIZ.snapshot_numeric.Prev Close"
+            if reference is None:
+                reported = fv_after.get("change_percent")
+                if isinstance(reported, (int, float)) and math.isfinite(reported):
+                    denominator = 1 + reported / 100
+                    if denominator > 0:
+                        reference = reading["price"] / denominator
+                        reference_source = "FINVIZ.after_hours.change_percent"
+        elif provider == TRADINGVIEW:
+            reported = tv.get(
+                "premarket_change"
+                if session == PRE_MARKET
+                else "postmarket_change"
+            )
+            if isinstance(reported, (int, float)) and math.isfinite(reported):
+                denominator = 1 + reported / 100
+                if denominator > 0:
+                    reference = reading["price"] / denominator
+                    reference_source = (
+                        f"TRADINGVIEW.{session.replace('_market', 'market')}_change"
+                    )
+        if (
+            isinstance(reading["price"], (int, float))
+            and not isinstance(reading["price"], bool)
+            and math.isfinite(reading["price"])
+            and isinstance(reference, (int, float))
+            and not isinstance(reference, bool)
+            and math.isfinite(reference)
+            and reference > 0
+        ):
+            reading["reference_close"] = reference
+            reading["change"] = reading["price"] - reference
+            reading["change_percent"] = reading["change"] / reference * 100
+            reading["change_reference"] = reference_source
+
     comparison = compare_values(
         {provider: reading["price"] for provider, reading in readings.items()},
         tolerance_pct=0.5,
-        times={provider: reading["timestamp"] for provider, reading in readings.items()},
+        # Feed the normalized reading field: raw Yahoo candle clocks and
+        # StockAnalysis epoch milliseconds become one parseable UTC form.
+        times={provider: reading["as_of_utc"] for provider, reading in readings.items()},
         sessions={provider: reading["session"] for provider, reading in readings.items()},
         max_skew_seconds=SKEW_LIMIT_SECONDS,
         session_boundary=True,
@@ -2701,9 +2814,7 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
         "overnight_comparison": overnight_comparison,
         "overnight_errors": overnight_errors,
         "overnight_is_current": bool(current_overnight),
-        "after_hours_readings": {
-            provider: reading["price"] for provider, reading in readings.items()
-        },
+        "after_hours_readings": readings,
         "after_hours_comparison": comparison,
         "resolutions": resolved["resolutions"],
     }

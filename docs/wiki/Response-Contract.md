@@ -68,7 +68,10 @@ most important field in the response.
 
 ### `providers_answered`
 The provider labels that actually produced data for this response, in display order. Use this, not
-`data_provider` alone, to state coverage precisely ("all sources agreed" vs "only some answered").
+`data_provider` alone, to state coverage precisely ("every provider that was asked answered" vs "only
+some answered"). Neither `data_provider` nor `verification: MULTI_SOURCE` is agreement evidence:
+`MULTI_SOURCE` means several providers answered, including a partial response. Read the relevant
+`comparisons[].pairs` and `fields` descriptor for field-level agreement.
 
 ### `notice`
 One sentence, written to be relayed verbatim to a user. It always names the provider state. When
@@ -220,8 +223,11 @@ supplied a reading. `match: false` is a real disagreement.
 
 `stock_extended_hours` compares only the active or evidenced pre-market/post-market window, not a
 post print from yesterday against a pre print from today. Differing named windows and undated reads
-in a shared window are both `not_comparable`. StockAnalysis's own pre/post label is retained when its
-timestamp is absent, but agreement still requires a dated print from every side of the pair.
+in a shared window are both `not_comparable`. A missing `as_of_utc` or `price_timestamp` invalidates
+only the pairs containing that print, not an independent dated pair such as Yahoo/StockAnalysis.
+TradingView's regular `update_time` never dates its separate extended print. Yahoo candle timestamps
+are emitted as parseable, UTC-aware ISO. Every `after_hours_readings` entry retains its session,
+print time, baseline and derived change, including null values when those facts are unavailable.
 
 ### `freshness`
 Present when a comparison actually happened **and** at least one provider reported a usable print

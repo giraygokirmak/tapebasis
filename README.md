@@ -149,8 +149,17 @@ that was served rather than a nominated leg, so a delayed feed cannot name a ses
 does not belong to. `stock_extended_hours` independently reads Blue Ocean overnight prints from
 TradingView's `BOATS:` socket and Yahoo's quote header. `overnight_source` names the newest eligible
 print, while `overnight_readings`, `overnight_comparison` and `overnight_errors` retain provenance and
-failures. Last night's print survives after 04:00 ET with `is_current: false`, rather than being passed
-off as the live pre-market price.
+failures. On the same overnight occurrence, the normalized change uses Yahoo's `reference_close`;
+TradingView's venue-based change is retained separately as `reported_change` and
+`reported_change_percent`. An absent or cross-occurrence reference leaves the normalized change null.
+Last night's print survives after 04:00 ET with `is_current: false`, rather than being passed off as
+the live pre-market price. `stock_quote` does not carry overnight itself; use `stock_extended_hours`.
+
+Extended-hour freshness is pairwise: Yahoo's candle time is parseable UTC ISO, StockAnalysis supplies
+`price_timestamp`, and TradingView's regular `update_time` is never attached to its separate extended
+print. An undated print therefore leaves only its own pairs `not_comparable`; a dated Yahoo/StockAnalysis
+pair can still agree. `after_hours_readings` retains each provider's price, session, timestamp, baseline
+and derived change, so the number's definition is visible beside it.
 
 Implementation: [`reconcile.py`](src/tapebasis/reconcile.py) (fan-out + comparison),
 [`freshness.py`](src/tapebasis/freshness.py) (print-time parsing),

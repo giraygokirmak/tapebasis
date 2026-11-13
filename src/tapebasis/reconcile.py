@@ -458,8 +458,10 @@ def compare_values(
     changes are answers to different questions. The readings are kept and the
     pair is reported as not comparable with that reason. ``sessions`` names the
     trading session each reading came from. Different named sessions are never
-    a conflict between providers. Undated session reads cannot establish that
-    they describe the same observation.
+    a conflict between providers. A provider whose print is undated is excluded
+    from that session's pairwise comparisons, because it has no proof that it
+    describes the same observation. Other providers in that session can still
+    be compared against each other on their own print times.
     """
     from .freshness import parse_market_timestamp, session_date
 
@@ -574,8 +576,8 @@ def compare_values(
                 )
             reason = None
             if sessions is not None:
-                # Session labels are evidence of a different observation, or
-                # of a missing proof, not an extra guard after timestamp skew.
+                # Named sessions are checked before timestamp evidence so a
+                # missing clock cannot hide that a pair spans two windows.
                 left_session = sessions.get(left)
                 right_session = sessions.get(right)
                 if left_session is not None or right_session is not None:
@@ -585,12 +587,20 @@ def compare_values(
                             f"({left_session!r} and {right_session!r}), so the "
                             "readings are not the same observation"
                         )
-                    elif stamps.get(left) is None or stamps.get(right) is None:
-                        reason = (
-                            f"the shared {left_session!r} session has no dated print "
-                            "from every provider, so the readings cannot be shown "
-                            "to describe the same observation"
-                        )
+            if (
+                reason is None
+                and require_all_times
+                and (stamps.get(left) is None or stamps.get(right) is None)
+            ):
+                # Missing freshness is local to this pair. It cannot cancel a
+                # verdict established by two other dated providers, and the
+                # raw numeric match must not survive without a session proof.
+                missing = left if stamps.get(left) is None else right
+                reason = (
+                    f"{missing}'s print has no print time in "
+                    "as_of_utc/price_timestamp (it is undated), so this pair "
+                    "cannot be shown to describe the same observation"
+                )
             if reason is None:
                 reason = _skew_reason(left, right)
             if reason is not None:
