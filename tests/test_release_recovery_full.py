@@ -78,6 +78,30 @@ def test_npm_and_mcp_accept_only_verified_content(tmp_path, monkeypatch):
         module.check_mcp(server, "1.0.0")
 
 
+def test_registry_cli_accepts_workflow_status_output_after_every_subcommand(tmp_path, monkeypatch):
+    """The package and MCP status outputs use the same trailing option as the workflow."""
+    server = {"name": "io.github.giraygokirmak/tapebasis", "version": "1.0.0"}
+    (tmp_path / "recovered-server.json").write_text(json.dumps(server))
+    (tmp_path / "tapebasis-1.0.0.tgz").write_bytes(b"tarball")
+    (tmp_path / "tapebasis-1.0.0-py3-none-any.whl").write_bytes(b"wheel")
+    (tmp_path / "tapebasis-1.0.0.tar.gz").write_bytes(b"sdist")
+    module = load("release_registry")
+    monkeypatch.setattr(module, "check_pypi", lambda *_args: "verified")
+    monkeypatch.setattr(module, "check_npm", lambda *_args: "verified")
+    monkeypatch.setattr(module, "check_mcp", lambda *_args: "missing")
+    for registry in ("pypi", "npm", "mcp"):
+        output = tmp_path / f"{registry}-output"
+        arguments = [registry, "--version", "1.0.0"]
+        if registry == "mcp":
+            arguments += ["--server", str(tmp_path / "recovered-server.json")]
+        else:
+            arguments += ["--dist", str(tmp_path)]
+        arguments += ["--output", str(output)]
+        assert module.main(arguments) == 0
+        expected = "missing" if registry == "mcp" else "verified"
+        assert output.read_text() == f"{registry}_status={expected}\n"
+
+
 def test_registry_errors_and_malformed_metadata_stop(monkeypatch):
     """HTTP authorization failures are never interpreted as missing packages."""
     module = load("release_registry")

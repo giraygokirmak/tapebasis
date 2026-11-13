@@ -1,10 +1,12 @@
 # Releasing
 
-The `v1.0.0` wheel, sdist and npm launcher are published and match their registry digests. GHCR serves
-the `1.0.0` image for `linux/amd64` and `linux/arm64`. The normal tag run stopped during its GHCR
-verification step before publishing MCP Registry metadata. The MCP Registry entry remains incomplete
-until the protected recovery described below succeeds. The npm trusted publisher configuration has not
-yet completed a real OIDC publish, so package availability does not prove that configuration works.
+The `v1.0.0` wheel, sdist and npm launcher are published and match the original tag-run artifacts.
+GHCR serves `1.0.0`, `1.0`, `1` and `latest` for `linux/amd64` and `linux/arm64`, all with the tested
+root digest `sha256:4ff12fdcdc79e7c5cd065a3ffb685dcbe6daee518442b7751e0479e0da1e3167`.
+The protected recovery independently verified these package bytes and image tags before its read-only
+MCP lookup failed because of a command-line parser bug. The MCP Registry entry remains incomplete
+until the corrected protected recovery succeeds. The npm trusted publisher configuration has not yet
+completed a real OIDC publish, so package availability does not prove that configuration works.
 
 ## Partial release recovery
 
@@ -31,7 +33,9 @@ and can attempt duplicate uploads. Instead, use the main-only `release-recovery`
    file-type bits are accepted, but checksums, safe paths and expected members remain mandatory. It
    verifies PyPI, npm, and GHCR content match those artifacts without uploading anything.
 4. Only if all package registries match does it proceed to publish missing MCP Registry metadata.
-   If any package is missing or differs, the job stops and cannot modify packages or images.
+   The read-only registry checker accepts `--output` after every subcommand, so it can write the
+   status GitHub Actions consumes before deciding whether publication is needed. If any package is
+   missing or differs, or this status lookup fails, the job stops and cannot modify packages or images.
 5. After completion, verify each registry independently: PyPI files, npm integrity, GHCR tags, and
    MCP Registry metadata.
 

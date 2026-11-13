@@ -142,7 +142,8 @@ def main(argv: list[str]) -> int:
     mcp = subparsers.add_parser("mcp")
     mcp.add_argument("--version", required=True)
     mcp.add_argument("--server", required=True, type=pathlib.Path)
-    parser.add_argument("--output", type=pathlib.Path)
+    for child in subparsers.choices.values():
+        child.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "mcp":
