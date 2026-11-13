@@ -232,8 +232,9 @@ elsewhere.
 
 A push also mirrors `docs/wiki/` into the wiki repository, so the published pages
 cannot lag behind the repository. The mirror is skipped while `docs/wiki/` is
-identical to the last synced tree, which is recorded in
-`.git/tapebasis-wiki-sync` under the `HEAD:docs/wiki` object name.
+identical to the last synced tree, which is recorded as `tapebasis-wiki-sync` under the directory
+returned by `git rev-parse --git-dir`. Its contents are the `HEAD:docs/wiki` object name. Resolving the
+actual Git directory keeps this working in both a regular checkout and a linked worktree.
 
 `.githooks/pre-commit` and `.githooks/pre-push` run the same script, so a commit
 from a terminal or an IDE is gated too. Install them once per clone with
