@@ -52,6 +52,7 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_release_metadata.py` | Version, tag, registry, lockfile, launcher and previous-ref validation |
 | `smoke_test.py` | Installed-package initialize and tools-list exchange through a real MCP stdio client |
 | `test_quality_gate.py` | The gate's own documentation checks, against a temporary repository |
+| `test_git_context.py` | A real pre-push hook and wiki child push in a linked worktree, with parent Git bindings and two local remotes |
 
 Tests that create temporary git repositories give those fixtures an empty `core.hooksPath`, an
 isolated `HOME`, no system git configuration, and no `GIT_*` repository bindings inherited from a
@@ -59,6 +60,15 @@ parent git hook. The documentation and release checkers apply the same isolation
 commands while retaining the caller's other configuration. Their `ROOT` therefore selects both the
 files and the repository history under inspection. This prevents recursive hook execution and changes
 no hook or safety check in the real repository.
+
+The pre-push hook first resolves its source checkout, then removes the repository bindings listed by
+`git rev-parse --local-env-vars` before running the quality gate. This keeps the nested wiki clone,
+commit and push in the wiki repository rather than the source checkout. Other environment values,
+including credential and proxy settings, remain intact. The wiki sync stamp lives under the real Git
+directory reported by `git rev-parse --git-dir`, which also works when `.git` is a linked-worktree
+marker file. `test_git_context.py` exercises that actual flow with stdin ref records, parent Git
+bindings, a temporary source remote and a temporary wiki remote. It checks that neither source HEAD
+changes, the wiki receives only its page commit, and the stamp contains the synchronized wiki tree.
 
 `test_upstream_contract.py` is the file to extend when live probing finds a provider behaving
 surprisingly. Every case in it was found by calling the real upstream and getting something the

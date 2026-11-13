@@ -87,7 +87,9 @@ if (( run_wiki )); then
         echo "docs/wiki has uncommitted edits; commit them before pushing" >&2
         status=1
     else
-        stamp_file="$ROOT/.git/tapebasis-wiki-sync"
+        # .git is a file in a linked worktree. Resolve Git's actual metadata
+        # directory instead of writing through the checkout marker as a path.
+        stamp_file="$(git rev-parse --git-dir)/tapebasis-wiki-sync"
         current="$(git rev-parse HEAD:docs/wiki 2>/dev/null || echo none)"
         recorded=""
         [[ -f "$stamp_file" ]] && recorded="$(cat "$stamp_file")"

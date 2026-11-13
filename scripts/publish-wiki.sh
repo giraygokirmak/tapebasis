@@ -17,6 +17,7 @@ set -euo pipefail
 
 REPO="giraygokirmak/tapebasis"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/docs/wiki"
+WIKI_REPOSITORY="${TAPEBASIS_WIKI_REPOSITORY:-https://github.com/${REPO}.wiki.git}"
 WORK="$(mktemp -d)"
 DRY_RUN=0
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
@@ -30,7 +31,7 @@ if [[ ! -d "$SRC" ]]; then
 fi
 
 echo "==> cloning wiki"
-if ! git clone -q "https://github.com/${REPO}.wiki.git" "$WORK/wiki" 2>/dev/null; then
+if ! git clone -q "$WIKI_REPOSITORY" "$WORK/wiki" 2>/dev/null; then
     cat >&2 <<'EOF'
 error: the wiki repository does not exist yet.
 

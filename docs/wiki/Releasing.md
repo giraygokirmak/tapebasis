@@ -129,7 +129,12 @@ endpoints are readable.
    launcher changes. The full test gate already performs the real build, installation and MCP smoke
    tests.
 4. Land the tested commit on main. Do not tag an uncommitted working tree, and do not tag merely to make
-   red CI retry. The gate does not tag or publish anything itself.
+   red CI retry. The gate does not tag or publish anything itself. Its pre-push wiki mirror runs in an
+   independent child repository with inherited `GIT_*` repository bindings removed, and records its
+   sync stamp in the source worktree's actual Git directory. A successful source push therefore cannot
+   turn the wiki child commit into a main-branch commit. The production wiki URL is fixed;
+   `TAPEBASIS_WIKI_REPOSITORY` exists only to redirect the hermetic Git-context regression test to a
+   temporary local wiki. Do not set it for a normal release push.
 5. Check the candidate without a previous-ref comparison for the first release:
 
    ```bash

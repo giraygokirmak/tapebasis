@@ -23,4 +23,13 @@ if (( verify == 0 )); then
 fi
 
 root="$(git rev-parse --show-toplevel)" || exit 1
+
+# A push exports its repository selection to children. The wiki publisher starts
+# another repository, so those bindings must not survive into its clone, commit
+# or push. Keep every other environment value, including credentials and proxy
+# settings, intact. Hook discovery still uses the source checkout's .githooks.
+while IFS= read -r key; do
+    unset "$key"
+done < <(git rev-parse --local-env-vars)
+
 exec "$root/scripts/quality-gate.sh" --push
