@@ -292,7 +292,7 @@ Three GitHub Actions workflows:
 | Workflow | Purpose |
 | --- | --- |
 | `test.yml` | Install on Python 3.10–3.13, run the suite, build and install Python artifacts, run MCP and npm package checks, and check release metadata and documentation. No uploads |
-| `release.yml` | Validate on main and `v*` tags, build reusable release artifacts, then publish tag artifacts to PyPI, npm, GHCR and the MCP Registry after approval |
+| `release.yml` | Validate on main and `v*` tags, build reusable release artifacts, then publish tag artifacts to PyPI, npm, GHCR and the MCP Registry after approval. Main-only `workflow_dispatch` recovery completes missing MCP metadata from a failed tag without touching packages |
 | `publish-image.yml` | Reuse `test.yml` for main and pull requests. The old main-image publisher has been removed; it makes no registry uploads |
 
 The tag publish job runs on GitHub-hosted Ubuntu with the pinned npm CLI bundled by Node.js 24. That

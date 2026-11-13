@@ -40,17 +40,9 @@ def _archive(tmp_path: Path, label: str = "io.github.giraygokirmak/tapebasis") -
     manifests = []
     for platform in ("linux/amd64", "linux/arm64"):
         os_name, arch = platform.split("/")
-        config = _blob(root, {
-            "config": {
-                "Labels": {"io.modelcontextprotocol.server.name": label},
-                "Env": ["PATH=/usr/local/bin"],
-            },
-        })
+        config = _blob(root, {"config": {"Labels": {"io.modelcontextprotocol.server.name": label}, "Env": ["PATH=/usr/local/bin"]}})
         manifest = _blob(root, {"config": {"digest": config}})
-        manifests.append({
-            "digest": manifest,
-            "platform": {"os": os_name, "architecture": arch},
-        })
+        manifests.append({"digest": manifest, "platform": {"os": os_name, "architecture": arch}})
     index = _blob(root, {"manifests": manifests})
     (root / "index.json").write_text(json.dumps({"manifests": [{"digest": index}]}))
     archive = tmp_path / "image.tar"
@@ -84,10 +76,25 @@ def test_oci_layout_rejects_wrong_label_and_missing_platform(tmp_path):
 
 def test_oci_cli_validates_a_real_tar(tmp_path):
     """The command accepts a tar file and returns its validation status."""
-    result = subprocess.run(
-        [sys.executable, str(SCRIPT), str(_archive(tmp_path))],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = subprocess.run([sys.executable, str(SCRIPT), str(_archive(tmp_path))], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_oci_cli_reports_tested_root_digest(tmp_path):
+    """Digest output is exactly the descriptor digest that regctl reports for GHCR."""
+    archive = _archive(tmp_path)
+    checker = _load()
+    directory, temporary = checker._extract(archive)
+    try:
+        expected = checker.root_digest(directory)
+    finally:
+        temporary.cleanup()
+    result = subprocess.run([sys.executable, str(SCRIPT), "--digest", str(archive)], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
+
+
+def test_oci_cli_rejects_a_missing_archive_for_Digest(tmp_path):
+    """The release fails instead of treating an absent OCI archive as valid."""
+    result = subprocess.run([sys.executable, str(SCRIPT), "--digest", str(tmp_path / "missing.tar")], text=True, capture_output=True)
+    assert result.returncode != 0

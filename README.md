@@ -484,9 +484,6 @@ Or use the anonymous npm launcher with Node.js 18 or newer:
 npx tapebasis --help
 ```
 
-The first registry publication is not complete yet. These commands will work after
-`v1.0.0` is released; until then, install from a checkout as shown below.
-
 For a checkout or development build:
 
 ```bash
@@ -526,7 +523,7 @@ curl -s localhost:8000/health
 
 ### Prebuilt image (GHCR)
 
-A multi-arch image is published to the GitHub Container Registry as part of an approved `v*` release. It is not available until the first release and the package's GHCR visibility are set up:
+A multi-arch image is published to the GitHub Container Registry as part of an approved `v*` release:
 
 ```bash
 docker pull ghcr.io/giraygokirmak/tapebasis:latest

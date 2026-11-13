@@ -7,7 +7,7 @@
 
 ## Install
 
-### PyPI or npm, after the first release
+### PyPI or npm
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and run the Python distribution directly:
 
@@ -23,7 +23,7 @@ npx tapebasis --help
 
 The launcher has no runtime dependencies of its own, forwards arguments and environment, and works over stdio. Set `TAPEBASIS_UVX` if uvx is not on the client's `PATH`. It prints an installation link when uv is missing. On Windows it invokes an executable directly, without a command shell.
 
-The first PyPI and npm publications are **not complete yet**. Until the approved `v1.0.0` tag release has succeeded, use the checkout installation below. `pip install tapebasis` is also available after the first PyPI publication. Main-image and release-image availability depends on GHCR package visibility. MCP Registry ownership markers do not mean an MCP Registry entry has been published.
+The `v1.0.0` wheel, sdist and npm launcher are published. `pip install tapebasis` and `uvx tapebasis` work directly. GHCR serves the `1.0.0` image for `linux/amd64` and `linux/arm64`. MCP Registry metadata is still being recovered from a partial release and will appear once the protected recovery workflow completes.
 
 ### Checkout
 

@@ -1283,6 +1283,27 @@ Python server; npm supplies only its launcher, not a separate implementation.
 
 ---
 
+## 61. Partial release recovery is main-only and MCP-only
+
+**Decision:** a failed tag run is never retried. Recovery uses `workflow_dispatch` on `main` with
+`recover_source_run` and `recover_tag` inputs, gated by a separate `release-recovery` environment.
+The recovery job validates the source run's tag, commit, and artifact digest, downloads the exact
+tested artifacts, and verifies PyPI, npm, and GHCR content match those artifacts. It can only publish
+missing MCP Registry metadata; it cannot upload packages or modify container images. If any package
+registry differs or is missing, the job stops.
+
+**Why:** retrying a failed tag run reuses the old tag's YAML and risks duplicate uploads or overwriting
+existing packages with different bytes. A main-only recovery path allows fixing workflow bugs without
+moving tags or rebuilding artifacts. Restricting recovery to MCP metadata prevents accidental package
+modification during incident response.
+
+**Boundary:** recovery requires the original tag's artifacts to be intact and unexpired. If the tag
+artifacts are missing or damaged, recovery cannot proceed; a new tag with a new version is required.
+The `release-recovery` environment must be configured with main-only deployment restrictions and
+reviewer approval to prevent unauthorized registry changes.
+
+---
+
 ## Related
 
 - [Architecture](Architecture): how these decisions are implemented
