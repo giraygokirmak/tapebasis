@@ -124,10 +124,12 @@ endpoints are readable.
 2. Update the same semantic version in `pyproject.toml`, `src/tapebasis/__init__.py`, `package.json`,
    the root and `packages[""]` entries of `package-lock.json`, `server.json`, and its npm and PyPI
    package entries. Update registry ownership markers only if the server identity also changes.
-3. Run `PATH=<uv-install-directory>:$PATH scripts/quality-gate.sh --commit` locally. Omit the `PATH=`
-   prefix when uv is already installed. Add `npm test`, `npm run check`, and `npm pack --dry-run` for
-   launcher changes. The full test gate already performs the real build, installation and MCP smoke
-   tests.
+3. Run `PATH=<uv-install-directory>:$PATH scripts/quality-gate.sh --commit` locally after installing
+   the project and its development extras in `.venv`. Omit the `PATH=` prefix when uv is already
+   installed. On Python 3.10 the project installs `tomli`, so `check_release.py` parses TOML with the
+   same implementation used by Python 3.11 and later rather than accepting malformed metadata. Add
+   `npm test`, `npm run check`, and `npm pack --dry-run` for launcher changes. The full test gate
+   already performs the real build, installation and MCP smoke tests.
 4. Land the tested commit on main. Do not tag an uncommitted working tree, and do not tag merely to make
    red CI retry. The gate does not tag or publish anything itself. Its pre-push wiki mirror runs in an
    independent child repository with inherited `GIT_*` repository bindings removed, and records its

@@ -35,7 +35,6 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "24"
-          package-manager-cache: false
 
       # A venv, not --system: the Python that setup-uv provisions is externally
       # managed (PEP 668), so --system installs are refused.

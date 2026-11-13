@@ -51,21 +51,11 @@ def _read(relative: str) -> str:
 
 
 def _project(text: str) -> dict:
-    """Return the ``[project]`` table from pyproject TOML text."""
+    """Return the ``[project]`` table parsed as TOML on every supported Python."""
     try:
         import tomllib  # type: ignore[import-not-found]
     except ModuleNotFoundError:
-        values: dict[str, str] = {}
-        in_project = False
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("[") and stripped.endswith("]"):
-                in_project = stripped == "[project]"
-            elif in_project:
-                match = re.fullmatch(r'(name|version)\s*=\s*"([^"]+)"', stripped)
-                if match:
-                    values[match.group(1)] = match.group(2)
-        return values
+        import tomli as tomllib  # type: ignore[import-not-found,no-redef]
     return tomllib.loads(text).get("project", {})
 
 

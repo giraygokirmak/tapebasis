@@ -45,6 +45,18 @@ def test_external_actions_use_verified_commit_pins():
             assert version and version.startswith("v"), (path.name, owner, version)
 
 
+def test_setup_node_uses_declared_inputs_with_caching_disabled_by_default():
+    """Node setup follows the pinned action's inputs instead of unsupported aliases."""
+    for filename in ("test.yml", "release.yml"):
+        for job in _workflow(filename)["jobs"].values():
+            if job.get("uses"):
+                continue
+            for step in job.get("steps", []):
+                if step.get("uses", "").startswith("actions/setup-node@"):
+                    assert set(step["with"]) == {"node-version"}
+                    assert step["with"]["node-version"] == "24"
+
+
 def test_release_only_publishes_from_a_pushed_version_tag():
     """The sole publish job is tag-gated behind the protected release environment."""
     workflow = _workflow("release.yml")

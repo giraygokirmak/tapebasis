@@ -300,8 +300,9 @@ runtime satisfies npm trusted publishing's minimum requirements without installi
 version during publication.
 
 The npm package is a dependency-free launcher for `uvx tapebasis`, not a separate TypeScript server.
-`npm test` exercises its argument forwarding, exit status, executable selection and signals. Releases,
-first-time account provisioning and recovery are in [Releasing](Releasing).
+`npm test` exercises its argument forwarding, exit status, executable selection and signals. The pinned
+Node setup specifies only `node-version: "24"`; npm caching stays disabled by default because no cache
+input is declared. Releases, first-time account provisioning and recovery are in [Releasing](Releasing).
 
 ## Editing these docs
 

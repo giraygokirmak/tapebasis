@@ -167,6 +167,30 @@ def test_malformed_toml_is_reported_not_raised(checkout):
     assert any("invalid TOML" in error for error in checker.collect(tag=None, against=None))
 
 
+def test_toml_parser_covers_the_whole_project_and_pre_311_fallback(checkout, monkeypatch):
+    """The same complete parser is selected when tomllib is absent."""
+    if sys.version_info >= (3, 11):
+        import tomllib as parser
+    else:
+        import tomli as parser
+
+    def hide_tomllib(name, *args, **kwargs):
+        """Route Python 3.11 and later through the same compatibility import."""
+        if name == "tomllib":
+            raise ModuleNotFoundError("No module named 'tomllib'")
+        return original_import(name, *args, **kwargs)
+
+    root, checker = checkout
+    original_import = __import__
+    monkeypatch.setattr("builtins.__import__", hide_tomllib)
+    monkeypatch.delitem(sys.modules, "tomllib", raising=False)
+    monkeypatch.setitem(sys.modules, "tomli", parser)
+    project = checker._project((root / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["name"] == "tapebasis"
+    assert isinstance(project["dependencies"], list)
+    assert "tradingview-screener==3.0.0" in project["dependencies"]
+
+
 def test_missing_files_are_reported_not_raised(checkout):
     """Missing release inputs stop validation without hiding other errors."""
     root, checker = checkout

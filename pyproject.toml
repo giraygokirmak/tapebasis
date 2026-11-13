@@ -42,6 +42,9 @@ dependencies = [
   # time zones with `'NoneType' object has no attribute 'total_seconds'`.
   "python-dateutil>=2.8.2,<3",
   "requests>=2.32",
+  # Release metadata is parsed with the same tested TOML implementation on
+  # Python 3.10, which does not provide the standard-library tomllib module.
+  "tomli>=1.1.0; python_version < '3.11'",
   # Pinned to ==3.0.0 on purpose: 3.2.0 makes a bare Query() default to a stock
   # preset filter that silently returns 0 rows for crypto/futures scans.
   "tradingview-screener==3.0.0",
