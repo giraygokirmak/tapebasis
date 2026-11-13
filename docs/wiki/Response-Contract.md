@@ -177,7 +177,10 @@ One row per compared field:
 ```
 
 `match` is the aggregate: `true` when every comparable pair agrees, `false` when any pair disagrees,
-`null` when fewer than two providers reported a usable value.
+and `null` when no pair could reach a verdict, whether because fewer than two providers supplied a
+reading or because every pair was unusable. `notice` says `Compared fields agree within tolerance`
+only when at least one comparison reached agreement. When comparisons exist but none reached a
+verdict, it instead says `No compared fields reached an agreement verdict.`
 
 The `tv`/`fv` keys inside a pair are historical names for "first reading" and "second reading"; the
 `between` list names the providers unambiguously and is the field to read.
@@ -210,8 +213,15 @@ can help. Spot FX has no single official previous close, so `change_percent` on 
 always reported from every provider and never compared, with that reason stated. Every guard is
 one-way: it can lose a comparison, never invent a conflict.
 
-`match: null` **without** `not_comparable` means the comparison was impossible (a non-numeric or
-missing value). `match: false` is a real disagreement.
+For a multi-value pair, non-numeric values and blank symbols also stay in `pairs`, with `match:
+null` and a `not_comparable` explanation. An unusable pair is therefore never an invisible omission
+or a source of agreement. `match: null` **without** `not_comparable` means fewer than two providers
+supplied a reading. `match: false` is a real disagreement.
+
+`stock_extended_hours` compares only the active or evidenced pre-market/post-market window, not a
+post print from yesterday against a pre print from today. Differing named windows and undated reads
+in a shared window are both `not_comparable`. StockAnalysis's own pre/post label is retained when its
+timestamp is absent, but agreement still requires a dated print from every side of the pair.
 
 ### `freshness`
 Present when a comparison actually happened **and** at least one provider reported a usable print
@@ -305,7 +315,23 @@ Real failures only:
 ```
 
 `NOT_ATTEMPTED` is **excluded**. It means "this provider has no such capability" (Finviz has no spot
-gold quote, TradingView publishes no options chain), which is a structural fact, not an error.
+gold quote, TradingView publishes no options chain), which is a structural fact, not an error. Once
+`stock_quote` has resolved a provider's symbol, an empty answer is `NO_DATA`, not `NOT_ATTEMPTED`.
+
+`stock_prices` repeats attempted failures in each affected row's `errors` and explains them in its
+`misses` map. Every error carries both `provider` and `symbol`; provider exception codes are retained.
+The envelope aggregates those symbol-tagged row failures without also repeating each provider-wide
+summary. An attempted provider that returns no rows is `NO_DATA`, including when the entire batch is
+empty. A returned payload without a usable price is likewise `NO_DATA`, not an answered reading.
+Coverage applies to each provider-symbol request: a complete `ALL` row does not mask another
+symbol's attempted miss, which makes a multi-provider batch envelope `PARTIAL`.
+
+`stock_extended_hours` also reports its secondary overnight failures in `data.overnight_errors` and
+appends those same records to the envelope's `errors`. The records carry
+`detail.capability: "overnight"`; they neither replace primary quote-fetch errors nor change the
+primary legs' `ALL`/`PARTIAL` coverage classification. `overnight`, `overnight_source`,
+`overnight_readings`, `overnight_comparison` and `overnight_errors` stay together so a null selected
+print cannot silently conceal an attempted endpoint's failure.
 
 Common codes: `UPSTREAM_TIMEOUT`, `UPSTREAM_RATE_LIMIT`, `UPSTREAM_BLOCKED`, `UPSTREAM_ERROR`,
 `NO_DATA`, `PARSE_ERROR`, `INVALID_TICKER`, `NOT_CONFIGURED`, `SCHEMA_DRIFT`, `PROVIDER_ERROR`.
@@ -323,6 +349,23 @@ which is not an error at all and lives in `comparisons`.
 ### `warnings`
 Human-readable cautions. A disagreement adds `"Providers disagree on: price"`. A field that could not
 be compared adds `"Not cross-checked (no shared basis for comparison): change_percent, volume"`. Health drift adds a warning naming the affected upstream.
+
+### Missing, zero and non-finite values
+
+A provider's reported `0` remains zero, including option volume, open interest, IV, last, bid and ask.
+An absent or null value stays `null`; neither case falls through to an alias that can substitute an
+unrelated reading. A zero open-interest pair has the provider-specific treatment described under
+`stock_options_chain`, not a blanket conversion of zeroes to missing data.
+
+Session prices must be finite numbers. `NaN`, positive infinity and negative infinity are unavailable
+readings, not usable prices or baselines. Booleans and numeric strings are not accepted as prices either.
+
+`stock_options_chain` uses a contract's side, expiry and strike for comparison. If chains with no
+explicit shared expiry return different evidenced dates, `data.expiry` is `null` and
+`data.overlap.not_comparable` is true, with the reason and each provider's selected date. An explicit
+shared expiry retains normal volume and open-interest comparisons. Backtest results add
+`execution_model`; it declares next-open versus Donchian same-close execution, final-bar entry
+suppression and forced exit at the final close.
 
 ### `degraded`
 `true` when the health monitor reports drift or an outage **for a provider this call actually used**.

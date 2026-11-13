@@ -12,9 +12,10 @@ services:
     # and forwards signals, so `docker compose stop` is graceful even if the
     # image is swapped for the plain GHCR tag.
     init: true
-    # Host port mapping. Change 6013 if it conflicts with something already running.
+    # The server has no authentication, so publish to host loopback by default.
+    # An operator must set TAPEBASIS_BIND_ADDRESS explicitly for remote access.
     ports:
-      - "6013:8000"
+      - "${TAPEBASIS_BIND_ADDRESS:-127.0.0.1}:6013:8000"
     restart: unless-stopped
     env_file:
       - path: .env

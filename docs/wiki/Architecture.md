@@ -90,7 +90,8 @@ access module and its own upstream:
 | Leg | Access module | Upstream |
 | --- | --- | --- |
 | TradingView | `tv_access.py` → `providers/tradingview/native.py` | `scanner.tradingview.com` (quotes, screener), `data.tradingview.com` (chart websocket for OHLCV) |
-| TradingView (overnight) | `tv_access.py` → `providers/tradingview/quote_socket.py` | `data.tradingview.com` quote websocket (live prints, session label, overnight venues) |
+| TradingView (overnight) | `tv_access.py` → `providers/tradingview/quote_socket.py` | `data.tradingview.com` quote websocket; `qsd` deltas merge into the preceding symbol snapshot |
+| Yahoo (overnight) | `yh_access.py` | `/v7/finance/quote?overnightPrice=true` with a cookie-bound guest crumb; separate from the chart API |
 | Finviz | `fv_access.py` | `finviz.com` HTML pages and `/api/*` JSON islands |
 | Yahoo Finance | `yh_access.py` | `query1.finance.yahoo.com/v8/finance/chart` |
 | StockAnalysis | `sa_access.py` | `stockanalysis.com/api/quotes/s/<ticker>` |
@@ -228,6 +229,13 @@ name. TradingView states its session in `current_session` and its extended print
 `regularMarketPrice`; StockAnalysis puts the current extended print in `extended_hours`. The module is
 pure, makes no request, and returns a provider's value unchanged when that provider names no session,
 so a feed is never credited with a print it did not send.
+
+`current_session()` adds the calendar check needed for a venue block to be called current: its print
+must lie in the response clock's current session, including the prior evening's start after midnight.
+For overnight comparison, `session_window_start()` derives the print's own 20:00 ET occurrence start,
+including the final second before 04:00 ET. `stock_extended_hours` records that start so two prints on
+different nights are not treated as the same observation merely because both are named `overnight`.
+A closed venue's final print remains readable but has `is_current: false`.
 
 ### `ratelimit.py` is one gate per upstream
 

@@ -13,6 +13,7 @@ provider service layers. Nothing proxies another provider.
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -45,11 +46,15 @@ from .providers_state import (
     verification_for,
 )
 from .sessions import (
+    OVERNIGHT,
     PRE_MARKET,
+    POST_MARKET,
     REGULAR,
     SESSION_NAMES,
+    current_session,
     live_print,
     market_session,
+    session_window_start,
 )
 
 _SESSION_NAMES = SESSION_NAMES
@@ -63,6 +68,7 @@ from .reconcile import (
     Pair,
     ask,
     compared_providers,
+    _error_dict,
     field_source,
     finalize,
     providers_in,
@@ -223,7 +229,14 @@ _FX_DAY_CHANGE_REASON = (
 )
 
 
-def _session_now(tv: dict[str, Any], yh: dict[str, Any]) -> str | None:
+def _utc_now() -> datetime:
+    """Return the response clock, replaceable by deterministic session tests."""
+    return datetime.now(timezone.utc)
+
+
+def _session_now(
+    tv: dict[str, Any], yh: dict[str, Any], now: datetime | None = None
+) -> str | None:
     """Which session the instrument is in right now, from what the legs said.
 
     TradingView's scanner names its session directly, so it is preferred: it is
@@ -254,6 +267,12 @@ def _session_now(tv: dict[str, Any], yh: dict[str, Any]) -> str | None:
         if stamp is not None and (newest[1] is None or stamp > newest[1]):
             newest = (name, stamp)
     if newest[0]:
+        if now is not None:
+            active, _, _ = current_session(newest[1], now, session_name=newest[0])
+            if active is None:
+                # An older populated block is not a statement of the current
+                # window. Do not report whether it is open or closed.
+                return None
         return newest[0]
     return market_session(parse_market_timestamp(tv.get("regular_close_time")))
 
@@ -276,8 +295,8 @@ def _shape_overnight(block: dict[str, Any] | None) -> dict[str, Any] | None:
     stamp = block.get("print_time")
     shaped = dict(block)
     shaped["as_of_utc"] = (
-        datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        if isinstance(stamp, (int, float))
+        datetime.fromtimestamp(stamp, timezone.utc).isoformat().replace("+00:00", "Z")
+        if isinstance(stamp, (int, float)) and math.isfinite(stamp)
         else None
     )
     return shaped
@@ -554,7 +573,8 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
     ride along, each labelled with the provider that supplied it. A field that
     cannot be shown to describe the same observation is reported as
     ``not_comparable`` rather than as a conflict, and an FX day change is never
-    compared because spot FX has no single official previous close.
+    compared because spot FX has no single official previous close. An empty
+    response after a symbol resolves remains ``NO_DATA``, not ``NOT_ATTEMPTED``.
 
     Bloomberg's prints can be structurally older than a live feed's
     (``exchangeDelay`` is ``15 Minutes`` on equities and indices). That is
@@ -603,18 +623,12 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             raise NotApplicable(TRADINGVIEW, tv_res.note or f"no TradingView symbol for {symbol}")
         # The scanner row is TradingView's own quote and carries open/high/low,
         # volume, the 52-week range and fundamentals in one request.
-        try:
-            return await tv_access.quote(tv_res.symbol)
-        except NoDataError as exc:
-            raise NotApplicable(TRADINGVIEW, exc.message) from exc
+        return await tv_access.quote(tv_res.symbol)
 
     async def fv_call() -> dict[str, Any]:
         if not fv_res.found:
             raise NotApplicable(FINVIZ, fv_res.note or f"Finviz does not carry {symbol}")
-        try:
-            return await fv_access.quote(fv_res.symbol)
-        except NoDataError as exc:
-            raise NotApplicable(FINVIZ, exc.message) from exc
+        return await fv_access.quote(fv_res.symbol)
 
     async def yh_call() -> dict[str, Any]:
         if not yh_res.found:
@@ -622,20 +636,14 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             # ``errors`` for real failures, an agent reading the envelope must
             # be able to tell "provider is down" from "provider never had it".
             raise NotApplicable(YAHOO, yh_res.note or f"Yahoo Finance does not carry {symbol}")
-        try:
-            return await yh_access.quote(yh_res.symbol)
-        except NoDataError as exc:
-            raise NotApplicable(YAHOO, exc.message) from exc
+        return await yh_access.quote(yh_res.symbol)
 
     async def sa_call() -> dict[str, Any]:
         if not sa_res.found:
             raise NotApplicable(
                 SA, sa_res.note or f"StockAnalysis does not carry {symbol}"
             )
-        try:
-            return await sa_access.quote(sa_res.symbol)
-        except NoDataError as exc:
-            raise NotApplicable(SA, exc.message) from exc
+        return await sa_access.quote(sa_res.symbol)
 
     async def bb_call() -> dict[str, Any]:
         if not bb_res.found:
@@ -657,8 +665,6 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
                 "call is reported rather than waited out",
                 code="TIMEOUT",
             ) from exc
-        except NoDataError as exc:
-            raise NotApplicable(BLOOMBERG, exc.message) from exc
         return data
 
     # The last two legs are named rather than positional: both are optional in
@@ -898,6 +904,62 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
     return result
 
 
+# ── Bulk prices ──────────────────────────────────────────────────────────────
+
+
+def _batch_no_data(provider: str, symbol: str, message: str) -> dict[str, Any]:
+    """Return a typed per-symbol empty result for a batch provider."""
+    return {
+        "provider": provider,
+        "symbol": symbol,
+        "code": "NO_DATA",
+        "message": message,
+    }
+
+
+def _batch_error(provider: str, symbol: str, exc: BaseException) -> dict[str, Any]:
+    """Return a batch failure tagged with the requested symbol.
+
+    Real provider failures keep their code. An unexpected ``NotApplicable``
+    inside an already-resolved per-symbol request is not reclassified as an
+    unasked leg: the request was attempted, so it remains a visible ``NO_DATA``.
+    """
+    error = _error_dict(provider, exc)
+    error["symbol"] = symbol
+    if error["code"] == "NOT_ATTEMPTED":
+        error["code"] = "NO_DATA"
+    return error
+
+
+def _batch_error_map(
+    provider: str,
+    pair: Pair,
+    asked_for: dict[str, list[str]],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Return typed row failures and batch-level failures for one provider.
+
+    A batch endpoint reports a requested key it omitted as ``NO_DATA``. A
+    provider error without a symbol applies to every symbol it was resolved to
+    fetch. Per-symbol exceptions retain their codes and stay isolated to their
+    own rows.
+    """
+    attempt = pair.attempts.get(provider)
+    payload = attempt.payload or {} if attempt else {}
+    if attempt is None:
+        return {}, {}
+    errors = {
+        error["symbol"]: error
+        for error in payload.get("errors") or []
+        if error.get("symbol")
+    }
+    batch_errors: dict[str, dict[str, Any]] = {}
+    if attempt.failed and (attempt.error or {}).get("code") != "NOT_ATTEMPTED":
+        error = dict(attempt.error or {})
+        batch_errors = {
+            symbol: {**error, "symbol": symbol}
+            for symbol in asked_for.get(provider, [])
+        }
+    return errors, batch_errors
 
 # ── Bulk prices ──────────────────────────────────────────────────────────────
 
@@ -908,7 +970,9 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
     Each ticker is resolved per provider and looked up natively: TradingView's
     scanner, Finviz's screener, Yahoo's chart API, StockAnalysis's quote API,
     Bloomberg's quote page. The per-row ``data_provider`` says whether that
-    particular ticker was answered by several providers, by one, or by none;
+    particular ticker was answered by every provider asked for that ticker,
+    by some of them, by one, or by none; envelope coverage is PARTIAL when
+    any symbol missed an attempted provider, even when another row is ALL.
     ``agrees`` says whether the readings matched. Bloomberg is asked about at
     most ``TAPEBASIS_BLOOMBERG_BATCH_MAX`` tickers per call (default 4) because
     its page path is paced at 10 s per request; the rest are reported as skipped
@@ -929,6 +993,9 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         from a stale regular value to a live session print is auditable rather
         than implied. On an FX symbol the day change is reported but not
         compared, because spot FX has no single official previous close.
+        Per-symbol ``misses`` and ``errors`` keep attempted empty results and
+        original provider error codes visible, with the envelope aggregating
+        those failures and the row-derived comparison verdicts.
     """
     requested = [t.strip().upper() for t in tickers.split(",") if t.strip()]
     if not requested:
@@ -985,26 +1052,25 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             if not entry["YAHOO"].found
         }
 
-        async def _one(symbol: str, ticker: str) -> tuple[str, dict[str, Any] | None, str | None]:
+        async def _one(symbol: str, ticker: str) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
+            """Return one quote, or its typed failure without sinking the batch."""
             try:
                 return symbol, await yh_access.quote(ticker), None
-            except NoDataError as exc:
-                return symbol, None, exc.message
             except Exception as exc:  # noqa: BLE001 - a single miss must not sink the batch
-                return symbol, None, f"{type(exc).__name__}: {exc}"
+                return symbol, None, _batch_error(YAHOO, symbol, exc)
 
         rows: dict[str, dict[str, Any]] = {}
-        for symbol, row, miss in await asyncio.gather(
+        errors: list[dict[str, Any]] = []
+        for symbol, row, error in await asyncio.gather(
             *(_one(symbol, ticker) for symbol, ticker in askable)
         ):
             if row is not None:
                 rows[symbol] = row
             else:
-                misses[symbol] = miss or "no Yahoo data"
-        if not rows:
-            detail = "; ".join(f"{s}: {m}" for s, m in misses.items())
-            raise NotApplicable(YAHOO, f"no Yahoo data ({detail})")
-        return {"rows": rows, "misses": misses}
+                error = error or _batch_no_data(YAHOO, symbol, "no Yahoo data")
+                errors.append(error)
+                misses[symbol] = error["message"]
+        return {"rows": rows, "misses": misses, "errors": errors}
 
     bb_symbols = [
         symbol
@@ -1025,13 +1091,12 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
                 SA, "StockAnalysis carries none of these instruments"
             )
 
-        async def _one(symbol: str, slug: str) -> tuple[str, dict[str, Any] | None, str | None]:
+        async def _one(symbol: str, slug: str) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
+            """Return one quote, or its typed failure without sinking the batch."""
             try:
                 return symbol, await sa_access.quote(slug), None
-            except NoDataError as exc:
-                return symbol, None, exc.message
             except Exception as exc:  # noqa: BLE001 - one miss must not sink the batch
-                return symbol, None, getattr(exc, "message", None) or f"{type(exc).__name__}: {exc}"
+                return symbol, None, _batch_error(SA, symbol, exc)
 
         found = {
             symbol: resolved[symbol]["SA"].symbol
@@ -1040,17 +1105,17 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         }
         rows: dict[str, dict[str, Any]] = {}
         misses: dict[str, str] = {}
-        for symbol, row, miss in await asyncio.gather(
+        errors: list[dict[str, Any]] = []
+        for symbol, row, error in await asyncio.gather(
             *(_one(symbol, slug) for symbol, slug in found.items())
         ):
             if row is not None:
                 rows[symbol] = row
             else:
-                misses[symbol] = miss or "no StockAnalysis data"
-        if not rows:
-            detail = "; ".join(f"{s}: {m}" for s, m in misses.items())
-            raise NotApplicable(SA, f"no StockAnalysis data ({detail})")
-        return {"rows": rows, "misses": misses}
+                error = error or _batch_no_data(SA, symbol, "no StockAnalysis data")
+                errors.append(error)
+                misses[symbol] = error["message"]
+        return {"rows": rows, "misses": misses, "errors": errors}
 
     async def bb_call() -> dict[str, Any]:
         if not bb_asked:
@@ -1068,6 +1133,7 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         deadline = time.monotonic() + BLOOMBERG_BATCH_BUDGET_SECONDS
         rows: dict[str, dict[str, Any]] = {}
         misses: dict[str, str] = {}
+        errors: list[dict[str, Any]] = []
         for symbol in bb_asked:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -1084,17 +1150,18 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
                 )
                 rows[symbol] = data
             except asyncio.TimeoutError:
-                misses[symbol] = (
-                    f"no answer within {min(remaining, BLOOMBERG_DEADLINE_SECONDS):.0f}s"
+                error = _batch_no_data(
+                    BLOOMBERG,
+                    symbol,
+                    f"no answer within {min(remaining, BLOOMBERG_DEADLINE_SECONDS):.0f}s",
                 )
-            except NoDataError as exc:
-                misses[symbol] = exc.message
+                errors.append(error)
+                misses[symbol] = error["message"]
             except Exception as exc:  # noqa: BLE001 - one miss must not sink the batch
-                misses[symbol] = getattr(exc, "message", None) or f"{type(exc).__name__}: {exc}"
-        if not rows:
-            detail = "; ".join(f"{s}: {m}" for s, m in misses.items())
-            raise NotApplicable(BLOOMBERG, f"no Bloomberg data ({detail})")
-        return {"rows": rows, "misses": misses}
+                error = _batch_error(BLOOMBERG, symbol, exc)
+                errors.append(error)
+                misses[symbol] = error["message"]
+        return {"rows": rows, "misses": misses, "errors": errors}
 
     pair = await ask(
         tv_call, fv_call, yh_call, bb_fn=bb_call, sa_fn=sa_call
@@ -1108,6 +1175,76 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
     sa_rows = (pair.sa.payload or {}).get("rows") or {}
     bb_rows = (pair.bb.payload or {}).get("rows") or {}
 
+    bb_payload = pair.bb.payload or {}
+    budget_cutoffs = {
+        symbol
+        for symbol, reason in (bb_payload.get("misses") or {}).items()
+        if "budget" in str(reason)
+    }
+    row_failures: dict[str, dict[str, dict[str, Any]]] = {
+        symbol: {} for symbol in requested
+    }
+    def asked_for_symbol(symbol: str) -> list[str]:
+        """Return providers this batch requested for one symbol."""
+        asked: set[str] = set()
+        for provider in ALL_PROVIDERS:
+            if not resolved[symbol][provider].found:
+                continue
+            if provider == TRADINGVIEW:
+                asked.add(provider)
+            elif provider == FINVIZ:
+                asked.add(provider)
+            elif provider == YAHOO and resolved[symbol][YAHOO].found:
+                asked.add(provider)
+            elif provider == SA and symbol in sa_slugs:
+                asked.add(provider)
+            elif provider == BLOOMBERG and symbol in bb_asked:
+                if symbol not in budget_cutoffs:
+                    asked.add(provider)
+        return [provider for provider in ALL_PROVIDERS if provider in asked]
+
+    asked_by_provider = {
+        provider: [
+            symbol for symbol in requested if provider in asked_for_symbol(symbol)
+        ]
+        for provider in ALL_PROVIDERS
+    }
+    for provider in ALL_PROVIDERS:
+        symbol_errors, batch_errors = _batch_error_map(provider, pair, asked_by_provider)
+        for symbol in requested:
+            if symbol in symbol_errors:
+                row_failures[symbol][provider] = symbol_errors[symbol]
+            elif (
+                symbol in batch_errors
+                and resolved[symbol][provider].found
+                and not (
+                    provider == BLOOMBERG
+                    and (
+                        symbol in bb_skipped
+                        or symbol in budget_cutoffs
+                    )
+                )
+            ):
+                row_failures[symbol][provider] = batch_errors[symbol]
+        if provider not in (TRADINGVIEW, FINVIZ):
+            continue
+        rows = tv_rows if provider == TRADINGVIEW else fv_rows
+        for symbol in requested:
+            entry = resolved[symbol]
+            if not entry[provider].found or symbol in row_failures[symbol]:
+                continue
+            if provider == TRADINGVIEW:
+                found = bool(tv_rows.get(strip_exchange(entry[provider].symbol or "")))
+            else:
+                found = bool(
+                    fv_rows.get(entry[provider].symbol or "")
+                    or fv_rows.get(to_finviz(symbol))
+                )
+            if not found:
+                label = "TradingView" if provider == TRADINGVIEW else "Finviz"
+                row_failures[symbol][provider] = _batch_no_data(
+                    provider, symbol, f"no {label} row returned for {symbol}"
+                )
     out_rows: list[dict[str, Any]] = []
     for symbol in requested:
         entry = resolved[symbol]
@@ -1117,10 +1254,6 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         )
         yh_row = yh_rows.get(symbol)
         sa_row = sa_rows.get(symbol)
-        sa_miss = ((pair.sa.payload or {}).get("misses") or {}).get(symbol)
-        yh_miss = ((pair.yh.payload or {}).get("misses") or {}).get(symbol)
-        bb_miss = ((pair.bb.payload or {}).get("misses") or {}).get(symbol)
-
         readings: dict[str, dict[str, Any]] = {}
         if tv_row:
             readings[TRADINGVIEW] = _live_reading(
@@ -1190,6 +1323,45 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
                 bb_row,
             )
 
+        # A returned container is not a quote answer. An attempted payload with
+        # no usable price cannot supply this tool's quote row, and it is recorded
+        # as NO_DATA rather than counted as an answer.
+        # Likewise a row associated with a failed per-symbol attempt contributes
+        # no reading and its typed failure remains attached to this symbol.
+        for provider in list(readings):
+            if (
+                readings[provider].get("price") is None
+                or provider in row_failures[symbol]
+            ):
+                del readings[provider]
+                if provider not in row_failures[symbol]:
+                    row_failures[symbol][provider] = _batch_no_data(
+                        provider, symbol, f"no usable {provider} quote row returned for {symbol}"
+                    )
+
+        misses = {
+            provider: (
+                row_failures[symbol][provider]["message"]
+                if provider in row_failures[symbol]
+                else (entry[provider].note or "no ticker")
+            )
+            for provider in ALL_PROVIDERS
+            if not entry[provider].found or provider in row_failures[symbol]
+        }
+        if symbol in bb_skipped or symbol in budget_cutoffs:
+            misses[BLOOMBERG] = (
+                "not asked: the Bloomberg leg's "
+                f"{BLOOMBERG_BATCH_BUDGET_SECONDS:.0f}s batch budget was spent "
+                "on the earlier tickers"
+                if symbol in budget_cutoffs
+                else f"not asked: Bloomberg batch cap is {BLOOMBERG_BATCH_MAX} tickers"
+            )
+        errors = [
+            row_failures[symbol][provider]
+            for provider in ALL_PROVIDERS
+            if provider in row_failures[symbol]
+        ]
+
         if not readings:
             out_rows.append(
                 {
@@ -1199,13 +1371,10 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
                     "resolutions": entry["resolutions"],
                     # Why each provider contributed nothing, so "NONE" is
                     # diagnosable rather than mysterious.
-                    "misses": {
-                        p: (entry[p].note or "no ticker") if not entry[p].found else None
-                        for p in ALL_PROVIDERS
-                    }
-                    | ({YAHOO: yh_miss} if yh_miss else {})
-                    | ({SA: sa_miss} if sa_miss else {})
-                    | ({BLOOMBERG: bb_miss} if bb_miss else {}),
+                    "misses": misses,
+                    "errors": errors,
+                    "providers_answered": [],
+                    "asked": asked_for_symbol(symbol),
                 }
             )
             continue
@@ -1252,7 +1421,11 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
                 else None
             ),
         )
-        agree = price_cmp["match"] is not False and change_cmp["match"] is not False
+        agree = (
+            None
+            if price_cmp["match"] is None and change_cmp["match"] is None
+            else price_cmp["match"] is not False and change_cmp["match"] is not False
+        )
 
         # Same arbitration rule as ``stock_quote``: newest print wins, ties are
         # broken by the documented default order. Using one rule in both places
@@ -1380,14 +1553,7 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         #
         # A provider that was asked and produced nothing stays in the set, and
         # then the row honestly reads PARTIAL instead of claiming ALL.
-        asked_for = [
-            p
-            for p in ALL_PROVIDERS
-            if entry[p].found
-            and (pair.attempts.get(p) is None
-                 or (pair.attempts[p].error or {}).get("code") != "NOT_ATTEMPTED")
-            and not (p == BLOOMBERG and symbol in bb_skipped)
-        ]
+        asked_for = asked_for_symbol(symbol)
         row_provider = provider_from_answered(list(readings), asked_for)
         row: dict[str, Any] = {
             "symbol": symbol,
@@ -1417,6 +1583,8 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             "providers_answered": [
                 p for p in ALL_PROVIDERS if p in readings
             ],
+            "misses": misses,
+            "errors": errors,
             "comparisons": {"price": price_cmp, "change_percent": change_cmp},
             "resolutions": entry["resolutions"],
         }
@@ -1425,12 +1593,38 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             # instead of only being visible in ``comparisons``.
             row["exchange_delay"] = readings[BLOOMBERG]["exchange_delay"]
         out_rows.append(row)
-    answering_rows = [r for r in out_rows if r["data_provider"] != "NONE"]
-    answered = {
-        p for r in answering_rows for p in r.get("providers_answered", [])
-    }
-    overall = provider_from_answered(answered)
 
+    # A provider-wide failure is copied to each affected row. Publish those
+    # symbol-tagged copies in the envelope instead of repeating its summary;
+    # retain an unscoped failure only when no row represents it.
+    envelope_errors = [
+        error
+        for failures in row_failures.values()
+        for error in failures.values()
+    ] + [
+        error for error in pair.errors
+        if error.get("provider") not in {
+            provider for failures in row_failures.values() for provider in failures
+        }
+    ]
+    answered = {
+        p for r in out_rows for p in r.get("providers_answered", [])
+    }
+    # Coverage applies to each provider-symbol request. A provider answering
+    # AAPL has not also answered an empty MSFT row, so a per-provider union
+    # would falsely make this mixed batch ALL.
+    any_row_incomplete = any(
+        provider in row.get("asked", [])
+        and provider not in row.get("providers_answered", [])
+        for row in out_rows
+        for provider in ALL_PROVIDERS
+    )
+    overall_provider = provider_from_answered(
+        [provider for provider in ALL_PROVIDERS if provider in answered],
+        [provider for provider, symbols in asked_by_provider.items() if symbols],
+    )
+    if any_row_incomplete and len(answered) >= 2:
+        overall_provider = DataProvider.PARTIAL
     skip_warnings: list[str] = []
     if bb_skipped:
         skip_warnings.append(
@@ -1440,21 +1634,14 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             f"about at most {BLOOMBERG_BATCH_MAX} tickers. Those rows are not "
             "counted as Bloomberg-answered."
         )
-    bb_payload = pair.bb.payload or {}
-    budget_misses = [
-        symbol
-        for symbol, reason in (bb_payload.get("misses") or {}).items()
-        if "budget" in str(reason)
-    ]
-    if budget_misses:
-        # Stated, never silent: a ticker the budget cut off looks exactly like a
-        # ticker Bloomberg had no page for, unless the response says which.
+    if budget_cutoffs:
         skip_warnings.append(
-            "Bloomberg did not answer for "
-            + ", ".join(budget_misses)
-            + f" within the leg's {BLOOMBERG_BATCH_BUDGET_SECONDS:.0f}s batch budget "
-            "(its page path is paced at 10 s per request). Those rows are not "
-            "counted as Bloomberg-answered; ask again for a fresh attempt."
+            "Bloomberg was not asked about "
+            + ", ".join(symbol for symbol in requested if symbol in budget_cutoffs)
+            + f" because the {BLOOMBERG_BATCH_BUDGET_SECONDS:.0f}s batch budget "
+            "was spent on earlier tickers (its page path is paced at 10 s per "
+            "request). Those rows are not counted as Bloomberg-answered; ask "
+            "again for a fresh attempt."
         )
 
     return finalize(
@@ -1467,10 +1654,23 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             SA: "stockanalysis.com/api/quotes/s/<ticker>",
             BLOOMBERG: "bloomberg.com/quote/<id>",
         },
-        extra={"symbols": requested},
+        extra={"symbols": requested, "errors": envelope_errors},
         warnings=skip_warnings,
         data=out_rows,
-        provider=overall,
+        provider=overall_provider,
+        answered=[
+            provider for provider in ALL_PROVIDERS if provider in answered
+        ],
+        comparisons=[
+            {
+                "field": field,
+                "symbol": row["symbol"],
+                **row["comparisons"][field],
+            }
+            for row in out_rows
+            for field in ("price", "change_percent")
+            if field in row.get("comparisons", {})
+        ],
         health_warn=MONITOR.warnings_for(providers_in(pair) or ALL_PROVIDERS),
         degraded=any(
             issue["provider"] in providers_in(pair) for issue in MONITOR.issues()
@@ -1508,7 +1708,8 @@ async def stock_screener(
 
     Returns:
         Envelope with ``rows`` (TradingView ranking) and a per-row
-        ``finviz_match`` showing whether Finviz agreed.
+        ``finviz_match`` showing whether Finviz agreed. Filters narrow that
+        same universe rather than requesting a separate Finviz ranking.
     """
     capped = max(1, min(int(limit), 200))
 
@@ -1538,7 +1739,11 @@ async def stock_screener(
                 FINVIZ,
                 "TradingView returned no tickers, so there is nothing to cross-check",
             )
-        return {"rows": await fv_access.screener_rows(tickers)}
+        # Filters narrow the same TradingView-selected universe. They do not
+        # replace those tickers with an independent Finviz ranking.
+        return {
+            "rows": await fv_access.screener_rows(tickers, filters=finviz_filters)
+        }
 
     # Yahoo has no screener endpoint, so it is not asked, ``None`` records
     # that as NOT_ATTEMPTED rather than as a provider failure.
@@ -1936,13 +2141,27 @@ async def stock_news(symbol: str, limit: int = 20, include_reactions: bool = Tru
 # ── Options ──────────────────────────────────────────────────────────────────
 
 
+def _option_chain_expiry(chain: dict[str, Any] | None) -> str | None:
+    """Return a chain's single evidenced expiry, not an arbitrary provider's."""
+    if not chain:
+        return None
+    rows = chain["calls"] + chain["puts"]
+    dates = {chain.get("expiry")} if chain.get("expiry") is not None else set()
+    for row in rows:
+        if row.get("expiry") is None:
+            return None
+        dates.add(row["expiry"])
+    return next(iter(dates)) if len(dates) == 1 else None
+
+
 async def stock_options_chain(symbol: str, expiry: str | None = None) -> dict[str, Any]:
     """Multi-source options chain for one expiry.
 
-    Finviz and Yahoo both publish a chain; contracts are matched by strike and
-    their volume/open-interest compared, so an agent can see whether the two
-    chains agree on open positioning. TradingView has no chain, but its scanner
-    independently quotes the underlying the contracts are priced against.
+    Finviz and Yahoo both publish a chain; contracts are matched by side,
+    expiry and strike, then their volume and open interest are compared, so an
+    agent can see whether the two chains agree on open positioning. TradingView
+    has no chain, but its scanner independently quotes the underlying the
+    contracts are priced against.
 
     Args:
         symbol: Underlying ticker.
@@ -1985,33 +2204,70 @@ async def stock_options_chain(symbol: str, expiry: str | None = None) -> dict[st
     fv_puts = (fv_norm or {}).get("puts") or []
     yh_calls = (yh_norm or {}).get("calls") or []
     yh_puts = (yh_norm or {}).get("puts") or []
+    fv_expiry = _option_chain_expiry(fv_norm)
+    yh_expiry = _option_chain_expiry(yh_norm)
+    if fv_norm and yh_norm:
+        shared_expiry = fv_expiry if fv_expiry == yh_expiry else None
+    else:
+        shared_expiry = fv_expiry or yh_expiry
+    fv_expiries = (fv_norm or {}).get("expiries", [])
+    yh_expiries = (yh_norm or {}).get("expiries", [])
 
+    warnings = []
     overlap = None
-    if (fv_calls or fv_puts) and (yh_calls or yh_puts):
+    if fv_expiry is not None and yh_expiry is not None and fv_expiry != yh_expiry:
+        overlap = {
+            "not_comparable": True,
+            "reason": (
+                f"Finviz returned expiry {fv_expiry} while Yahoo returned "
+                f"{yh_expiry}; contracts from different expiries are not compared."
+            ),
+            "expiries": {"FINVIZ": fv_expiry, "YAHOO": yh_expiry},
+        }
+        warnings.append(overlap["reason"])
+    elif (fv_calls or fv_puts) and (yh_calls or yh_puts):
         overlap = {
             "calls": option_overlap(yh_calls, fv_calls),
             "puts": option_overlap(yh_puts, fv_puts),
         }
+        if shared_expiry is None:
+            overlap["not_comparable"] = True
+            overlap["reason"] = (
+                "Both chains do not identify one shared expiry; rows with missing "
+                "proof of the same side, expiry and strike never count as agreement."
+            )
+            warnings.append(overlap["reason"])
+
+    if fv_expiries == yh_expiries:
+        available_expiries = fv_expiries
+    elif not fv_expiries or not yh_expiries:
+        available_expiries = fv_expiries or yh_expiries
+    else:
+        available_expiries = {"FINVIZ": fv_expiries, "YAHOO": yh_expiries}
 
     data = {
         "symbol": ticker,
-        "expiry": (fv_norm or {}).get("expiry") or (yh_norm or {}).get("expiry"),
-        "expiries": (fv_norm or {}).get("expiries") or (yh_norm or {}).get("expiries") or [],
+        "expiry": shared_expiry,
+        "expiries": available_expiries,
         "underlying_price": (fv_norm or {}).get("underlying_price")
         or (yh_norm or {}).get("underlying_price")
         or tv_scanner.get("underlying_price"),
         "tradingview_underlying_price": tv_scanner.get("underlying_price"),
         "calls": fv_calls or yh_calls,
         "puts": fv_puts or yh_puts,
+        "finviz_calls": fv_calls,
+        "finviz_puts": fv_puts,
         "yahoo_calls": yh_calls,
         "yahoo_puts": yh_puts,
-        "contract_count": (fv_norm or {}).get("contract_count")
-        or (yh_norm or {}).get("contract_count"),
+        "contract_count": (fv_norm or {}).get("contract_count", 0) + (
+            (yh_norm or {}).get("contract_count", 0) if not fv_norm else 0
+        ),
         "overlap": overlap,
         "resolutions": resolved["resolutions"],
     }
     return finalize(
         pair,
+        warnings=warnings,
         specs=(),
         sources={
             TRADINGVIEW: "scanner.tradingview.com (underlying price only; no chain)",
@@ -2045,7 +2301,8 @@ async def stock_earnings(symbol: str) -> dict[str, Any]:
     Finviz owns the detailed tables (reported quarters, estimate revisions,
     fundamental series, post-earnings reactions); TradingView's scanner confirms
     the next/last earnings timestamp from its own calendar. Yahoo supplies the
-    next scheduled date on its own feed. The dates are compared and reported.
+    next scheduled date on its own feed. The dates are reported; Finviz's last
+    reported quarter never becomes ``next_earnings_date``.
 
     Args:
         symbol: Ticker.
@@ -2096,7 +2353,8 @@ async def stock_earnings(symbol: str) -> dict[str, Any]:
     data = {
         "symbol": ticker,
         "finviz_earnings_date": fv_data.get("earnings_date"),
-        "next_earnings_date": tv_next or yh_next or fv_data.get("earnings_date"),
+        # Finviz's date anchors the last reported quarter, never an upcoming one.
+        "next_earnings_date": tv_next or yh_next,
         "finviz_note": (
             "finviz_earnings_date is the last *reported* quarter's release "
             "timestamp (the anchor for its results tables); next_earnings_date "
@@ -2136,20 +2394,21 @@ async def stock_earnings(symbol: str) -> dict[str, Any]:
 
 
 async def stock_extended_hours(symbol: str) -> dict[str, Any]:
-    """Pre-/post-market price for a US stock, cross-checked across providers.
+    """Pre-/post-market and overnight prices, with per-session comparisons.
 
     Finviz exposes the after-hours print on the quote page; Yahoo derives
     pre/regular/post prices from its own 1-minute candles; TradingView's scanner
     carries its own pre/post prints; StockAnalysis returns an extended-hours
-    block next to the regular quote. The after-hours price and change are
-    compared, and every session block is returned.
+    block next to the regular quote. Only like pre/post sessions with usable
+    print times are compared, and every raw reading and session block is returned.
 
     Args:
         symbol: Ticker.
 
     Returns:
         Envelope with ``data`` carrying ``pre_market``, ``regular``,
-        ``post_market`` and the Finviz after-hours block.
+        ``post_market``, the Finviz after-hours block, and reconciled overnight
+        readings from TradingView's BOATS socket and Yahoo's quote header.
     """
     resolved = await _symbols_for(symbol)
     ticker = strip_exchange(symbol).upper()
@@ -2173,39 +2432,39 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
             "postmarket_change": row.get("postmarket_change"),
             "postmarket_volume": row.get("postmarket_volume"),
             "regular_close": row.get("close"),
+            "regular_close_time": row.get("update_time"),
             "current_session": row.get("current_session"),
         }
 
     async def overnight_call() -> dict[str, Any]:
         """The overnight venue's own print, from TradingView's quote socket.
 
-        The scanner has no row for the overnight venues at all, so this is the
-        only route to the 20:00-04:00 window among our providers. It is asked
-        only for US equities, where that window exists; for anything else the
-        leg reports ``NOT_ATTEMPTED`` instead of inventing a session.
+        The scanner has no row for the overnight venues at all. Its chart quote
+        socket resolves BOATS independently of Yahoo's overnight quote field.
+        A failed socket remains a reported failure, not a missing instrument.
         """
         if not resolved["TRADINGVIEW"].found:
             raise NotApplicable(TRADINGVIEW, "no TradingView symbol")
         bare = strip_exchange(resolved["TRADINGVIEW"].symbol or ticker).upper()
-        try:
-            rows = await tv_access.live_session_quotes([f"BOATS:{bare}"])
-        except (NoDataError, ProviderError) as exc:
-            raise NotApplicable(
-                TRADINGVIEW,
-                getattr(exc, "message", None) or f"no overnight print ({exc})",
-            ) from exc
+        rows = await tv_access.live_session_quotes([f"BOATS:{bare}"])
         values = rows.get(f"BOATS:{bare}") or {}
         price = values.get("lp")
         if price is None:
             raise NoDataError(TRADINGVIEW, f"overnight venue has no print for {bare}")
+        if values.get("lp_time") is None:
+            raise NoDataError(TRADINGVIEW, f"overnight venue has no print time for {bare}")
         return {
-            "session": values.get("current_session"),
+            "session": "overnight",
+            "raw_session": values.get("current_session"),
             "price": price,
             "change_percent": values.get("chp"),
             "volume": values.get("volume"),
             "print_time": values.get("lp_time"),
             "exchange": values.get("exchange"),
             "feed_mode": values.get("update_mode"),
+            "symbol": values.get("original_name"),
+            "description": values.get("description"),
+            "asset_class": values.get("type"),
         }
 
     async def fv_call() -> dict[str, Any]:
@@ -2228,21 +2487,38 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
         except NoDataError as exc:
             raise NotApplicable(SA, exc.message) from exc
 
-    async def _overnight() -> dict[str, Any] | None:
-        """The overnight print, or ``None``; never sinks the other legs.
+    async def yh_overnight_call() -> dict[str, Any]:
+        """Ask Yahoo for the overnight header, preserving attempted no-data."""
+        if not resolved["YAHOO"].found:
+            raise NotApplicable(YAHOO, resolved["YAHOO"].note or "no Yahoo symbol")
+        block = await yh_access.overnight(resolved["YAHOO"].symbol)
+        if block is None:
+            raise NoDataError(YAHOO, f"Yahoo has no overnight print for {ticker}")
+        return block
 
-        This is a second TradingView endpoint rather than a provider of its own,
-        so it cannot ride in ``ask``: that holds one leg per provider. It is a
-        session block, not a vote, so its absence must not change the label.
-        """
+    async def _overnight(provider: str, call) -> tuple[str, Any, dict[str, Any] | None]:
+        """Collect a session reading and its typed failure without hiding either."""
         try:
-            return await overnight_call()
-        except (NotApplicable, NoDataError, ProviderError):
-            return None
+            return provider, await call(), None
+        except NotApplicable as exc:
+            return provider, None, {
+                "code": "NOT_ATTEMPTED", "message": exc.message,
+            }
+        except Exception as exc:  # noqa: BLE001 - a secondary endpoint cannot sink the tool
+            error = _error_dict(provider, exc)
+            error["detail"] = {**(error.get("detail") or {}), "capability": "overnight"}
+            return provider, None, error
 
-    pair, overnight = await asyncio.gather(
+    # These are separate upstream capabilities, so they cannot share ``Pair``:
+    # Yahoo already has the chart leg and TradingView the scanner. Their session
+    # results are reconciled independently below and do not change the coverage
+    # of these providers' primary pre/post fields.
+    pair, overnight_results = await asyncio.gather(
         ask(tv_call, fv_call, yh_call, sa_fn=sa_call),
-        _overnight(),
+        asyncio.gather(
+            _overnight(TRADINGVIEW, overnight_call),
+            _overnight(YAHOO, yh_overnight_call),
+        ),
     )
 
     tv = pair.tv.payload or {}
@@ -2254,23 +2530,139 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
 
     from .reconcile import compare_values
 
-    readings = {
-        TRADINGVIEW: tv.get("postmarket_close") or tv.get("premarket_close"),
-        FINVIZ: fv_after.get("price"),
-        YAHOO: (yh.get("post_market") or {}).get("price")
-        or (yh.get("pre_market") or {}).get("price"),
-        # StockAnalysis's extended block names its own session; it is a print,
-        # not a timeline, so it joins the same comparison.
-        SA: sa_extended.get("price"),
+    overnight_readings: dict[str, dict[str, Any]] = {}
+    overnight_errors: list[dict[str, Any]] = []
+    for provider, block, error in overnight_results:
+        if error is not None:
+            if error["code"] != "NOT_ATTEMPTED":
+                overnight_errors.append({"provider": provider, **error})
+            continue
+        shaped = _shape_overnight(block)
+        if shaped is not None:
+            overnight_readings[provider] = shaped
+    response_now = _utc_now()
+    for block in overnight_readings.values():
+        active, _, _ = current_session(
+            block.get("print_time"), response_now, session_name=OVERNIGHT
+        )
+        block["is_current"] = active == OVERNIGHT
+        # Overnight crosses midnight, so the wall-clock session name alone is
+        # insufficient. Derive its occurrence from the print itself, including
+        # the final second before 04:00 ET, not from the response clock.
+        session_start = session_window_start(block.get("print_time"), OVERNIGHT)
+        block["session_window_start_utc"] = (
+            session_start.isoformat().replace("+00:00", "Z")
+            if session_start is not None
+            else None
+        )
+    overnight_comparison = compare_values(
+        {provider: block["price"] for provider, block in overnight_readings.items()},
+        tolerance_pct=0.5,
+        times={provider: block["print_time"] for provider, block in overnight_readings.items()},
+        sessions={
+            provider: block["session_window_start_utc"]
+            for provider, block in overnight_readings.items()
+        },
+        max_skew_seconds=SKEW_LIMIT_SECONDS,
+        session_boundary=False,
+        require_all_times=True,
+    )
+    current_overnight = {
+        provider: block for provider, block in overnight_readings.items()
+        if block["is_current"]
     }
-    comparison = compare_values(readings, tolerance_pct=0.5)
+    candidates = current_overnight or overnight_readings
+    dated_candidates = {
+        provider: parse_market_timestamp(block.get("print_time"))
+        for provider, block in candidates.items()
+    }
+    if any(stamp is not None for stamp in dated_candidates.values()):
+        overnight_source = max(
+            candidates,
+            key=lambda provider: (
+                dated_candidates[provider] is not None,
+                dated_candidates[provider] or datetime.min.replace(tzinfo=timezone.utc),
+            ),
+        )
+    else:
+        overnight_source = next((p for p in (YAHOO, TRADINGVIEW) if p in candidates), None)
+
+    def _extended_reading(
+        price: Any, session: str | None, timestamp: Any,
+    ) -> dict[str, Any]:
+        """Return a price with the session and print time needed to judge it."""
+        return {"price": price, "session": session, "timestamp": timestamp}
+
+    tv_session = _SESSION_NAMES.get(str(tv.get("current_session") or "").lower())
+    tv_block = PRE_MARKET if tv_session == PRE_MARKET else "post_market"
+    if tv_session not in (PRE_MARKET, "post_market"):
+        tv_session = None
+    readings = {
+        TRADINGVIEW: _extended_reading(
+            tv.get("premarket_close" if tv_block == PRE_MARKET else "postmarket_close"),
+            tv_session,
+            tv.get("regular_close_time"),
+        ),
+        # Finviz calls this block after-hours even during the pre-market. Its
+        # own timestamp, not that label, says which session it printed in.
+        FINVIZ: _extended_reading(
+            fv_after.get("price"),
+            market_session(parse_market_timestamp(fv_after.get("date"))),
+            fv_after.get("date"),
+        ),
+        # StockAnalysis names the extended window even when it supplies no
+        # timestamp. Preserve that label without letting an undated print agree.
+        SA: _extended_reading(
+            sa_extended.get("price"),
+            _SESSION_NAMES.get(
+                str(sa_extended.get("session") or "").lower().replace("-", "_")
+            )
+            or market_session(parse_market_timestamp(sa_extended.get("price_timestamp"))),
+            sa_extended.get("price_timestamp"),
+        ),
+    }
+    if tv_session is not None:
+        yahoo_session = yh.get(tv_session) or {}
+        readings[YAHOO] = _extended_reading(
+            yahoo_session.get("price"), tv_session,
+            yahoo_session.get("as_of_utc") or yahoo_session.get("price_timestamp"),
+        )
+    else:
+        # No active-window statement: use the most recent named extended print,
+        # never a pre/post fallback of the opposite session merely because it
+        # is populated. Two undated extended reads remain visible but unjudged.
+        dated = [
+            (name, block, parse_market_timestamp((block or {}).get("as_of_utc")))
+            for name, block in (
+                (PRE_MARKET, yh.get(PRE_MARKET)),
+                (POST_MARKET, yh.get(POST_MARKET)),
+            )
+        ]
+        dated = [(name, block, stamp) for name, block, stamp in dated if block and stamp]
+        if dated:
+            yahoo_session, yahoo_block, yahoo_stamp = max(dated, key=lambda item: item[2])
+            readings[YAHOO] = _extended_reading(
+                yahoo_block.get("price"), yahoo_session, yahoo_stamp,
+            )
+    readings = {provider: reading for provider, reading in readings.items() if reading["price"] is not None}
+    comparison = compare_values(
+        {provider: reading["price"] for provider, reading in readings.items()},
+        tolerance_pct=0.5,
+        times={provider: reading["timestamp"] for provider, reading in readings.items()},
+        sessions={provider: reading["session"] for provider, reading in readings.items()},
+        max_skew_seconds=SKEW_LIMIT_SECONDS,
+        session_boundary=True,
+        require_all_times=True,
+    )
 
     data = {
         "symbol": ticker,
         # The session the instrument is in right now, and which of the blocks
         # below is the live one. A caller asking "pre or post" should not have
         # to infer it from which block happens to be populated.
-        "session": _session_now(tv, yh),
+        "session": (
+            OVERNIGHT if current_overnight else _session_now(tv, yh, _utc_now())
+        ),
         "pre_market": yh.get("pre_market")
         or (
             {
@@ -2300,29 +2692,52 @@ async def stock_extended_hours(symbol: str) -> dict[str, Any]:
         "tradingview_postmarket_volume": tv.get("postmarket_volume"),
         "stockanalysis_extended_hours": sa_extended,
         "stockanalysis_regular_close": sa.get("price"),
-        # The overnight venue's own print, or ``None`` when it has none. Only
-        # TradingView reaches this window; Finviz, Yahoo and StockAnalysis stop
-        # at the after-hours close, so this block is single-source by nature and
-        # is labelled with where it came from rather than implied to be checked.
-        "overnight": _shape_overnight(overnight),
-        "overnight_source": "TRADINGVIEW" if overnight else None,
-        "after_hours_readings": {p: v for p, v in readings.items() if v is not None},
+        # The primary block is the newest BOATS print. Each provider's own
+        # observation is retained; both read the same venue rather than acting
+        # as independent market venues.
+        "overnight": overnight_readings.get(overnight_source),
+        "overnight_source": overnight_source,
+        "overnight_readings": overnight_readings,
+        "overnight_comparison": overnight_comparison,
+        "overnight_errors": overnight_errors,
+        "overnight_is_current": bool(current_overnight),
+        "after_hours_readings": {
+            provider: reading["price"] for provider, reading in readings.items()
+        },
         "after_hours_comparison": comparison,
         "resolutions": resolved["resolutions"],
     }
+    sources = {
+        TRADINGVIEW: "scanner.tradingview.com pre/post-market fields",
+        FINVIZ: f"https://finviz.com/stock?t={resolved['FINVIZ'].symbol or ticker}",
+        YAHOO: "Yahoo 1-minute extended-hours candles",
+        SA: f"https://stockanalysis.com/api/quotes/s/{resolved['SA'].symbol}"
+        if resolved["SA"].found
+        else "not carried by StockAnalysis",
+    }
+    if TRADINGVIEW in overnight_readings:
+        sources[TRADINGVIEW] += "; data.tradingview.com quote websocket, BOATS"
+    if YAHOO in overnight_readings:
+        sources[YAHOO] += "; /v7/finance/quote overnightPrice=true (Blue Ocean ATS)"
     return finalize(
         pair,
         specs=(),
-        sources={
-            TRADINGVIEW: "scanner.tradingview.com pre/post-market fields",
-            FINVIZ: f"https://finviz.com/stock?t={resolved['FINVIZ'].symbol or ticker}",
-            YAHOO: "Yahoo 1-minute extended-hours candles",
-            SA: f"https://stockanalysis.com/api/quotes/s/{resolved['SA'].symbol}"
-            if resolved["SA"].found
-            else "not carried by StockAnalysis",
-        },
+        sources=sources,
         extra={"extended_hours": data},
+        additional_errors=overnight_errors,
         data=data,
+        comparisons=[
+            {"field": "after_hours_price", **comparison},
+            {"field": "overnight_price", **overnight_comparison},
+        ],
+        fields={
+            "overnight.price": field_source(
+                overnight_source,
+                compared_providers(overnight_comparison),
+                overnight_comparison["match"],
+                supplied=overnight_readings,
+            )
+        } if overnight_source else {},
         health_warn=MONITOR.warnings_for(providers_in(pair) or ALL_PROVIDERS),
         degraded=any(
             issue["provider"] in providers_in(pair) for issue in MONITOR.issues()
@@ -2344,7 +2759,8 @@ async def technical_analysis(
     ATR, ADX, structure, trade setup). Finviz's snapshot and Yahoo's chart API
     independently provide price, RSI(14), ATR(14) and volume, which are compared
     here, so the numbers the analysis is built on are corroborated rather than
-    taken on trust.
+    taken on trust. The TradingView leg uses its resolved symbol and venue,
+    never a bare ticker redirected by the caller's default exchange.
 
     Args:
         symbol: Ticker.
@@ -2359,8 +2775,17 @@ async def technical_analysis(
     ticker = strip_exchange(symbol).upper()
 
     async def tv_call() -> dict[str, Any]:
+        tv_res = resolved["TRADINGVIEW"]
+        if not tv_res.found:
+            raise NotApplicable(TRADINGVIEW, tv_res.note or "no TradingView symbol")
+        # Use the identity resolution actually selected, not the caller's default
+        # venue applied to the bare ticker.
+        tv_symbol = tv_res.symbol
+        resolved_exchange = tv_res.venue or (
+            tv_symbol.split(":", 1)[0] if ":" in tv_symbol else exchange
+        )
         return await tv_access.technical_analysis(
-            ticker, exchange=exchange, timeframe=timeframe
+            tv_symbol, exchange=resolved_exchange, timeframe=timeframe
         )
 
     async def fv_call() -> dict[str, Any]:

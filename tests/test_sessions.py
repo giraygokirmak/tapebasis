@@ -61,6 +61,30 @@ def test_no_instant_means_no_session():
     assert market_session(None) is None
 
 
+def test_current_overnight_belongs_to_one_calendar_occurrence():
+    """A past evening print is not current on the following evening."""
+    from tapebasis.sessions import current_session
+
+    evening = datetime(2026, 11, 13, 1, 0, tzinfo=timezone.utc)
+    next_night = datetime(2026, 11, 14, 1, 0, tzinfo=timezone.utc)
+    assert current_session(evening, next_night, session_name=OVERNIGHT)[0] is None
+    this_morning = datetime(2026, 11, 13, 8, 0, tzinfo=timezone.utc)
+    active, _, start = current_session(evening, this_morning, session_name=OVERNIGHT)
+    assert active == OVERNIGHT
+    assert start == datetime(2026, 11, 13, 1, 0, tzinfo=timezone.utc)
+
+
+def test_overnight_window_uses_the_prints_own_instant_at_the_close():
+    """03:59:59 ET remains in the occurrence that began at 20:00 ET."""
+    from zoneinfo import ZoneInfo
+
+    print_instant = datetime(2026, 11, 13, 3, 59, 59, tzinfo=ZoneInfo(EASTERN))
+    start = sessions.session_window_start(print_instant, OVERNIGHT)
+    assert start == datetime(2026, 11, 13, 1, 0, tzinfo=timezone.utc)
+    next_instant = print_instant.replace(second=0, minute=0, hour=4)
+    assert sessions.session_window_start(next_instant, OVERNIGHT) is None
+
+
 def test_a_naive_instant_is_read_as_utc():
     """The boundary rule does not silently assume local wall time."""
     naive = datetime(2026, 11, 12, 14, 30)  # 09:30 ET
@@ -302,6 +326,13 @@ def test_a_missing_price_is_reported_as_missing_not_zero():
     assert live["price"] is None
     assert live["timestamp"] is None
     assert live["session"] is None
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_numbers_are_not_prices(value):
+    assert sessions._number(value) is None
+    live = live_print("BLOOMBERG", {"price": value, "previous_close": 338.32})
+    assert live["price"] is None
 
 
 def test_session_names_map_every_provider_spelling():

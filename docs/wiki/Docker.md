@@ -10,7 +10,7 @@ can skip the build entirely:
 
 ```bash
 docker pull ghcr.io/giraygokirmak/tapebasis:latest
-docker run -d --name tapebasis -p 6013:8000 \
+docker run -d --name tapebasis -p 127.0.0.1:6013:8000 \
   -v tapebasis-state:/home/mcpuser/.tapebasis \
   ghcr.io/giraygokirmak/tapebasis:latest
 curl -s localhost:6013/health
@@ -39,14 +39,23 @@ curl -s localhost:6013/health
 `--build` builds from this checkout. To run the published image through compose instead, drop the
 `build:` block (or set `image:` to the GHCR reference) and run `docker compose up -d`.
 
-Host port `6013` is the published host port; change the mapping in `docker-compose.yml` if it
-conflicts with something already running.
+Host port `6013` is bound to `127.0.0.1` by default; change the mapping in `docker-compose.yml` if
+it conflicts with something already running. Compose accepts an explicit `TAPEBASIS_BIND_ADDRESS`
+for a deliberate non-loopback deployment. `HOST=0.0.0.0` remains necessary inside the container for
+the published port to work; it does not choose the host bind address.
+
+The MCP and health listener is unauthenticated. Remote exposure requires more than changing an
+environment setting: the operator must choose a routable host address and place authentication and
+transport protection in front of the service. For example, `TAPEBASIS_BIND_ADDRESS=0.0.0.0`
+deliberately publishes on every host interface. Do not use that setting on an untrusted network
+without a reverse proxy that supplies authentication and TLS. This change does not add authentication
+or server-level DNS/host-header filtering.
 
 ## Standalone build
 
 ```bash
 docker build -t tapebasis:latest .
-docker run -d --name tapebasis -p 6013:8000 \
+docker run -d --name tapebasis -p 127.0.0.1:6013:8000 \
   -v tapebasis-state:/home/mcpuser/.tapebasis \
   tapebasis:latest
 ```
@@ -56,7 +65,15 @@ docker run -d --name tapebasis -p 6013:8000 \
 | Stage | Purpose |
 | --- | --- |
 | builder | Upgrades pip/certifi, installs `uv`, installs the package system-wide |
-| runtime | Copies installed site-packages and app source, upgrades pip/certifi again, installs `tini`, drops to `mcpuser` |
+| runtime | Copies installed site-packages and the console entrypoint, upgrades pip/certifi again, installs `tini`, drops to `mcpuser` |
+
+The build copies only `pyproject.toml`, README, license files and `src`. Setuptools installs the
+package and its coinlist text resources into `site-packages`, and runtime copies that installed
+package rather than the checkout. `.dockerignore` excludes environment files except `.env.example`,
+credential-shaped filenames, source-control state, tests, docs, local environments, caches and
+runtime state. It reduces exposure from both the Docker context and the image. Deployment operators
+must still avoid placing secret material under a permitted source filename: filename-based filtering
+is a safeguard, not a secret scanner.
 
 Both stages upgrade `pip` and `certifi` before touching PyPI. This is deliberate: base images built
 before the eMudhra/emSign CA incident (Oct 2026) ship a `certifi` that still trusts the compromised
@@ -92,6 +109,10 @@ If you build your own image from a different base, either install `tini` the sam
 | Path in container | Volume | Contents |
 | --- | --- | --- |
 | `/home/mcpuser/.tapebasis` | `tapebasis-state` | Chart PNGs + health baselines |
+
+`stock_chart` includes the PNG in the MCP JSON response, so remote clients do not need access to this
+volume. The retained local copy is optional. At most 32 generated chart PNGs are kept, oldest first by
+modification time; unrelated files are not removed.
 
 Persisting the health state is not cosmetic: the drift baselines live there. Without the volume,
 every restart re-baselines and a slow-moving schema change could be adopted as the new normal.
@@ -171,8 +192,8 @@ shape. Check `docker compose logs` and then [Troubleshooting](Troubleshooting).
 
 - **No proxy support** is built in. Every provider reaches its upstream directly. Use
   network-level egress control if you need it.
-- The image has no authentication. Do not expose port 6013 to the public internet without a reverse
-  proxy that adds auth.
+- The image has no authentication. Compose binds to loopback by default. Do not choose a remote bind
+  address without a reverse proxy that adds authentication and TLS.
 - Image size is dominated by pandas and the provider layer; it is not a slim image. `curl_cffi`, which
   the Bloomberg provider needs for its TLS impersonation, adds about 14 MB of bundled libcurl.
 - Bloomberg needs no extra configuration in the image: `curl_cffi` is a normal dependency, and the

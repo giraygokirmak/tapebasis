@@ -24,6 +24,25 @@ CLOSE_ISO = "2026-11-03T21:00:01+00:00"
 
 
 @pytest.fixture(autouse=True)
+def _isolate_extended_session_upstreams(monkeypatch):
+    """Stub session endpoints and return real ones for focused unit tests."""
+    from tapebasis import tv_access, yh_access
+
+    real_overnight = yh_access.overnight
+    real_live_quotes = tv_access.live_session_quotes
+
+    async def no_overnight(_symbol):
+        return None
+
+    async def no_socket(_tickers, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(yh_access, "overnight", no_overnight)
+    monkeypatch.setattr(tv_access, "live_session_quotes", no_socket)
+    return real_overnight, real_live_quotes
+
+
+@pytest.fixture(autouse=True)
 def _isolate_health_state(tmp_path, monkeypatch):
     monkeypatch.setenv("TAPEBASIS_HEALTH_STATE", str(tmp_path / "health.json"))
     from tapebasis import health

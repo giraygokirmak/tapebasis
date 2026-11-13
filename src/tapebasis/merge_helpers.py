@@ -280,36 +280,45 @@ def news_overlap(tv_items: Iterable[dict[str, Any]], fv_items: Iterable[dict[str
 # ── Options ──────────────────────────────────────────────────────────────────
 
 
-def _option_rows(contracts: Iterable[dict[str, Any]], side: str) -> list[dict[str, Any]]:
-    """Normalise option contracts from either provider.
+def _first_present(contract: dict[str, Any], *keys: str) -> Any:
+    """Return the first non-None field, keeping legitimate zeroes and False."""
+    for key in keys:
+        value = contract.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _option_rows(
+    contracts: Iterable[dict[str, Any]], side: str, expiry: Any = None
+) -> list[dict[str, Any]]:
+    """Normalise contracts, retaining zeroes and the chain-level expiry.
 
     Finviz uses ``lastVolume``/``openInterest``/``bidPrice``/``askPrice``/
     ``lastClose``; Yahoo uses ``volume``/``openInterest``/``bid``/``ask``/
-    ``lastPrice``.
+    ``lastPrice``. ``expiry`` supplies a date only where neither contract date
+    field reports one; falsy numeric values never fall through to another key.
     """
     out = []
     for contract in contracts:
+        contract_expiry = _first_present(contract, "expiry", "expiration")
         out.append(
             {
                 "side": side,
                 "strike": to_float(contract.get("strike")),
-                "expiry": contract.get("expiry") or contract.get("expiration"),
-                "volume": to_float(
-                    contract.get("lastVolume") or contract.get("volume")
-                ),
+                "expiry": expiry if contract_expiry is None else contract_expiry,
+                "volume": to_float(_first_present(contract, "lastVolume", "volume")),
                 "open_interest": to_float(
-                    contract.get("openInterest") or contract.get("open_interest")
+                    _first_present(contract, "openInterest", "open_interest")
                 ),
                 "iv": to_float(
-                    contract.get("iv") or contract.get("implied_volatility")
-                    or contract.get("impliedVolatility")
+                    _first_present(contract, "iv", "implied_volatility", "impliedVolatility")
                 ),
                 "last": to_float(
-                    contract.get("lastClose") or contract.get("last_price")
-                    or contract.get("lastPrice") or contract.get("last")
+                    _first_present(contract, "lastClose", "last_price", "lastPrice", "last")
                 ),
-                "bid": to_float(contract.get("bidPrice") or contract.get("bid")),
-                "ask": to_float(contract.get("askPrice") or contract.get("ask")),
+                "bid": to_float(_first_present(contract, "bidPrice", "bid")),
+                "ask": to_float(_first_present(contract, "askPrice", "ask")),
             }
         )
     return out
@@ -319,10 +328,12 @@ def fv_options_fields(payload: dict[str, Any]) -> dict[str, Any]:
     contracts = payload.get("contracts") or []
     # Finviz tags each row with ``type`` = "call" | "put".
     calls = _option_rows(
-        [c for c in contracts if str(c.get("type", "")).lower() == "call"], "call"
+        [c for c in contracts if str(c.get("type", "")).lower() == "call"],
+        "call", payload.get("expiry")
     )
     puts = _option_rows(
-        [c for c in contracts if str(c.get("type", "")).lower() == "put"], "put"
+        [c for c in contracts if str(c.get("type", "")).lower() == "put"],
+        "put", payload.get("expiry")
     )
     return {
         "expiries": payload.get("expiries") or [],
@@ -343,18 +354,28 @@ def tv_options_fields(payload: dict[str, Any]) -> dict[str, Any]:
         "expiry": payload.get("requested_expiry"),
         "underlying_price": payload.get("underlying_price"),
         "underlying_change_percent": payload.get("underlying_change_pct"),
-        "calls": _option_rows(calls, "call"),
-        "puts": _option_rows(puts, "put"),
+        "calls": _option_rows(calls, "call", payload.get("requested_expiry")),
+        "puts": _option_rows(puts, "put", payload.get("requested_expiry")),
         "contract_count": payload.get("call_count", 0) + payload.get("put_count", 0),
         "raw_calls": calls,
         "raw_puts": puts,
     }
 
 
+def _option_contract_key(row: dict[str, Any]) -> tuple | None:
+    """Identify one contract by side, expiry and strike, never strike alone."""
+    if any(row.get(field) is None for field in ("side", "expiry", "strike")):
+        return None
+    return row["side"], row["expiry"], round(float(row["strike"]), 4)
+
+
 def option_overlap(
     tv_rows: Iterable[dict[str, Any]], fv_rows: Iterable[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Match contracts by strike and compare volume / open interest.
+    """Match side, expiry and strike, then compare volume and open interest.
+
+    Every key is required. A missing side or expiry cannot establish identity,
+    so it never contributes an agreement or an agreement percentage.
 
     Volume is the primary agreement signal. Open interest is compared only when
     *both* sides report a positive value: Yahoo zeroes OI on contracts expiring
@@ -362,14 +383,14 @@ def option_overlap(
     contradiction, and is counted separately instead of as a mismatch.
     """
     fv_list = list(fv_rows)
-    tv_index = {round(float(r["strike"]), 4): r for r in tv_rows if r.get("strike") is not None}
+    tv_index = {key: row for row in tv_rows if (key := _option_contract_key(row)) is not None}
     rows = []
     volume_agree = volume_compared = 0
     oi_agree = oi_compared = oi_unavailable = 0
     for contract in fv_list:
-        if contract.get("strike") is None:
+        key = _option_contract_key(contract)
+        if key is None:
             continue
-        key = round(float(contract["strike"]), 4)
         counterpart = tv_index.get(key)
         if counterpart is None:
             continue
@@ -390,8 +411,9 @@ def option_overlap(
                 volume_agree += 1
         rows.append(
             {
-                "strike": key,
+                "strike": key[2],
                 "side": contract["side"],
+                "expiry": contract["expiry"],
                 "volume": {
                     "tv": counterpart.get("volume"),
                     "fv": contract.get("volume"),

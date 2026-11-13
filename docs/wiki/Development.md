@@ -44,7 +44,8 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_finviz_breakdown.py` | The `income-breakdown` island (statement scale, bank row sets, `converted` axes, absent/ETF cases) and the classification-chip markup |
 | `test_indicators_calc.py` | The pure indicator calculators: window means and band values (rolling sums, monotonic deques), warmup `None` regions, Wilder smoothing, the bisect percentile rank and the EGX rank equivalence |
 | `test_yahoo_shaping.py` | Yahoo `meta` fields that were previously dropped: session open/high/low, volume, company name |
-| `test_extended_hours.py` | Pre/post session volumes from the scanner row, the Yahoo-session fallback, and the session the instrument reports it is in |
+| `test_extended_hours.py` | Pre/post volumes, Yahoo's native overnight header fields and cookie/crumb renewal, two-provider same-occurrence comparison, historical prints, and visible secondary errors |
+| `test_quote_socket.py` | TradingView `qsd` delta merging, deadline and receive error behavior, empty-result caching, and rate-limit conversion |
 | `test_server.py` | Tool registration, MCP surface |
 | `test_dockerfile.py` | The deployment contract: `tini` as PID 1, the entrypoint argv, `init: true` in compose |
 | `test_quality_gate.py` | The gate's own documentation checks, against a temporary repository |

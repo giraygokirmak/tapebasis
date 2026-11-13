@@ -1,6 +1,8 @@
 """Tests for the provider payload shapers (pure mapping, no network)."""
 from __future__ import annotations
 
+import pytest
+
 from tapebasis.merge_helpers import (
     fv_earnings_fields,
     fv_indices_fields,
@@ -9,6 +11,7 @@ from tapebasis.merge_helpers import (
     fv_quote_fields,
     news_overlap,
     option_overlap,
+    _option_contract_key,
     tv_indices_fields,
     tv_options_fields,
 )
@@ -112,14 +115,88 @@ def test_tradingview_options_use_normalised_keys():
     assert fields["calls"][0]["iv"] == 0.4
 
 
+def test_option_rows_preserve_zero_and_missing_values():
+    fields = tv_options_fields(
+        {
+            "calls": [
+                {
+                    "strike": 100,
+                    "lastVolume": None,
+                    "volume": 0,
+                    "openInterest": 0,
+                    "open_interest": 50,
+                    "iv": 0,
+                    "implied_volatility": 0.4,
+                    "last_price": 0,
+                    "lastPrice": 42,
+                    "bidPrice": 0,
+                    "bid": 3,
+                    "askPrice": 0,
+                    "ask": 3,
+                },
+                {"strike": 101},
+            ]
+        }
+    )
+    zero, missing = fields["calls"]
+    for key in ("volume", "open_interest", "iv", "last", "bid", "ask"):
+        assert zero[key] == 0
+        assert missing[key] is None
+
+
+def test_chain_level_expiry_is_explicit_not_invented_as_a_wildcard():
+    fields = fv_options_fields(
+        {"expiry": "2026-11-04", "contracts": [{"type": "call", "strike": 100}]}
+    )
+    assert fields["calls"][0]["expiry"] == "2026-11-04"
+    assert _option_contract_key(fields["calls"][0]) == ("call", "2026-11-04", 100.0)
+
+
 def test_option_overlap_compares_volume_and_skips_zero_open_interest():
-    tv = [{"strike": 330.0, "volume": 10, "open_interest": 0}]
-    fv = [{"strike": 330.0, "volume": 10, "open_interest": 500, "side": "call"}]
+    tv = [
+        {
+            "side": "call",
+            "expiry": "2026-11-04",
+            "strike": 330.0,
+            "volume": 10,
+            "open_interest": 0,
+        }
+    ]
+    fv = [
+        {
+            "side": "call",
+            "expiry": "2026-11-04",
+            "strike": 330.0,
+            "volume": 10,
+            "open_interest": 500,
+        }
+    ]
     overlap = option_overlap(tv, fv)
     assert overlap["volume_agreeing"] == 1
     # Yahoo zeroes OI on same-day expiries: a convention, not a conflict.
     assert overlap["open_interest_compared"] == 0
     assert overlap["open_interest_unavailable"] == 1
+
+
+@pytest.mark.parametrize(
+    "different_field, tv_value, fv_value",
+    [
+        ("side", "call", "put"),
+        ("expiry", "2026-11-04", "2026-11-06"),
+        ("side", None, "call"),
+    ],
+)
+def test_option_overlap_never_agrees_on_a_different_contract(
+    different_field, tv_value, fv_value
+):
+    tv = [{"side": "call", "expiry": "2026-11-04", "strike": 330.0, "volume": 10}]
+    fv = [{"side": "call", "expiry": "2026-11-04", "strike": 330.0, "volume": 10}]
+    tv[0][different_field] = tv_value
+    fv[0][different_field] = fv_value
+    overlap = option_overlap(tv, fv)
+    assert overlap["matched_contracts"] == 0
+    assert overlap["volume_compared"] == 0
+    assert overlap["volume_agreeing"] == 0
 
 
 def test_earnings_fields_use_real_key_names():

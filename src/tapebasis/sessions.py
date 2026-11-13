@@ -29,7 +29,8 @@ credited with a print it did not send.
 """
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
+import math
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -82,11 +83,84 @@ def market_session(moment: datetime | None) -> str | None:
     return None
 
 
+def session_window_start(
+    print_time: Any, session_name: str = OVERNIGHT
+) -> datetime | None:
+    """Return the UTC start of the window containing the print itself.
+
+    Overnight crosses midnight, so a print before 04:00 ET belongs to the
+    20:00 ET occurrence that started on the preceding calendar date. The
+    calculation uses the print, not the response clock, including at 03:59:59.
+    """
+    stamp = parse_market_timestamp(print_time)
+    if stamp is None or market_session(stamp) != session_name:
+        return None
+    eastern = stamp.astimezone(_EASTERN)
+    opening_times = {
+        PRE_MARKET: time(4, 0),
+        REGULAR: time(9, 30),
+        POST_MARKET: time(16, 0),
+        OVERNIGHT: time(20, 0),
+    }
+    opening = opening_times.get(session_name)
+    if opening is None:
+        return None
+    start = eastern.replace(
+        hour=opening.hour, minute=opening.minute, second=0, microsecond=0
+    )
+    if session_name == OVERNIGHT and eastern.hour < 4:
+        start -= timedelta(days=1)
+    return start.astimezone(timezone.utc)
+
+
+def current_session(
+    print_time: Any,
+    now: datetime | None = None,
+    *,
+    session_name: str | None = None,
+) -> tuple[str | None, datetime | None, datetime | None]:
+    """Validate a print's session against the current trading window.
+
+    Args:
+        print_time: The provider's own market print timestamp.
+        now: The response clock, defaulting to UTC now.
+        session_name: The session a venue block asserts, if it has one.
+
+    Returns:
+        ``(current_name, print_instant, current_window_start)``. The name is
+        non-null only when the print belongs to the same calendar occurrence of
+        that window. A timestamp without a known window can never be current.
+    """
+    stamp = parse_market_timestamp(print_time)
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(timezone.utc)
+    active = market_session(moment)
+    if session_name is not None and active != session_name:
+        return None, stamp, None
+    if stamp is None:
+        return None, None, None
+    stamp = stamp.astimezone(timezone.utc)
+    # Both windows are contiguous in Eastern time except for overnight, which
+    # crosses midnight. Comparing only hours would confuse an old evening print
+    # with this morning's overnight session, so preserve both calendar dates.
+    if active is None:
+        return None, stamp, None
+    start = session_window_start(moment, active)
+    if start is None:
+        return None, stamp, None
+    if stamp < start or stamp > moment:
+        return None, stamp, start
+    return active, stamp, start
+
+
 def _number(value: Any) -> float | None:
     """A finite float, or ``None``. Strings and bools are not prices."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def _baseline(price: Any, change_percent: Any) -> float | None:

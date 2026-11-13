@@ -39,6 +39,10 @@ scanner's own delay, the same fact Bloomberg's `exchange_delay` reports for its 
 StockAnalysis getter: its quote API carries price, range, volume and the 52-week range, and P/E lives
 on a separate stock page this tool does not fetch.
 
+Symbol resolution only decides who can be asked. Once a symbol resolves, an empty provider response
+remains a visible `NO_DATA` error; it is not reclassified as `NOT_ATTEMPTED` merely because the
+symbol is absent from that provider's payload.
+
 `data.session` (also at the envelope level) names the window `data.price` is a print from:
 `pre_market`, `regular`, `post_market` or `overnight`, and `data.price_field` names the provider field it
 was read from. Each provider's live print is resolved before comparison, because the obvious price field
@@ -96,11 +100,22 @@ extended-hours block rides along as `stockanalysis_extended_hours`.
 
 Bulk quotes for a ticker list.
 
-Each row carries its own `data_provider`, `providers_answered` and an `agrees` flag, one ticker can
-be `ALL` while another is single-source or `NONE` in the same response. Multi-source rows also carry
-`price_source` (whose print the single `price` came from), a `fields` map and their own
-`comparisons` and `freshness` blocks. Rows where every provider came up empty carry a `misses` map
-explaining why. The FX day change is reported but never compared, exactly as in `stock_quote`.
+Each row carries its own `data_provider`, `providers_answered` and an `agrees` verdict, one ticker can
+be `ALL` while another is single-source or `NONE` in the same response. `agrees` is `true` only when
+at least one compared field agreed and none disagreed, `false` on a real conflict, and `null` when
+both price and change percent reached no verdict. Multi-source rows also carry `price_source` (whose
+print the single `price` came from), a `fields` map and their own `comparisons` and `freshness`
+blocks.
+
+Every row exposes `misses` and `errors` for its failed or uncarried providers, not just rows where
+every provider came up empty. Error entries include `provider`, `symbol`, the original `code` and the
+`message`; an omitted batch row is `NO_DATA`. A provider-wide empty response is also `NO_DATA`, never
+`NOT_ATTEMPTED`. A returned payload without a usable price is also `NO_DATA`, never coverage.
+The envelope aggregates the symbol-tagged failures, and its coverage and comparison notice are
+derived from the actual provider-symbol outcomes. A complete `ALL` row does not mask an attempted
+miss for another ticker: the envelope is `PARTIAL` while every provider supplying a row still
+appears in `providers_answered`. The FX day change is reported but never compared, exactly as in
+`stock_quote`.
 
 Each row also names its `session`, the window its `price` is a print from, and the `price_field` it was
 read from. The price itself is the live print rather than the obvious field: TradingView's scanner
@@ -143,7 +158,9 @@ US equity screener, cross-checked on the same instruments.
 
 TradingView ranks the whole market server-side (`sort_by` ∈ `market_cap`, `dividend_yield`, `change`,
 `price`). Finviz is then asked about **exactly the tickers TradingView returned**, and the price is
-compared at 0.5 %.
+compared at 0.5 %. The optional `finviz_filters` expression is forwarded to Finviz to narrow this
+selected universe; its usual filter validation applies. The option never replaces the TradingView
+ranking with an independent Finviz universe.
 
 Asking Finviz for its own independent ranking would compare two unrelated universes: a market-cap
 ranking against a day-%-change ranking shared zero rows on every call, so the "multi-source" screen
@@ -203,8 +220,19 @@ Sentiment does **not** need the token, see [`market_sentiment`](#market_sentimen
 Options chain for one expiry, from Finviz and Yahoo, with the underlying price confirmed by
 TradingView's scanner (TradingView publishes no chain).
 
-Contracts are matched by strike; volume compared at 5 %, open interest at 1 % when both report it.
-Finviz carries full greeks.
+Contracts are matched by side, expiry and strike; volume is compared at 5 %, open interest at 1 %
+when both report it. Finviz carries full greeks. A missing side, expiry or strike cannot establish a
+match and never counts as agreement. A contract-level expiry takes precedence over its chain-level
+expiry, which supplies the date only when the contract does not carry one.
+
+With no explicit expiry, each provider chooses its nearest expiry independently. If those dates differ,
+`data.expiry` is `null` and `data.overlap` carries `not_comparable: true` with both dates in its reason;
+the contracts are not compared. When both chains establish the same date, including an explicitly
+requested shared expiry, comparison proceeds normally. `data.expiries` names the providers separately
+when their available-expiry lists differ.
+
+Missing activity fields stay `null` and a reported zero stays zero in normalisation and comparison;
+neither falls through to another field or becomes a synthetic zero.
 
 Yahoo reports zero open interest for contracts expiring the same day, so a `0 vs N` pair is counted
 under `open_interest_unavailable`, not as a mismatch.
@@ -215,28 +243,54 @@ Earnings dates, reported-quarter history, estimate revisions and post-earnings p
 
 Finviz owns the detailed tables; its `earnings_date` is the **last reported** timestamp, which is why
 it is returned as `finviz_earnings_date`, separate from `next_earnings_date` (the upcoming release
-from TradingView's calendar). The two are not the same fact and are never conflated.
+from TradingView or Yahoo). Finviz never serves as a fallback for the next date: when both calendars
+have no upcoming timestamp, were not attempted, or failed, `next_earnings_date` is `null`. A
+historical report cannot be reported as a future event.
 
 ### `stock_extended_hours`
 
 Pre-/post-market price from every independent source that publishes one: TradingView's
 `premarket_*`/`postmarket_*` scanner columns, Finviz's after-hours print, Yahoo's 1-minute
 extended-hours candles, and StockAnalysis's extended-hours block. The after-hours reading is compared
-at 0.5 %; each provider's raw reading stays in `after_hours_readings`. Each session block carries the
-session's `volume` when the feed reports one, so a pre-market print can be told apart from a single
-lot. StockAnalysis's block is also served whole as `stockanalysis_extended_hours`, next to
-`stockanalysis_regular_close`.
+at 0.5 %; each provider's raw reading stays in `after_hours_readings`. Only like pre-market or
+post-market windows can be judged. Differing named sessions are `not_comparable`, and agreement on a
+shared window requires a usable print timestamp from every provider in the pair. StockAnalysis's
+pre/post label is retained even if it supplies no timestamp, but an undated pair stays unjudged.
+Each session block carries the session's `volume` when the feed reports one, so a pre-market print
+can be told apart from a single lot. StockAnalysis's block is also served whole as
+`stockanalysis_extended_hours`, next to `stockanalysis_regular_close`.
 
 `data.session` names the window the instrument is in right now (`pre_market`, `regular`,
 `post_market`, `overnight`), so a caller asking "pre or post" does not have to infer it from which block
 happens to be populated. It comes from TradingView's own `current_session` statement, with the newest
 Yahoo block as the fallback.
 
-The `overnight` block is the 20:00-04:00 ET window that the alternative venues trade. Only TradingView
-reaches it, through the quote websocket rather than the scanner, which has no row for those venues at
-all (`BOATS:AAPL` is rejected on every scanner market). The block carries the venue's own print time,
-its session label, its volume and `feed_mode`. `overnight_source` names where it came from, because it
-is single-source by nature: Finviz, Yahoo and StockAnalysis stop at the after-hours close.
+The `overnight` block is the 20:00-04:00 ET window that Blue Ocean ATS trades. It is read natively
+through TradingView's `BOATS:` quote websocket and Yahoo's `/v7/finance/quote` request with
+`overnightPrice=true`. TradingView's scanner has no BOATS row, and Yahoo's 1-minute chart stops at
+after-hours, so neither is substituted for the venue's print. Yahoo uses its `overnightMarketPrice`,
+`overnightMarketChange`, `overnightMarketChangePercent` and `overnightMarketTime` quote fields, with
+`regularMarketPrice` as the overnight change reference. Yahoo publishes no overnight volume on that
+header, so its volume is null rather than inferred from regular trading.
+
+`overnight_source` names the provider whose newest eligible print is in `overnight`. Each provider block
+stays in `overnight_readings`, including `print_time`, seconds-preserving ISO `as_of_utc`, the 20:00 ET
+window start in `session_window_start_utc`, `is_current`, and venue identity when reported.
+`overnight_comparison` compares only prints from that same overnight occurrence with usable,
+sufficiently close timestamps. These are two readers of one BOATS venue, not independent market venues.
+`overnight_errors` reports a failed secondary
+endpoint; those errors are appended to the envelope's `errors`, so a `null` overnight block is not
+silently indistinguishable from venue no-data. The primary pre/post comparisons remain independent.
+
+Every overnight block carries `is_current` and the aggregate has `overnight_is_current`. After 04:00 ET
+the last BOATS print remains available as the last overnight observation with `is_current: false`,
+but is not called the live print and cannot displace a pre-market price. TradingView's `out_of_session`
+and `streaming` labels alone do not assert that the venue is still trading.
+
+TradingView quote `qsd` frames are deltas. They are merged into the preceding symbol snapshot rather
+than replacing it, so a later frame carrying only `lp_time`, volume or another field cannot delete a
+price already received. A quiet empty socket is not cached, and receive or rate-limit failures keep
+a typed provider error instead of silently becoming `overnight: null`.
 
 Yahoo's candles are requested over two days, not one: `range=1d` stopped returning a `timestamp`
 array, so every call reported `NO_DATA` with "unexpected response shape: 'timestamp'" and the session
@@ -246,6 +300,9 @@ falls in, which keeps yesterday's regular prints out of today's pre-market block
 ### `technical_analysis`
 
 Full indicator stack from TradingView (RSI, MACD, EMAs, Bollinger, ATR, ADX, structure, trade setup).
+The request uses the resolved TradingView symbol and venue, including an `EXCHANGE:TICKER`
+resolution; the caller's default exchange cannot route a resolved ticker to the wrong venue. If a
+resolved symbol has no venue and no exchange prefix, the `exchange` argument remains the fallback.
 Finviz's snapshot and Yahoo's chart API independently confirm four headline readings in `cross_check`:
 price (0.5 %), RSI(14) (12 %), ATR(14) (10 %), volume (2 %).
 
@@ -267,6 +324,19 @@ OHLCV, then compared. Finviz is not asked: it has no history endpoint.
 Compared: total return (1 %), win rate (2 %), trade count (exact), max drawdown (2 %), Sharpe (5 %),
 buy-and-hold return (1 %). Identical candles produce identical metrics; a divergence means the two
 feeds disagree about the instrument's history, which is worth knowing before trusting either.
+
+For RSI, Bollinger, MACD, EMA cross, Supertrend, RSI pullback, Keltner breakout and triple EMA, a
+signal is evaluated only after its bar closes and the entry or exit fills at the following bar's open.
+A signal on the final close cannot open a new position. A final bar with no following execution bar
+still force-closes an open position at its close and flags that exit in the raw trade list. The
+optional per-trade log carries the same execution prices; per-bar equity marking includes the entry
+bar's close and applies net costs at exit.
+
+Donchian retains its separate assumption: an intrabar high/low breakout fills at that bar's close.
+This is not a close-confirmed signal model, but final-bar entries are suppressed there too. The
+`execution_model` block names the mode, signal-to-fill rule, final-bar rule and forced-exit treatment
+instead of requiring callers to infer them. It is present on single backtests, comparisons and
+walk-forward results.
 
 ### `stock_backtest_compare`
 
@@ -311,6 +381,20 @@ those legs are marked `NOT_ATTEMPTED`, which is **not** an error and is excluded
 | `stock_chart` | Rendered PNG candlestick chart | TradingView produces text analysis, not images |
 | `stock_dilution` | Dilution risk model (share count, float, cash runway) | Finviz only models dilution-prone companies; others return `NONE` with that reason |
 | `stock_screener_filters` | Finviz screener filter catalogue | Finviz's proprietary filter vocabulary |
+
+### `stock_chart`
+
+The normal MCP JSON envelope contains `data.image_base64`, `data.mime_type: "image/png"`,
+`data.bytes` and chart dimensions. Decode `image_base64` to obtain the PNG. A remote client does not
+need filesystem access. `data.path` and the convenience field `image_path` carry the same
+server-local path when a local copy can be written; that path is not a URL and is secondary to the
+inline image. A write failure returns the inline image, a `null` path and a warning.
+
+`fv_access.chart` calls `chart_service.get_chart_base64`, which makes one Finviz request and writes
+the resulting bytes to local storage when possible. It does not call `download_chart` for a second
+copy. At most 32 service-generated PNGs are retained, ordered by modification time. Unknown files in
+the chart directory are never deleted. The existing `download_chart` path-only service remains
+available for callers that explicitly do not want base64 in the response.
 
 ### `market_sentiment`
 

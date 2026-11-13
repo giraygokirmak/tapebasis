@@ -283,7 +283,7 @@ async def live_session_quotes(
 
     try:
         rows = await quote_socket.quotes(tickers, timeout=timeout)
-    except RateLimited as exc:
+    except (RateLimited, RateLimitError) as exc:
         raise ProviderError(
             PROVIDER,
             "TradingView is rate limiting the quote socket; retry later",

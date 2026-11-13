@@ -151,7 +151,7 @@ def _safe_round(value, ndigits: int = 4):
 
 
 def _normalize_contract(c: Dict[str, Any], side: str) -> Dict[str, Any]:
-    """Flatten a Yahoo option contract into the shape we return."""
+    """Flatten a Yahoo contract, preserving missing versus zero activity."""
     return {
         "contract_symbol": c.get("contractSymbol"),
         "side": side,  # 'call' or 'put'
@@ -159,8 +159,8 @@ def _normalize_contract(c: Dict[str, Any], side: str) -> Dict[str, Any]:
         "last_price": _safe_round(c.get("lastPrice"), 2),
         "bid": _safe_round(c.get("bid"), 2),
         "ask": _safe_round(c.get("ask"), 2),
-        "volume": c.get("volume") or 0,
-        "open_interest": c.get("openInterest") or 0,
+        "volume": c.get("volume"),
+        "open_interest": c.get("openInterest"),
         "implied_volatility": _safe_round(c.get("impliedVolatility"), 4),
         "in_the_money": c.get("inTheMoney"),
         "expiration": _fmt_expiry(c.get("expiration")),

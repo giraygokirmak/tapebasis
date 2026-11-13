@@ -127,7 +127,7 @@ so five identical `stock_quote` calls make one Yahoo request instead of five ser
 | `FINVIZ_CACHE_TTL` | `30` | Scraped-page cache lifetime (s) |
 | `FINVIZ_TIMEOUT` | `25` | finviz.com HTTP timeout (s) |
 | `FINVIZ_MAX_RETRIES` | `2` | Retries per failed request inside the provider layer |
-| `FINVIZ_CHART_DIR` | `~/.tapebasis/charts` | Chart PNG output directory |
+| `FINVIZ_CHART_DIR` | `~/.tapebasis/charts` | Optional local chart copy; at most 32 generated PNGs, with inline base64 always primary |
 | `FINVIZ_NEWS_TTL` | `60` | News cache lifetime (s) |
 | `FINVIZ_USER_AGENT` | browser UA | Override the User-Agent sent to finviz.com |
 
@@ -215,7 +215,15 @@ export them in the parent process.
 | `~/.tapebasis/health_state.json` | Probe baselines + last verdicts | Yes, re-baselines on next round |
 | `~/.tapebasis/charts/` | Generated chart PNGs | Yes |
 
-Both live under `~/.tapebasis` by default; in Docker that is the `tapebasis-state` volume.
+The chart service retains at most 32 PNGs with its own generated filename pattern, deleting the oldest
+by modification time. It never deletes unrelated files or unknown filenames, even when the configured
+chart directory already contains them. Retention is best effort: a filesystem pruning error does not
+invalidate a downloaded inline image. Directory write and cleanup races can temporarily exceed the
+limit until the next successful cleanup. `FINVIZ_CHART_MAX_FILES` is not configurable.
+
+Both live under `~/.tapebasis` by default; in Docker that is the `tapebasis-state` volume. The image
+itself receives only the installed package, including its coinlist text data. Runtime state under
+`.tapebasis` is excluded from the Docker build context.
 
 ## Symbol resolution cache
 

@@ -396,9 +396,11 @@ def compare_numeric(
 
 
 def compare_symbol(tv_value: Any, fv_value: Any) -> dict[str, Any]:
-    """Case-insensitive symbol/exchange comparison."""
+    """Compare symbols case-insensitively, rejecting blank values."""
     tv_norm = str(tv_value).strip().upper() if tv_value is not None else None
     fv_norm = str(fv_value).strip().upper() if fv_value is not None else None
+    tv_norm = tv_norm or None
+    fv_norm = fv_norm or None
     match = None if tv_norm is None or fv_norm is None else tv_norm == fv_norm
     return {"tv": tv_value, "fv": fv_value, "match": match}
 
@@ -416,13 +418,14 @@ def compare_values(
     now: datetime | None = None,
     not_comparable_reason: str | None = None,
     require_all_times: bool = False,
+    sessions: Mapping[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """Compare the same field across N providers.
 
     Produces ``values`` (provider -> raw reading), pairwise ``diff`` rows, and a
     single ``match``: ``True`` when every pair of readings that can be compared
-    agrees, ``False`` when any pair disagrees, ``None`` when fewer than two
-    providers reported a usable value.
+    agrees, ``False`` when any pair disagrees, ``None`` when no pair reached a
+    verdict, including when fewer than two providers reported a usable value.
 
     ``times`` + ``max_skew_seconds`` exist because some fields are only
     comparable when the readings describe the *same* observation. A day
@@ -453,7 +456,10 @@ def compare_values(
     first place, where no amount of timestamp checking helps: FX has no single
     official previous close, so each provider derives its own roll and the day
     changes are answers to different questions. The readings are kept and the
-    pair is reported as not comparable with that reason.
+    pair is reported as not comparable with that reason. ``sessions`` names the
+    trading session each reading came from. Different named sessions are never
+    a conflict between providers. Undated session reads cannot establish that
+    they describe the same observation.
     """
     from .freshness import parse_market_timestamp, session_date
 
@@ -566,7 +572,27 @@ def compare_values(
                     tolerance_pct=tolerance_pct,
                     absolute_floor=absolute_floor,
                 )
-            reason = _skew_reason(left, right)
+            reason = None
+            if sessions is not None:
+                # Session labels are evidence of a different observation, or
+                # of a missing proof, not an extra guard after timestamp skew.
+                left_session = sessions.get(left)
+                right_session = sessions.get(right)
+                if left_session is not None or right_session is not None:
+                    if left_session != right_session:
+                        reason = (
+                            f"prints belong to different trading sessions "
+                            f"({left_session!r} and {right_session!r}), so the "
+                            "readings are not the same observation"
+                        )
+                    elif stamps.get(left) is None or stamps.get(right) is None:
+                        reason = (
+                            f"the shared {left_session!r} session has no dated print "
+                            "from every provider, so the readings cannot be shown "
+                            "to describe the same observation"
+                        )
+            if reason is None:
+                reason = _skew_reason(left, right)
             if reason is not None:
                 pair = {
                     **pair,
@@ -574,8 +600,20 @@ def compare_values(
                     "not_comparable": reason,
                 }
             if pair["match"] is None:
-                if reason is not None:
-                    row["pairs"].append({"between": [left, right], **pair})
+                if reason is None:
+                    if kind == "symbol":
+                        reason = (
+                            "at least one reading has no usable symbol value, so "
+                            "the readings cannot be compared"
+                        )
+                    else:
+                        reason = (
+                            f"at least one reading is non-numeric "
+                            f"({present[left]!r} or {present[right]!r}), so no "
+                            "numeric pair can be compared"
+                        )
+                pair["not_comparable"] = reason
+                row["pairs"].append({"between": [left, right], **pair})
                 continue
             matches.append(pair["match"])
             if pair.get("diff") is not None:
@@ -1030,7 +1068,11 @@ def notice_for(merged: Merged) -> str:
             f"single value.{why} The conflict is reported, not silently resolved."
         )
     else:
-        base += " Compared fields agree within tolerance."
+        if merged.comparisons:
+            if any(row.get("match") is True for row in merged.comparisons):
+                base += " Compared fields agree within tolerance."
+            elif all(row.get("match") is None for row in merged.comparisons):
+                base += " No compared fields reached an agreement verdict."
         if decision == "newest":
             base += (
                 f" The value shown is {chosen}'s because it printed more recently "
@@ -1051,6 +1093,13 @@ def notice_for(merged: Merged) -> str:
 
 def _identity(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
+
+
+def _comparison_label(row: Mapping[str, Any]) -> str:
+    """Name a comparison row by symbol when a batch has repeated fields."""
+    symbol = row.get("symbol")
+    field = str(row.get("field") or "")
+    return f"{symbol}.{field}" if symbol else field
 
 
 def finalize(
@@ -1077,13 +1126,19 @@ def finalize(
     warnings: Iterable[str] = (),
     degraded: bool = False,
     extra: dict[str, Any] | None = None,
+    additional_errors: Iterable[dict[str, Any]] = (),
     health_warn: Iterable[str] | None = None,
     data: Any = None,
     provider: DataProvider | None = None,
     answered: Iterable[str] | None = None,
+    comparisons: list[dict[str, Any]] | None = None,
     fields: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Reconcile attempts and wrap the result in the public envelope.
+
+    ``additional_errors`` appends capability-specific failures to
+    ``pair.errors`` rather than replacing those primary-provider failures.
+    Other extra keys are merged into the envelope as before.
 
     ``tv_norm``/``fv_norm``/``yh_norm``/``sa_norm``/``bb_norm`` map a raw
     provider payload into the normalised field dict that ``specs`` read from;
@@ -1100,8 +1155,9 @@ def finalize(
     when the tool can observe the real time: without it the frozen-feed guard is
     inert, which keeps test fixtures (dated in the past) deterministic.
 
-    ``data``/``provider``/``answered``/``fields`` override the reconciled
-    payload, label and per-field provenance; tools that compose a richer payload
+    ``data``/``provider``/``answered``/``comparisons``/``fields`` override the
+    reconciled payload, label, comparison verdicts and per-field provenance;
+    tools that compose a richer payload
     than the field list use them, and the notice is rebuilt so it still states
     the true providers and any mismatches.
     """
@@ -1141,6 +1197,18 @@ def finalize(
         merged.data = data
     if answered is not None:
         merged.answered = list(answered)
+    if comparisons is not None:
+        merged.comparisons = comparisons
+        merged.mismatches = list(dict.fromkeys(
+            _comparison_label(row)
+            for row in comparisons
+            if row.get("match") is False
+        ))
+        merged.not_comparable = list(dict.fromkeys(
+            _comparison_label(row)
+            for row in comparisons
+            if row.get("not_comparable")
+        ))
     if fields is not None:
         merged.fields = fields
     if provider is not None:
@@ -1189,7 +1257,7 @@ def finalize(
         fields=merged.fields,
         comparisons=merged.comparisons,
         sources=sources or {},
-        errors=pair.errors,
+        errors=pair.errors + list(additional_errors),
         warnings=warn_list,
         degraded=degraded,
         providers_answered=merged.answered,

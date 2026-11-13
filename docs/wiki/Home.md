@@ -141,9 +141,11 @@ another one, which is narrower whenever a pair could not be compared. `agreement
 stay in `comparisons`, the field is named in `notice` and `warnings`, and `data_provider` stays `ALL`.
 An agent reading it can see exactly how far apart they are.
 
-**A non-comparison is not a disagreement.** A field the providers measure against different baselines
-is reported as `not_comparable`, with the reason in `pairs[].not_comparable`, instead of being called
-a conflict. That covers a day change or volume whose prints belong to different sessions, a print
+**A non-comparison is not a disagreement.** A field with non-numeric or blank-symbol readings, or one
+the providers measure against different baselines, is reported as `not_comparable`, with the reason
+in `pairs[].not_comparable`, instead of being called a conflict or agreement. The positive agreement
+notice requires an actual agreeing pair. That covers a day change or volume whose prints belong to
+different sessions, a print
 past the staleness ceiling, a provider that exposes no print time at all, a declared feed delay
 (Bloomberg states 15 minutes on equities, so its pairs stop being comparable at that distance), and a
 field with no shared definition: spot FX has no single official previous close, so an FX day change is
@@ -171,8 +173,11 @@ print wins, and labelling the row from the delayed feed would name a session the
 to. A provider that names no session keeps its old value rather than being credited with a print it did
 not send.
 
-The overnight window (20:00-04:00 ET on the alternative venues) is TradingView-only and labelled as
-such: no other provider in the set carries it. Details: [Design Decisions](Design-Decisions).
+The overnight window (20:00-04:00 ET on Blue Ocean ATS) is read independently from TradingView's
+`BOATS:` quote socket and Yahoo's quote-header fields. The selected print and its source are explicit;
+comparison retains both observations but does not imply that two readers of BOATS are independent
+market venues. A closed overnight print remains visible without claiming to be live. Details:
+[Design Decisions](Design-Decisions#51-overnight-is-an-independently-read-session-not-a-chart-inference).
 
 ---
 

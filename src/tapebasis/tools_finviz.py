@@ -219,7 +219,9 @@ async def stock_chart(
         height: Pixel height.
 
     Returns:
-        Envelope labelled ``FINVIZ`` with the saved PNG path and dimensions.
+        Envelope labelled ``FINVIZ`` with ``image_base64``, ``mime_type`` and
+        dimensions in ``data``. ``image_path`` and ``data.path`` point to a
+        best-effort local copy, which is optional and server-local.
     """
     ticker = strip_exchange(symbol).upper()
     try:
@@ -237,6 +239,7 @@ async def stock_chart(
         data,
         symbol=ticker,
         source=f"https://charts2-node.finviz.com/chart?t={to_finviz(ticker)}",
+        warnings=data.get("warnings", []),
         extra={"image_path": data.get("path")},
     )
 

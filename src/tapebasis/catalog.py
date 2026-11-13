@@ -46,8 +46,11 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
             "session date; otherwise the field is reported as not cross-checked. "
             "Bloomberg's equity prints are 15 minutes delayed, so it often lands in "
             "`not_comparable` rather than in the agreement count: that is the delay "
-            "being stated, not a provider fault. StockAnalysis covers US equities and "
-            "ETFs only and its quote surface is the same consolidated tape Yahoo serves, "
+            "being stated, not a provider fault. Invalid pairs keep match=null and a "
+            "reason; a resolved empty response is NO_DATA, not NOT_ATTEMPTED. The "
+            "positive agreement notice requires an actual agreeing pair. StockAnalysis "
+            "covers US equities and ETFs only and its quote surface is the same "
+            "consolidated tape Yahoo serves, "
             "so agreement between those two is weak corroboration rather than two "
             "independent witnesses. On FX the day change is never "
             "compared: spot FX has no single official previous close."
@@ -69,7 +72,10 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
             "Bloomberg is asked about at most 4 tickers per batch because "
             "its page path is paced at 10 s per request; the rest are named in "
             "`warnings` and are not counted as Bloomberg-answered. StockAnalysis has no "
-            "such cap: its pacing absorbs a short list."
+            "such cap: its pacing absorbs a short list. Every row carries "
+            "misses and symbol-tagged errors with their original codes. `agrees` is null when "
+            "neither comparison reaches a verdict, and the envelope coverage and notice follow "
+            "the row results."
         ),
     },
     {
@@ -80,6 +86,7 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "notes": (
             "TradingView ranks the whole market server-side; Finviz is then asked about "
             "exactly those tickers, so one universe is compared instead of two rankings. "
+            "Optional finviz_filters forward to Finviz and narrow that selected universe. "
             "cross_checked_rows / agreeing_rows / not_comparable_rows summarise the result. "
             "Finviz screener rows carry no print time, so a row match cannot be proven and "
             "is reported as not_comparable. Yahoo has no screener, so it is not asked."
@@ -116,7 +123,7 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "name": "stock_options_chain",
         "capability": "options chain for one expiry",
         "providers": "ALL",
-        "comparison": "per-contract volume matched by strike (open interest when both report it)",
+        "comparison": "side, expiry and strike; volume, with open interest when both report it",
         "notes": (
             "Finviz and Yahoo both publish chains; TradingView publishes none, but its "
             "scanner independently quotes the underlying (reported as "
@@ -128,26 +135,32 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "name": "stock_earnings",
         "capability": "earnings dates, history and estimate revisions",
         "providers": "ALL",
-        "comparison": "next release date across the TradingView, Yahoo and Finviz calendars",
+        "comparison": "upcoming release date from TradingView or Yahoo",
         "notes": (
             "Finviz owns the reported-quarter tables; its earnings_date is the last "
             "*reported* timestamp, which is why it is returned separately from "
-            "next_earnings_date."
+            "next_earnings_date and is never a fallback for that upcoming date."
         ),
     },
     {
         "name": "stock_extended_hours",
-        "capability": "pre-/post-market price",
+        "capability": "pre-/post-market and overnight prices",
         "providers": "ALL",
-        "comparison": "after-hours price (0.5% tolerance) across TradingView, Finviz, Yahoo, StockAnalysis",
+        "comparison": "like-session pre/post and overnight price (0.5% tolerance)",
         "notes": (
             "TradingView's scanner exposes premarket_close / postmarket_close (and their "
             "session volumes), Finviz the after-hours print on the quote page, Yahoo "
             "full session windows from 1-minute candles, and StockAnalysis an "
             "extended-hours block next to its regular quote. Every reading stays in "
             "`after_hours_readings`; each pre/post block carries its `volume` when the "
-            "feed reports one. StockAnalysis's block is also served whole as "
-            "`stockanalysis_extended_hours`."
+            "feed reports one. Comparisons require the same named window and a usable "
+            "timestamp from both sides. Cross-session and undated reads stay visible "
+            "with match=null and a reason rather than producing a verdict. StockAnalysis's "
+            "block is also served whole as `stockanalysis_extended_hours`. TradingView's "
+            "BOATS socket and Yahoo's quote header separately supply overnight prints, "
+            "retained under overnight_readings. The selected block names its source, "
+            "compares only compatible prints from the same overnight occurrence, and keeps "
+            "endpoint failures in overnight_errors. Last night's closed print is not current."
         ),
     },
     {
@@ -157,7 +170,9 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "comparison": "price, RSI(14), ATR(14), volume against Finviz and Yahoo",
         "notes": (
             "TradingView computes the full indicator stack; Finviz's snapshot and Yahoo's "
-            "chart API independently confirm the headline readings in `cross_check`."
+            "chart API independently confirm the headline readings in `cross_check`. The "
+            "TradingView call uses the resolved symbol and venue, then any symbol prefix, "
+            "with the caller exchange only as the final fallback."
         ),
     },
     # ── Finviz-only: served, labelled FINVIZ, explicitly single-source ───────

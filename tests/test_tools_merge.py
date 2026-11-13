@@ -7,6 +7,10 @@ into ordinary tool responses.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import time
+
 import pytest
 
 from tapebasis import tools_finviz, tools_market
@@ -120,10 +124,11 @@ def _bloomberg_quote(*, price=331.9, print_time="2026-11-03T21:00:01+00:00"):
 @pytest.mark.asyncio
 async def test_quote_all_when_every_provider_answers(fake_providers):
     result = await tools_market.stock_quote("AAPL")
-    assert result["data_provider"] == "ALL"
+    assert result["data_provider"] == "PARTIAL"
     assert result["verification"] == "MULTI_SOURCE"
     assert result["providers_answered"] == ["TRADINGVIEW", "FINVIZ", "YAHOO"]
-    assert result["errors"] == []
+    assert {e["provider"] for e in result["errors"]} == {"SA", "BLOOMBERG"}
+    assert all(e["code"] == "NO_DATA" for e in result["errors"])
     fields = {row["field"]: row["match"] for row in result["comparisons"]}
     assert fields["price"] is True
     assert result["data"]["price"] == pytest.approx(331.9)
@@ -142,7 +147,7 @@ async def test_all_is_reported_for_two_of_three(fake_providers):
     assert result["data_provider"] == "PARTIAL"
     assert result["verification"] == "MULTI_SOURCE"
     assert result["providers_answered"] == ["TRADINGVIEW", "FINVIZ"]
-    assert [e["provider"] for e in result["errors"]] == ["YAHOO"]
+    assert [e["provider"] for e in result["errors"]] == ["YAHOO", "SA", "BLOOMBERG"]
     assert "PARTIAL" in result["notice"]
 
 
@@ -154,7 +159,9 @@ async def test_quote_labels_single_source_when_finviz_and_yahoo_fail(fake_provid
     assert result["data_provider"] == "TRADINGVIEW"
     assert result["verification"] == "SINGLE_SOURCE"
     assert "single-source" in result["notice"].lower()
-    assert {e["provider"] for e in result["errors"]} == {"FINVIZ", "YAHOO"}
+    assert {e["provider"] for e in result["errors"]} == {
+        "FINVIZ", "YAHOO", "SA", "BLOOMBERG"
+    }
     # The surviving provider's value is still served.
     assert result["data"]["price"] == pytest.approx(331.9)
 
@@ -181,14 +188,36 @@ async def test_quote_none_when_every_provider_fails(fake_providers):
         "TRADINGVIEW",
         "FINVIZ",
         "YAHOO",
+        "SA",
+        "BLOOMBERG",
     }
+
+
+@pytest.mark.asyncio
+async def test_quote_reports_no_data_after_resolution(fake_providers):
+    from tapebasis.providers_state import NoDataError
+
+    for key in ("tv", "fv", "yh"):
+        fake_providers[key] = NoDataError(
+            {"tv": "TRADINGVIEW", "fv": "FINVIZ", "yh": "YAHOO"}[key],
+            "resolved symbol has empty payload",
+        )
+    fake_providers["bb"] = _bloomberg_quote()
+
+    result = await tools_market.stock_quote("AAPL")
+
+    assert result["data_provider"] == "BLOOMBERG"
+    errors = {e["provider"]: e for e in result["errors"]}
+    for provider in ("TRADINGVIEW", "FINVIZ", "YAHOO"):
+        assert errors[provider]["code"] == "NO_DATA"
+        assert "empty payload" in errors[provider]["message"]
 
 
 @pytest.mark.asyncio
 async def test_quote_flags_a_real_mismatch_instead_of_hiding_it(fake_providers):
     fake_providers["tv"]["close"] = 300.0  # 10% off the other two
     result = await tools_market.stock_quote("AAPL")
-    assert result["data_provider"] == "ALL"  # everyone answered...
+    assert result["data_provider"] == "PARTIAL"  # every resolved request is in the ask set
     price_row = next(r for r in result["comparisons"] if r["field"] == "price")
     assert price_row["match"] is False  # ...but they do not agree
     assert "disagree" in result["notice"]
@@ -225,8 +254,10 @@ async def test_symbol_finviz_does_not_carry_is_not_an_error(
     monkeypatch.setattr(tools_market, "resolve", fake_resolve)
 
     result = await tools_market.stock_quote("XAUUSD")
-    assert result["data_provider"] == "ALL"
-    assert result["errors"] == []  # Finviz NOT_ATTEMPTED is not an error
+    assert result["data_provider"] == "PARTIAL"
+    # StockAnalysis does not carry this instrument, so it was never asked.
+    assert [e["provider"] for e in result["errors"]] == ["BLOOMBERG"]
+    assert result["errors"][0]["code"] == "NO_DATA"
     assert result["providers_answered"] == ["TRADINGVIEW", "YAHOO"]
     assert result["resolutions"]["FINVIZ"]["symbol"] is None
     assert result["resolutions"]["TRADINGVIEW"]["symbol"] == "OANDA:XAUUSD"
@@ -332,17 +363,18 @@ async def test_every_value_survives_in_comparisons_after_selection(fake_provider
 
 @pytest.mark.asyncio
 async def test_quote_counts_bloomberg_when_it_answers(fake_providers):
-    """Bloomberg answered: coverage is ALL and it is named in the list."""
+    """Bloomberg answered: its reading is named, while StockAnalysis's miss is explicit."""
     fake_providers["bb"] = _bloomberg_quote()
     result = await tools_market.stock_quote("AAPL")
-    assert result["data_provider"] == "ALL"
+    assert result["data_provider"] == "PARTIAL"
     assert result["providers_answered"] == [
         "TRADINGVIEW",
         "FINVIZ",
         "YAHOO",
         "BLOOMBERG",
     ]
-    assert result["errors"] == []
+    assert [e["provider"] for e in result["errors"]] == ["SA"]
+    assert result["errors"][0]["code"] == "NO_DATA"
     price_row = next(c for c in result["comparisons"] if c["field"] == "price")
     assert price_row["values"]["BLOOMBERG"] == pytest.approx(331.9)
     # The delay travels with the payload, not only inside the comparison block.
@@ -391,7 +423,7 @@ async def test_bloomberg_failure_is_an_error_not_a_lost_response(fake_providers)
     result = await tools_market.stock_quote("AAPL")
     assert result["data_provider"] == "PARTIAL"
     assert result["providers_answered"] == ["TRADINGVIEW", "FINVIZ", "YAHOO"]
-    assert [e["provider"] for e in result["errors"]] == ["BLOOMBERG"]
+    assert [e["provider"] for e in result["errors"]] == ["SA", "BLOOMBERG"]
     assert result["data"]["price"] == pytest.approx(331.9)
 
 
@@ -438,6 +470,7 @@ async def test_prices_ask_bloomberg_and_keep_the_delay_visible(fake_providers, m
     monkeypatch.setattr(yh_access, "quote", yh_quote)
     fake_providers["bb"] = _bloomberg_quote()
 
+    monkeypatch.setattr(tools_market, "resolve_sa", lambda query, **kwargs: _resolved("SA", None))
     result = await tools_market.stock_prices("AAPL")
     row = result["data"][0]
     assert row["data_provider"] == "ALL"
@@ -449,6 +482,73 @@ async def test_prices_ask_bloomberg_and_keep_the_delay_visible(fake_providers, m
     ]
     assert row["exchange_delay"] == "15 Minutes"
     assert row["comparisons"]["price"]["values"]["BLOOMBERG"] == pytest.approx(331.9)
+
+
+@pytest.mark.asyncio
+async def test_prices_expose_symbol_errors_and_keep_other_rows(
+    fake_providers, monkeypatch
+):
+    from tapebasis import fv_access, tv_access, yh_access
+    from tapebasis.providers_state import NoDataError, ProviderError
+
+    async def fake_resolve(query, provider, **kwargs):
+        if provider == "SA":
+            return _resolved(provider, None, query=query)
+        if provider == "BLOOMBERG":
+            return _resolved(provider, "AAPL:US" if query == "AAPL" else None, query=query)
+        return _resolved(
+            provider,
+            {"TRADINGVIEW": f"NASDAQ:{query}", "FINVIZ": query, "YAHOO": query}[provider],
+            query=query,
+        )
+
+    async def tv_quotes(symbols):
+        return {"AAPL": {
+            "ticker": "NASDAQ:AAPL", "close": 100.0, "change": 1.0,
+            "update_time": "2026-11-03T21:00:00+00:00",
+        }}
+
+    async def fv_rows(symbols):
+        return [
+            {"ticker": "AAPL", "price": 100.0, "change": 1.0,
+             "last_update": "2026-11-03T21:00:00+00:00"},
+            {"ticker": "MSFT", "price": 200.0, "change": 1.0,
+             "last_update": "2026-11-03T21:00:00+00:00"},
+        ]
+
+    async def yh_quote(symbol):
+        if symbol == "MSFT":
+            raise NoDataError("YAHOO", "chart for MSFT is empty")
+        if symbol == "IBM":
+            raise ProviderError("YAHOO", "IBM transport failed", code="UPSTREAM_ERROR")
+        return {
+            "price": 100.0, "change_pct": 1.0,
+            "market_time": "2026-11-03T21:00:00+00:00",
+        }
+
+    monkeypatch.setattr(tools_market, "resolve", fake_resolve)
+    monkeypatch.setattr(tv_access, "quotes", tv_quotes)
+    monkeypatch.setattr(fv_access, "screener_rows", fv_rows)
+    monkeypatch.setattr(yh_access, "quote", yh_quote)
+
+    result = await tools_market.stock_prices("AAPL,MSFT,IBM")
+    msft, ibm = result["data"][1], result["data"][2]
+
+    assert msft["misses"]["YAHOO"] == "chart for MSFT is empty"
+    assert msft["errors"][0]["code"] == "NO_DATA"
+    assert msft["errors"][0]["symbol"] == "MSFT"
+    assert msft["data_provider"] == "FINVIZ"
+
+    assert "no TradingView row returned for IBM" in ibm["misses"]["TRADINGVIEW"]
+    errors_by_provider = {error["provider"]: error for error in ibm["errors"]}
+    assert errors_by_provider["YAHOO"]["code"] == "UPSTREAM_ERROR"
+    assert errors_by_provider["YAHOO"]["symbol"] == "IBM"
+    assert ibm["misses"]["YAHOO"] == "IBM transport failed"
+    assert ibm["misses"]["FINVIZ"] == "no Finviz row returned for IBM"
+    assert ibm["providers_answered"] == []
+    assert "YAHOO" in [error["provider"] for error in result["errors"]]
+    assert any(error["symbol"] == "IBM" for error in result["errors"])
+    assert result["data_provider"] == "PARTIAL"
 
 
 @pytest.mark.asyncio
@@ -495,6 +595,8 @@ async def test_prices_state_the_source_of_every_field(fake_providers, monkeypatc
 
     monkeypatch.setattr(tv_access, "quotes", tv_quotes)
     monkeypatch.setattr(fv_access, "screener_rows", fv_rows)
+    monkeypatch.setattr(tools_market, "resolve_sa", lambda query, **kwargs: _resolved("SA", None))
+    monkeypatch.setattr(tools_market, "_bloomberg_resolution", lambda symbol: _resolved("BLOOMBERG", None))
     monkeypatch.setattr(yh_access, "quote", yh_quote)
 
     result = await tools_market.stock_prices("AAPL")
@@ -631,9 +733,10 @@ async def test_prices_fill_ignores_a_provider_with_no_print_time(
 
 
 @pytest.mark.asyncio
-async def test_quote_counts_stockanalysis_when_it_answers(fake_providers):
+async def test_quote_counts_stockanalysis_when_it_answers(fake_providers, monkeypatch):
     """StockAnalysis is a leg, not a side channel: it names itself in coverage."""
-    fake_providers["sa"] = fake_providers["sa"] or _stockanalysis_quote()
+    fake_providers["sa"] = _stockanalysis_quote()
+    monkeypatch.setattr(tools_market, "_bloomberg_resolution", lambda symbol: _resolved("BLOOMBERG", None))
     result = await tools_market.stock_quote("AAPL")
     assert result["data_provider"] == "ALL"
     assert result["providers_answered"] == [
@@ -1065,19 +1168,21 @@ async def test_a_leg_that_was_asked_and_errored_is_partial_not_all(fake_provider
     assert result["verification"] == "MULTI_SOURCE"
     assert result["providers_answered"] == ["TRADINGVIEW", "FINVIZ"]
     # The failure is still explained rather than hidden behind the label.
-    assert [e["provider"] for e in result["errors"]] == ["YAHOO"]
+    assert [e["provider"] for e in result["errors"]] == ["YAHOO", "SA", "BLOOMBERG"]
     assert "PARTIAL" in result["notice"]
 
 
 @pytest.mark.asyncio
-async def test_an_unasked_leg_does_not_turn_coverage_partial(fake_providers):
+async def test_an_unasked_leg_does_not_turn_coverage_partial(fake_providers, monkeypatch):
     """``NOT_ATTEMPTED`` means the provider was never asked, so ALL still holds.
 
     This is the difference the ask set exists for: a provider with no endpoint
     for the request, or one that does not carry the instrument, must not be
-    counted as a failure that downgrades the response. Bloomberg's fixture is a
-    ``NoDataError`` and rides as ``NOT_ATTEMPTED``, so the response stays ``ALL``.
+    counted as a failure that downgrades the response. These resolutions are
+    uncarried, unlike the shared fixture's asked-but-empty legs.
     """
+    monkeypatch.setattr(tools_market, "resolve_sa", lambda query, **kwargs: _resolved("SA", None))
+    monkeypatch.setattr(tools_market, "_bloomberg_resolution", lambda symbol: _resolved("BLOOMBERG", None))
     result = await tools_market.stock_quote("AAPL")
 
     assert result["data_provider"] == "ALL"
@@ -1179,3 +1284,400 @@ async def test_the_two_quote_tools_reach_the_same_verdict(fake_providers, monkey
     # The undated leg still appears in ``supplied``: it answered, it just could
     # not be judged, which is a different fact from silence.
     assert "FINVIZ" in prices["fields"]["price"]["supplied"]
+
+
+@pytest.mark.asyncio
+async def test_prices_keep_provider_wide_empty_batch_as_no_data(
+    fake_providers, monkeypatch
+):
+    """An attempted provider with no rows is NO_DATA, never NOT_ATTEMPTED."""
+    from tapebasis import fv_access, tv_access, yh_access
+    from tapebasis.providers_state import NoDataError
+
+    async def empty_tv(symbols):
+        return {}
+
+    async def empty_yahoo(symbol):
+        raise NoDataError("YAHOO", f"{symbol} has no quote")
+
+    async def empty_finviz(symbols, **kwargs):
+        raise NoDataError("FINVIZ", "Finviz returned no rows")
+
+    monkeypatch.setattr(fv_access, "screener_rows", empty_finviz)
+    fake_providers["sa"] = NoDataError("SA", "StockAnalysis returned no rows")
+    fake_providers["bb"] = NoDataError("BLOOMBERG", "Bloomberg returned no rows")
+    monkeypatch.setattr(tv_access, "quotes", empty_tv)
+    monkeypatch.setattr(yh_access, "quote", empty_yahoo)
+
+    result = await tools_market.stock_prices("AAPL")
+    row = result["data"][0]
+
+    assert result["data_provider"] == "NONE"
+    assert row["data_provider"] == "NONE"
+    assert set(row["misses"]) == {
+        "TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"
+    }
+    row_errors = {(error["provider"], error["symbol"]): error for error in row["errors"]}
+    envelope_errors = {
+        (error["provider"], error["symbol"]): error for error in result["errors"]
+    }
+    for provider in ("TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"):
+        error = row_errors[(provider, "AAPL")]
+        assert error["code"] == "NO_DATA"
+        assert envelope_errors[(provider, "AAPL")] == error
+    assert row_errors[("YAHOO", "AAPL")]["message"] == "AAPL has no quote"
+
+
+@pytest.mark.asyncio
+async def test_batch_coverage_and_notices_follow_each_symbol(
+    fake_providers, monkeypatch
+):
+    """A miss on symbol X cannot split complete coverage for symbol Y."""
+    from tapebasis import fv_access, tv_access, yh_access
+
+    async def resolve(query, provider, **kwargs):
+        symbols = {
+            "TRADINGVIEW": f"NASDAQ:{query}",
+            "FINVIZ": query,
+            "YAHOO": query,
+        }
+        return _resolved(provider, symbols.get(provider), query=query)
+
+    async def tv_rows(symbols):
+        return {"AAPL": {
+            "close": 100, "change": 1,
+            "update_time": "2026-11-03T21:00:00+00:00",
+        }}
+
+    async def fv_rows(symbols):
+        return [{"ticker": "AAPL", "price": 100, "change": 1,
+                 "last_update": "2026-11-03T21:00:00+00:00"}]
+
+    async def yh_quote(symbol):
+        if symbol == "MSFT":
+            return {"price": None, "change_pct": None, "market_time": None}
+        return {"price": 100, "change_pct": 1,
+                "market_time": "2026-11-03T21:00:00+00:00"}
+
+    monkeypatch.setattr(tools_market, "resolve", resolve)
+    monkeypatch.setattr(tools_market, "resolve_sa", lambda query, **kwargs: _resolved("SA", None))
+    monkeypatch.setattr(tools_market, "_bloomberg_resolution", lambda query: _resolved("BLOOMBERG", None))
+    monkeypatch.setattr(tv_access, "quotes", tv_rows)
+    monkeypatch.setattr(fv_access, "screener_rows", fv_rows)
+    monkeypatch.setattr(yh_access, "quote", yh_quote)
+
+    result = await tools_market.stock_prices("AAPL,MSFT")
+    apple, microsoft = result["data"]
+
+    assert apple["asked"] == ["TRADINGVIEW", "FINVIZ", "YAHOO"]
+    assert apple["data_provider"] == "ALL"
+    assert apple["agrees"] is True
+    assert result["data_provider"] == "PARTIAL"
+    assert {error["symbol"] for error in result["errors"]} == {"MSFT"}
+    assert all(comparison["symbol"] for comparison in result["comparisons"])
+    assert "Compared fields agree within tolerance" in result["notice"]
+
+    async def undated_tv(symbols):
+        return {"AAPL": {"close": 100.0, "change": 1.0}}
+
+    async def undated_yahoo(symbol):
+        return {"price": 100.0, "change_pct": 1.0}
+
+    monkeypatch.setattr(tools_market, "resolve_sa", lambda query, **kwargs: _resolved("SA", None))
+    monkeypatch.setattr(tools_market, "_bloomberg_resolution", lambda query: _resolved("BLOOMBERG", None))
+    monkeypatch.setattr(tv_access, "quotes", undated_tv)
+    monkeypatch.setattr(yh_access, "quote", undated_yahoo)
+    result = await tools_market.stock_prices("AAPL")
+    row = result["data"][0]
+
+    assert row["agrees"] is None
+    assert "Compared fields agree within tolerance" not in result["notice"]
+    assert result["notice"].count("Not cross-checked") == 1
+    assert "AAPL.price" in result["notice"]
+    assert "AAPL.change_percent" in result["notice"]
+
+
+async def test_batch_budget_cutoff_is_not_an_attempted_failure(
+    fake_providers, monkeypatch
+):
+    """A cutoff before the request leaves Bloomberg out of that row's ask set."""
+    budget_clock = iter([0.0, 0.0, tools_market.BLOOMBERG_BATCH_BUDGET_SECONDS + 1.0])
+
+    async def tv_rows(symbols):
+        return {"AAPL": {
+            "close": 100.0, "change": 1.0,
+            "update_time": "2026-11-03T21:00:00+00:00",
+        }}
+
+    async def fv_rows(symbols):
+        return [{"ticker": "AAPL", "price": 100.0, "change": 1.0,
+                 "last_update": "2026-11-03T21:00:00+00:00"}]
+
+    # This module owns the batch budget clock. Patching the shared ``time``
+    # module also patches pytest's timing and fixture teardown.
+    def monotonic() -> float:
+        """Advance the batch clock, delegating framework timing to the real clock."""
+        return next(budget_clock, time.monotonic())
+
+    monkeypatch.setattr(tools_market, "time", SimpleNamespace(monotonic=monotonic))
+    monkeypatch.setattr(tools_market, "resolve_sa", lambda query, **kwargs: _resolved("SA", None))
+    monkeypatch.setattr(
+        tools_market, "_bloomberg_resolution",
+        lambda query: _resolved("BLOOMBERG", f"{query}:US", query=query),
+    )
+
+    async def resolve(query, provider, **kwargs):
+        """Leave MSFT to the Bloomberg cutoff rather than another provider."""
+        symbols = {
+            "TRADINGVIEW": "NASDAQ:AAPL",
+            "FINVIZ": "AAPL",
+            "YAHOO": "AAPL",
+        }
+        return _resolved(
+            provider, symbols.get(provider) if query == "AAPL" else None, query=query,
+        )
+
+    monkeypatch.setattr(tools_market, "resolve", resolve)
+    from tapebasis import tv_access
+
+    monkeypatch.setattr(tv_access, "quotes", tv_rows)
+    from tapebasis import fv_access
+
+    monkeypatch.setattr(fv_access, "screener_rows", fv_rows)
+    result = await tools_market.stock_prices("AAPL,MSFT")
+    apple, microsoft = result["data"]
+
+    assert apple["data_provider"] == "PARTIAL"
+    assert {error["provider"] for error in apple["errors"]} == {"BLOOMBERG"}
+    assert "BLOOMBERG" not in microsoft["asked"]
+    assert microsoft["asked"] == []
+    assert microsoft["data_provider"] == "NONE"
+    assert not microsoft["errors"]
+    assert "not asked" in microsoft["misses"]["BLOOMBERG"]
+    assert any("MSFT" in warning and "budget" in warning for warning in result["warnings"])
+    assert {error["symbol"] for error in result["errors"]} == {"AAPL"}
+
+
+@pytest.mark.asyncio
+async def test_session_precedence_and_notice_override_are_explicit():
+    """An adapter exposes batch verdicts only once, named by symbol."""
+    from tapebasis.providers_state import DataProvider
+    from tapebasis.reconcile import Attempt, Pair, finalize
+
+    pair = Pair(attempts={
+        "AA": Attempt("AA", True, value={}),
+        "BB": Attempt("BB", True, value={}),
+    })
+    row = {"match": None, "not_comparable": True}
+    result = finalize(
+        pair,
+        provider=DataProvider.ALL,
+        answered=["AA", "BB"],
+        data=[{"symbol": "AA"}, {"symbol": "BB"}],
+        comparisons=[
+            {"symbol": "AA", "field": "price", **row},
+            {"symbol": "AA", "field": "change_percent", **row},
+            {"symbol": "BB", "field": "price", **row},
+        ],
+    )
+
+    assert result["notice"].count("Not cross-checked") == 1
+    assert result["notice"].split(": ")[-1] == (
+        "AA.price, AA.change_percent, BB.price."
+    )
+    assert "Compared fields agree within tolerance" not in result["notice"]
+
+
+@pytest.mark.asyncio
+async def test_screener_applies_finviz_filters_to_the_selected_tickers(monkeypatch):
+    """Finviz filters narrow the shared universe instead of being ignored."""
+    from tapebasis import fv_access, tv_access
+    from tapebasis.symbols import Resolution
+
+    calls = {}
+
+    async def tv_screen(**kwargs):
+        return {
+            "rows": [
+                {"symbol": "NASDAQ:MSFT", "description": "Microsoft", "price": 500.0},
+                {"symbol": "NASDAQ:AAPL", "description": "Apple", "price": 300.0},
+            ],
+            "as_of": "2026-11-03T21:00:00+00:00",
+        }
+
+    async def fv_rows(tickers, **kwargs):
+        calls["tickers"] = tickers
+        calls.update(kwargs)
+        return [{"ticker": "AAPL", "price": 300.0}]
+
+    async def fake_resolve(query, provider, **kwargs):
+        return Resolution(
+            query=query,
+            provider=provider,
+            symbol=None,
+            note=f"{provider} is not asked by this fixture",
+        )
+
+    monkeypatch.setattr(tv_access, "stock_screen", tv_screen)
+    monkeypatch.setattr(fv_access, "screener_rows", fv_rows)
+    monkeypatch.setattr(tools_market, "resolve", fake_resolve)
+
+    result = await tools_market.stock_screener(
+        finviz_filters="cap_largeover,sec_technology"
+    )
+
+    assert calls == {
+        "tickers": ["MSFT", "AAPL"],
+        "filters": "cap_largeover,sec_technology",
+    }
+    assert len(result["data"]["rows"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_earnings_does_not_promote_finviz_last_report_to_next(
+    fake_providers, monkeypatch
+):
+    """A historical Finviz report cannot masquerade as the next release."""
+    from tapebasis import fv_access, tv_access, yh_access
+
+    async def tv_earnings(symbol):
+        return {
+            "earnings_release_next_date": None,
+            "earnings_release_date": 1793655000,
+        }
+
+    async def fv_earnings(symbol):
+        return {"earnings_date": "2026-11-03T20:00:00+00:00"}
+
+    async def yahoo_quote(symbol):
+        return {}
+
+    monkeypatch.setattr(tv_access, "earnings", tv_earnings)
+    monkeypatch.setattr(fv_access, "earnings", fv_earnings)
+    monkeypatch.setattr(yh_access, "quote", yahoo_quote)
+
+    result = await tools_market.stock_earnings("AAPL")
+
+    assert result["data"]["next_earnings_date"] is None
+    assert result["data"]["finviz_earnings_date"] == "2026-11-03T20:00:00+00:00"
+    assert result["data"]["tradingview_next_earnings"] is None
+    assert result["data"]["yahoo_next_earnings"] is None
+    assert "last *reported*" in result["data"]["finviz_note"]
+
+
+@pytest.mark.asyncio
+async def test_technical_analysis_uses_the_resolved_tradingview_identity(
+    fake_providers, monkeypatch
+):
+    """The exchange argument cannot send a resolved ticker to another venue."""
+    from tapebasis import tv_access
+    from tapebasis.symbols import Resolution
+
+    calls = {}
+
+    async def analysis(symbol, exchange="NASDAQ", timeframe="1D"):
+        calls.update(symbol=symbol, exchange=exchange, timeframe=timeframe)
+        return {"price_data": {"current_price": 500.0}}
+
+    async def fake_resolve(query, provider, **kwargs):
+        symbols = {
+            "TRADINGVIEW": "NYSE:XYZ",
+            "FINVIZ": "XYZ",
+            "YAHOO": "XYZ",
+        }
+        return Resolution(
+            query=query,
+            provider=provider,
+            symbol=symbols[provider],
+            venue="NYSE" if provider == "TRADINGVIEW" else "",
+        )
+
+    monkeypatch.setattr(tv_access, "technical_analysis", analysis)
+    monkeypatch.setattr(tools_market, "resolve", fake_resolve)
+
+    await tools_market.technical_analysis("XYZ", exchange="NASDAQ")
+
+    assert calls == {"symbol": "NYSE:XYZ", "exchange": "NYSE", "timeframe": "1D"}
+
+
+# ── options chains ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_options_chain_marks_different_nearest_expiries_not_comparable(monkeypatch):
+    """Different expiry dates never agree, while a shared date compares normally."""
+    from tapebasis import fv_access, tv_access, yh_access
+
+    yahoo_payload = {
+        "requested_expiry": "2026-12-18",
+        "available_expiries": ["2026-12-18", "2027-01-15"],
+        "underlying_price": 100,
+        "calls": [
+            {
+                "strike": 100,
+                "expiration": "2026-12-18",
+                "volume": 0,
+                "open_interest": 0,
+            }
+        ],
+        "puts": [],
+        "call_count": 1,
+        "put_count": 0,
+    }
+
+    async def fake_resolve(query, provider, **kwargs):
+        symbol = {"TRADINGVIEW": "NASDAQ:AAPL", "FINVIZ": "AAPL", "YAHOO": "AAPL"}[provider]
+        return _resolved(provider, symbol, query=query)
+
+    async def tv_quote(symbol):
+        return {"close": 100}
+
+    async def fv_options(symbol, expiry):
+        return {
+            "expiry": "2026-11-20",
+            "expiries": ["2026-11-20", "2026-12-18"],
+            "last_close": 100,
+            "contracts": [
+                {
+                    "type": "call",
+                    "strike": 100,
+                    "expiry": "2026-11-20",
+                    "lastVolume": 0,
+                    "openInterest": 0,
+                }
+            ],
+            "count": 1,
+        }
+
+    async def yh_options(symbol, expiry):
+        assert expiry is None
+        return yahoo_payload
+
+    monkeypatch.setattr(tools_market, "resolve", fake_resolve)
+    monkeypatch.setattr(tv_access, "quote", tv_quote)
+    monkeypatch.setattr(fv_access, "options", fv_options)
+    monkeypatch.setattr(yh_access, "options", yh_options)
+
+    result = await tools_market.stock_options_chain("AAPL")
+    overlap = result["data"]["overlap"]
+    assert overlap["not_comparable"] is True
+    assert "2026-11-20" in overlap["reason"]
+    assert "2026-12-18" in overlap["reason"]
+    assert result["data"]["expiry"] is None
+    assert result["data"]["expiries"] == {
+        "FINVIZ": ["2026-11-20", "2026-12-18"],
+        "YAHOO": ["2026-12-18", "2027-01-15"],
+    }
+
+    yahoo_payload["requested_expiry"] = "2026-11-20"
+    yahoo_payload["calls"][0]["expiration"] = "2026-11-20"
+
+    async def yh_same_options(symbol, expiry):
+        assert expiry == "2026-11-20"
+        return yahoo_payload
+
+    monkeypatch.setattr(yh_access, "options", yh_same_options)
+    same = await tools_market.stock_options_chain("AAPL", expiry="2026-11-20")
+    assert same["data"]["expiry"] == "2026-11-20"
+    assert same["data"]["overlap"]["calls"]["matched_contracts"] == 1
+    assert same["data"]["overlap"]["calls"]["volume_agreeing"] == 1

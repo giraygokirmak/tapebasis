@@ -62,7 +62,9 @@ Every tool result carries exactly one of eight values. It states **coverage**, n
 `ALL` means "every provider asked answered", not "they agree". Agreement is a separate axis, and it
 lives in `comparisons[].match`. A provider that was asked and failed makes the response `PARTIAL`,
 never `ALL`: the label describes coverage, and a listed error is missing coverage.
-`providers_answered` names exactly which providers contributed.
+`providers_answered` names exactly which providers contributed. The positive agreement notice appears
+only after a real agreeing comparison. Invalid pairs keep their readings, `match: null` and a
+`not_comparable` reason; a resolved symbol that returns no data is `NO_DATA`, not `NOT_ATTEMPTED`.
 
 The same envelope also contains:
 
@@ -144,8 +146,11 @@ anything is compared, and `stock_quote` / `stock_prices` publish the session it 
 (`pre_market`, `regular`, `post_market`, `overnight`) with the day change and previous close measured
 against that same session's baseline, recovered from the print's own change. The label follows the print
 that was served rather than a nominated leg, so a delayed feed cannot name a session the served number
-does not belong to. The overnight window is TradingView-only, and is labelled as single-source rather
-than presented as cross-checked.
+does not belong to. `stock_extended_hours` independently reads Blue Ocean overnight prints from
+TradingView's `BOATS:` socket and Yahoo's quote header. `overnight_source` names the newest eligible
+print, while `overnight_readings`, `overnight_comparison` and `overnight_errors` retain provenance and
+failures. Last night's print survives after 04:00 ET with `is_current: false`, rather than being passed
+off as the live pre-market price.
 
 Implementation: [`reconcile.py`](src/tapebasis/reconcile.py) (fan-out + comparison),
 [`freshness.py`](src/tapebasis/freshness.py) (print-time parsing),
@@ -186,7 +191,8 @@ provider, is cached for an hour, and is recorded in `resolutions` (`explicit`, `
   aliased to the front-month future instead of falling into search, where it lands on `XETR:WTIF`,
   the WisdomTree Japan ETF.
 - **A missing instrument is not an outage.** `NotApplicable` becomes `NOT_ATTEMPTED`, which is
-  excluded from `errors`. "Finviz does not carry spot gold" is a structural fact, not a failure.
+  excluded from `errors`. "Finviz does not carry spot gold" is a structural fact, not a failure. Once
+  a provider's symbol has resolved, an empty quote is instead a visible `NO_DATA` error.
 
 XAUUSD, for example, resolves to `OANDA:XAUUSD` for TradingView, `XAUUSD:CUR` for Bloomberg, and
 nothing for Yahoo, Finviz and StockAnalysis, so the response is `ALL` over the two that answered,
@@ -206,7 +212,7 @@ served and clearly labelled, not hidden.
 | `market_indices` | TradingView + Finviz indices feed + Yahoo | S&P 500, Dow, Nasdaq Composite, Russell 2000, VIX levels |
 | `stock_options_chain` | Finviz + Yahoo (+ TV underlying) | volume per contract, matched by strike; OI when both report it |
 | `stock_earnings` | TradingView + Finviz + Yahoo | next release date; EPS history |
-| `stock_extended_hours` | TradingView + Finviz + Yahoo + StockAnalysis | after-hours / pre-market price |
+| `stock_extended_hours` | TradingView + Finviz + Yahoo + StockAnalysis | after-hours / pre-market price; TradingView + Yahoo overnight price |
 | `technical_analysis` | TradingView + Finviz + Yahoo | price, RSI(14), ATR(14), volume |
 | `stock_news` | Finviz + Yahoo (+ TradingView/Marketaux) | headline title overlap between the feeds |
 | `stock_backtest` | TradingView + Yahoo | strategy metrics run twice on two independent OHLCV feeds |
@@ -217,6 +223,19 @@ served and clearly labelled, not hidden.
 A provider absent from a row is absent because it has no endpoint for that capability: StockAnalysis
 carries no index, FX, crypto or foreign listing, and no provider but Finviz publishes a curated peer
 list. Those legs are `NOT_ATTEMPTED`, not errors.
+
+`stock_prices` exposes per-symbol `misses` and typed `errors`, so one failed ticker does not sink or
+silently vanish from the batch. A returned row without a usable price is `NO_DATA`, not an answer.
+`agrees` is `null` when neither compared field reached a verdict. The envelope's `errors`, coverage
+and notice describe those same provider-symbol outcomes: a complete `ALL` row does not overwrite an
+attempted miss elsewhere in the batch.
+
+`stock_screener` forwards optional `finviz_filters` to narrow the TradingView-selected universe.
+`stock_earnings` uses only TradingView or Yahoo for `next_earnings_date`, never Finviz's last
+reported quarter. `stock_extended_hours` judges only the same pre/post session and requires dated
+reads for agreement. Its overnight endpoint failures are appended to the envelope's `errors` rather
+than replacing primary-provider errors. `technical_analysis` uses the resolved TradingView symbol
+and venue rather than applying the default exchange to a bare ticker.
 
 `stock_news`'s TradingView leg is the provider's licensed Marketaux feed and needs
 `MARKETAUX_API_TOKEN`; without it that leg is `NOT_ATTEMPTED` and the response reports the feeds that
@@ -230,6 +249,11 @@ deterministic, offline and free. Because the headlines are Finviz's, that path i
 
 `stock_filings` · `stock_ownership` (insider + institutional + short interest) · `stock_peers` ·
 `stock_why_moving` · `stock_chart` (PNG) · `stock_dilution` · `stock_screener_filters`
+
+`stock_chart` carries `image_base64` and `mime_type: "image/png"` in its `data` object, so a remote MCP
+client can decode the image without reading the server's filesystem. The best-effort `path` and
+`image_path` are local to the server. One Finviz fetch supplies both forms; the local copy is optional,
+and `null` with a warning if it cannot be written.
 
 No other provider has an equivalent dataset, so those legs are marked `NOT_ATTEMPTED` (not an error)
 and the notice states the data is not cross-checked.
@@ -471,7 +495,7 @@ Every push to `main` publishes a multi-arch image to the GitHub Container Regist
 
 ```bash
 docker pull ghcr.io/giraygokirmak/tapebasis:latest
-docker run -d --name tapebasis -p 6013:8000 \
+docker run -d --name tapebasis -p 127.0.0.1:6013:8000 \
   -v tapebasis-state:/home/mcpuser/.tapebasis \
   ghcr.io/giraygokirmak/tapebasis:latest
 ```
@@ -488,15 +512,18 @@ docker compose up -d --build
 curl -s localhost:6013/health
 ```
 
-Port `6013` is the published host port; change the mapping in `docker-compose.yml` if it conflicts
-with something already running. The named volume `tapebasis-state` persists chart PNGs **and** the
-health baselines, so drift detection survives restarts.
+Compose publishes host port `6013` on `127.0.0.1` by default. The server is unauthenticated. Remote
+exposure is a deliberate operator choice: set `TAPEBASIS_BIND_ADDRESS` to a routable address and put
+an authenticating TLS reverse proxy in front of it. `TAPEBASIS_BIND_ADDRESS=0.0.0.0` publishes on all
+host interfaces. The container itself still listens on `0.0.0.0`, which its port mapping requires.
+The named volume `tapebasis-state` persists chart PNGs **and** the health baselines, so drift
+detection survives restarts.
 
 Standalone:
 
 ```bash
 docker build -t tapebasis:latest .
-docker run -d --name tapebasis -p 6013:8000 \
+docker run -d --name tapebasis -p 127.0.0.1:6013:8000 \
   -v tapebasis-state:/home/mcpuser/.tapebasis \
   tapebasis:latest
 ```
@@ -504,6 +531,8 @@ docker run -d --name tapebasis -p 6013:8000 \
 The image runs the server under `tini` as PID 1, so the container reaps the processes Docker starts
 inside its namespace (`HEALTHCHECK`, `docker exec`) instead of accumulating zombies, and `docker stop`
 is a graceful SIGTERM. Compose also sets `init: true`, which covers an image built without `tini`.
+The build context ignores environment files, credentials, tests and caches. The runtime image carries
+the installed package and its coinlists, not a copy of the checkout.
 
 ## Configuration
 
@@ -517,7 +546,7 @@ Everything is optional. See [`.env.example`](.env.example) for the full list.
 | `TAPEBASIS_HEALTH_STATE` | `~/.tapebasis/health_state.json` | Baseline file |
 | `FINVIZ_CACHE_TTL` | `30` | Scraped-page cache lifetime (s) |
 | `FINVIZ_TIMEOUT` | `25` | finviz.com HTTP timeout (s) |
-| `FINVIZ_CHART_DIR` | `~/.tapebasis/charts` | Chart PNG output |
+| `FINVIZ_CHART_DIR` | `~/.tapebasis/charts` | Chart PNG output, 32 generated files retained; inline base64 is primary |
 | `TAPEBASIS_TV_MIN_INTERVAL` | `0.5` | TradingView request spacing (s) |
 | `TAPEBASIS_TV_MAX_INFLIGHT` | `2` | TradingView concurrent requests |
 | `TAPEBASIS_FINVIZ_MIN_INTERVAL` | `0.35` | Finviz request spacing (s) |

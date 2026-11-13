@@ -18,13 +18,21 @@ Pacing still bounds the request rate, so the connection is safe to keep.
 from __future__ import annotations
 
 import asyncio
+import json
+import math
 import os
+import time
+import weakref
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 from . import blocking_pool, singleflight
 from .http_pool import shared_client
 from .providers_state import NoDataError, ProviderError
-from .ratelimit import RateLimited, call, limiter
+from .ratelimit import RateLimited, RateLimitError, call, limiter
 from .symbols import INSTRUMENTS, INDEX_SNAPSHOT
 from .utils import BROWSER_UA
 
@@ -53,9 +61,130 @@ _QUOTE_RANGE = "5d"
 #: quote block is treated as stale. One day covers normal intraday lag.
 _STALE_QUOTE_SECONDS = 86_400
 
+#: Yahoo's public quote endpoint requires the same cookie-bound crumb as its
+#: options endpoint. The cookie session retains the identity the crumb belongs
+#: to; a lock prevents two handshakes from crossing those identities.
+_QUOTE = "https://query1.finance.yahoo.com/v7/finance/quote"
+_QUOTE_SESSION_TTL = 1500.0
+_quote_session: dict[str, Any] = {"opener": None, "crumb": None, "created": 0.0}
+_quote_session_locks: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, asyncio.Lock
+] = weakref.WeakKeyDictionary()
 
-class _YahooError(ProviderError):
-    pass
+
+def _cookie_session() -> Any:
+    """Return a parser-independent cookie opener for Yahoo's session callback.
+
+    Isolated here so tests can replace the remote handshake without exposing a
+    parser from another provider as this access layer's credentials.
+    """
+    from .providers.tradingview.core.services.options_service import _get_session
+
+    return _get_session()
+
+
+def _session_lock() -> asyncio.Lock:
+    """Return a credential lock owned by the running event loop."""
+    loop = asyncio.get_running_loop()
+    lock = _quote_session_locks.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _quote_session_locks[loop] = lock
+    return lock
+
+
+async def _quote_session_credentials() -> tuple[Any, str]:
+    """Return a fresh Yahoo opener and its cookie-bound crumb.
+
+    The remote handshake runs only outside ``ratelimit.call``: a caller already
+    holding Yahoo's single request slot must not wait for a second paced call.
+    """
+    async with _session_lock():
+        now = time.monotonic()
+        if (
+            _quote_session["opener"] is not None
+            and _quote_session["crumb"]
+            and now - _quote_session["created"] < _QUOTE_SESSION_TTL
+        ):
+            return _quote_session["opener"], _quote_session["crumb"]
+        crumb, opener = await blocking_pool.run(_cookie_session)
+        if not crumb:
+            raise ProviderError(PROVIDER, "Yahoo returned no session crumb")
+        _quote_session.update(opener=opener, crumb=crumb, created=now)
+        return opener, crumb
+
+
+def _quote_page(opener: Any, params: dict[str, Any]) -> dict[str, Any]:
+    """Fetch one quote through Yahoo's cookie session with its own timeouts."""
+    url = f"{_QUOTE}?{urllib.parse.urlencode(params)}"
+    request = urllib.request.Request(
+        url, headers={"User-Agent": _UA, "Accept": "application/json"}
+    )
+    with opener.open(request, timeout=15.0) as response:
+        status = getattr(response, "status", 200)
+        if status == 429:
+            raise RateLimited(PROVIDER, "quote HTTP 429")
+        return _json_load(response)
+
+
+def _json_load(response: Any) -> Any:
+    """Decode Yahoo's JSON response for an already-opened HTTP connection."""
+    return json.loads(response.read().decode("utf-8"))
+
+
+async def _yahoo_quote_request(
+    fetcher: Callable[[Any, dict[str, Any]], dict[str, Any]],
+) -> dict[str, Any]:
+    """Run a prepared Yahoo quote request outside the active provider limiter.
+
+    ``fetcher`` receives the authenticated opener and the request parameters.
+    Authentication recovery repeats the outer request only after the inner call
+    has released its slot. The prepared network callable therefore never waits
+    on a lock owned by its own retry path.
+    """
+    attempt = 0
+    while True:
+        opener, crumb = await _quote_session_credentials()
+        params = {"formatted": "true", "overnightPrice": "true", "crumb": crumb}
+
+        async def _once() -> dict[str, Any]:
+            try:
+                return await blocking_pool.run(fetcher, opener, params)
+            except urllib.error.HTTPError as exc:
+                if exc.code == 429:
+                    # ``call`` owns cooldown and retries. Let it observe the
+                    # throttle instead of converting it after it has exited.
+                    raise RateLimited(PROVIDER, "quote HTTP 429") from exc
+                raise
+
+        try:
+            return await call(PROVIDER, _once)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                # urllib raises before the status check in _quote_page; preserve
+                # the shared limiter protocol instead of retrying a burst here.
+                raise RateLimited(PROVIDER, "quote HTTP 429") from exc
+            if exc.code not in (401, 403) or attempt:
+                raise ProviderError(
+                    PROVIDER, f"Yahoo quote HTTP {exc.code}", code="UPSTREAM_HTTP_ERROR"
+                ) from exc
+            async with _session_lock():
+                # A concurrent refreshed session supersedes this failed opener.
+                if _quote_session.get("opener") is opener:
+                    _quote_session.update(opener=None, crumb=None, created=0.0)
+            attempt += 1
+        except RateLimitError as exc:
+            raise ProviderError(
+                PROVIDER,
+                "Yahoo Finance is rate limiting this server; retry later",
+                code="UPSTREAM_RATE_LIMIT",
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise ProviderError(
+                PROVIDER,
+                f"Yahoo quote transport failed: {exc.reason}",
+                code="PROVIDER_ERROR",
+            ) from exc
 
 
 async def _get(
@@ -397,7 +526,7 @@ async def extended_hours(symbol: str) -> dict[str, Any]:
         client = shared_client(_POOL)
         response = await client.get(
             f"{_CHART}/{symbol}",
-            params={"interval": "1m", "range": "1d", "includePrePost": "true"},
+            params={"interval": "1m", "range": "2d", "includePrePost": "true"},
             headers={"User-Agent": _UA, "Accept": "application/json"},
             timeout=20.0,
         )
@@ -418,6 +547,86 @@ async def extended_hours(symbol: str) -> dict[str, Any]:
     if shaped.get("error"):
         raise NoDataError(PROVIDER, str(shaped["error"]))
     return shaped
+
+
+_OVERNIGHT_QUOTE_FIELDS = (
+    "symbol",
+    "regularMarketPrice",
+    "overnightMarketPrice",
+    "overnightMarketChange",
+    "overnightMarketChangePercent",
+    "overnightMarketTime",
+)
+
+
+def _quote_number(value: Any) -> float | None:
+    """Return a finite Yahoo numeric field, accepting its ``raw`` object form."""
+    if isinstance(value, dict):
+        value = value.get("raw")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _shape_overnight(symbol: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Map Yahoo's quote-header Blue Ocean fields to one overnight observation.
+
+    The printed change refers to the last regular close, not the previous
+    regular session's own previous close and not the separate fullday value.
+    No reference is inferred when ``regularMarketPrice`` is absent. A missing
+    price or print time returns ``None`` rather than substituting the
+    20:00 after-hours print for an overnight observation.
+    """
+    response = payload.get("quoteResponse") or {}
+    if response.get("error"):
+        raise ProviderError(PROVIDER, f"Yahoo quote error: {response['error']}")
+    rows = response.get("result") or []
+    if not rows or not isinstance(rows[0], dict):
+        raise NoDataError(PROVIDER, f"Yahoo has no quote-header row for {symbol}")
+    row = rows[0]
+    price = _quote_number(row.get("overnightMarketPrice"))
+    stamp = _quote_number(row.get("overnightMarketTime"))
+    if price is None or stamp is None:
+        return None
+    change = _quote_number(row.get("overnightMarketChange"))
+    reference = _quote_number(row.get("regularMarketPrice"))
+    return {
+        "session": "overnight",
+        "price": price,
+        "change": change,
+        "change_percent": _quote_number(row.get("overnightMarketChangePercent")),
+        "reference_close": reference,
+        "print_time": stamp,
+        "volume": None,
+        "exchange": "Blue Ocean ATS",
+        "feed_mode": "Yahoo overnight quote header",
+        "source": "Yahoo Finance quote header, Blue Ocean ATS",
+    }
+
+
+async def overnight(symbol: str) -> dict[str, Any] | None:
+    """Return Yahoo's latest Blue Ocean ATS print, or ``None`` when unpublished.
+
+    This reads ``/v7/finance/quote`` with ``overnightPrice=true``. Its
+    ``overnightMarket*`` fields are a separate feed, never inferred from Yahoo's
+    1-minute chart, which covers only pre-market, regular and post-market bars.
+
+    Returns:
+        A normalised overnight block with its own price, change and print time.
+        ``None`` means the symbol resolved but Yahoo published no overnight
+        observation; transport and authentication failures remain exceptions.
+
+    Raises:
+        ProviderError: The request, crumb session or upstream contract failed.
+        NoDataError: Yahoo returned no symbol row at all.
+    """
+    def _request(opener: Any, params: dict[str, Any]) -> dict[str, Any]:
+        params.update(symbols=symbol, fields=",".join(_OVERNIGHT_QUOTE_FIELDS))
+        return _quote_page(opener, params)
+
+    payload = await _yahoo_quote_request(_request)
+    return _shape_overnight(symbol, payload)
 
 
 async def options(symbol: str, expiry: str | None = None) -> dict[str, Any]:

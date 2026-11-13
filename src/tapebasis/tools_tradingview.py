@@ -502,7 +502,7 @@ async def stock_backtest(
 async def stock_backtest_compare(
     symbol: str, period: str = "1y", initial_capital: float = 10000.0
 ) -> dict[str, Any]:
-    """Compare every strategy on one symbol, on each provider's history.
+    """Compare every strategy under the returned ``execution_model`` timing.
 
     Args:
         symbol: Ticker.

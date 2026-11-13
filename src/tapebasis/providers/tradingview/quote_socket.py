@@ -11,9 +11,10 @@ socket the public web chart uses, so it is TradingView's own data rather than a
 proxy for anyone else's.
 
 One socket carries many symbols. The protocol is a sequence of JSON frames
-wrapped in ``~m~<len>~m~<payload>``; the server answers each subscription with a
-``qsd`` message holding that symbol's values, and interleaves heartbeat frames
-that must be echoed back or the connection is dropped. This module speaks just
+wrapped in ``~m~<len>~m~<payload>``; each ``qsd`` message is a delta merged
+into that symbol's earlier snapshot. Missing keys retain their previous value;
+a received null remains an explicit null. Heartbeat frames must be echoed back
+or the connection is dropped. This module speaks just
 enough of that protocol to subscribe, collect, and close.
 
 Rate limits are real and IP-scoped, exactly as they are for the chart socket:
@@ -25,6 +26,7 @@ from __future__ import annotations
 import json
 import random
 import string
+import time
 from typing import Any
 
 from ...blocking_pool import run as run_blocking
@@ -111,9 +113,8 @@ def _quote_blocking(tickers: list[str], timeout: float) -> dict[str, dict[str, A
         that is "no data" or a rate limit.
 
     Raises:
-        QuoteSocketError: When the socket refused every symbol with the
-            ``invalid symbol`` line, which is how TradingView signals an
-            IP-scoped throttle rather than a missing instrument.
+        QuoteSocketError: The socket failed before returning a print. A quiet
+            connection returns the observations collected so far.
     """
     import websocket  # local import: optional dependency, only needed for sockets
 
@@ -124,6 +125,7 @@ def _quote_blocking(tickers: list[str], timeout: float) -> dict[str, dict[str, A
         header=["Origin: https://www.tradingview.com", f"User-Agent: {BROWSER_UA}"],
     )
     try:
+        deadline = time.monotonic() + max(timeout, 0.0)
         connection.send(_frame("set_auth_token", ["unauthorized_user_token"]))
         connection.send(_frame("quote_create_session", [session]))
         connection.send(_frame("quote_set_fields", [session, *QUOTE_FIELDS]))
@@ -133,14 +135,26 @@ def _quote_blocking(tickers: list[str], timeout: float) -> dict[str, dict[str, A
         wanted = set(tickers)
         collected: dict[str, dict[str, Any]] = {}
         refused: list[str] = []
-        connection.settimeout(_SETTLE_SECONDS)
         while True:
+            wait = min(_SETTLE_SECONDS if collected else timeout, deadline - time.monotonic())
+            if wait <= 0:
+                break
+            connection.settimeout(wait)
             try:
                 raw = connection.recv()
-            except Exception:  # noqa: BLE001 - a quiet socket is a finished read
-                break
+            except Exception as exc:  # noqa: BLE001
+                timeout_error = getattr(websocket, "WebSocketTimeoutException", None)
+                if isinstance(exc, TimeoutError) or (
+                    timeout_error is not None and isinstance(exc, timeout_error)
+                ):
+                    # Ordinary receive silence ends this read. It is different
+                    # from a transport failure masquerading as no observation.
+                    break
+                raise QuoteSocketError(f"quote receive failed: {exc}") from exc
             if not raw:
-                break
+                if collected:
+                    break
+                raise QuoteSocketError("quote socket closed before sending a price")
             if raw.startswith("~h~"):
                 # Heartbeats must be echoed or the server closes the socket.
                 connection.send(raw)
@@ -151,32 +165,12 @@ def _quote_blocking(tickers: list[str], timeout: float) -> dict[str, dict[str, A
                     body = (message.get("p") or [None, {}])[1]
                     name = body.get("n")
                     if name in wanted and body.get("s") == "ok":
-                        collected[name] = body.get("v") or {}
+                        collected.setdefault(name, {}).update(body.get("v") or {})
                 elif method in {"symbol_error", "quote_error"}:
-                    detail = (message.get("p") or [])
+                    detail = message.get("p") or []
                     refused.append(str(detail[-1]) if detail else "")
                 elif method == "critical_error":
                     raise QuoteSocketError(f"quote socket error: {message.get('p')}")
-            # Every symbol answered and the socket has gone quiet: done.
-            if len(collected) >= len(wanted):
-                connection.settimeout(_SETTLE_SECONDS)
-                try:
-                    while True:
-                        raw = connection.recv()
-                        if not raw:
-                            break
-                        if raw.startswith("~h~"):
-                            connection.send(raw)
-                            continue
-                        for message in _messages(raw):
-                            if message.get("m") == "qsd":
-                                body = (message.get("p") or [None, {}])[1]
-                                name = body.get("n")
-                                if name in wanted and body.get("s") == "ok":
-                                    collected[name] = body.get("v") or {}
-                except Exception:  # noqa: BLE001 - quiet is the exit condition
-                    pass
-                break
         if not collected and refused and all("invalid symbol" in r.lower() for r in refused):
             # The documented throttle signal: the symbols exist, this IP is
             # being refused. Reported as a rate limit, not as a missing symbol.
@@ -215,7 +209,8 @@ async def quotes(tickers: list[str], *, timeout: float = 20.0) -> dict[str, dict
         return cached
 
     async def _once() -> dict[str, dict[str, Any]]:
-        await paced.wait_turn()
+        # The outer ``call`` owns pacing and retry coordination. Waiting here
+        # as well would impose the provider's minimum interval twice per call.
         try:
             rows = await run_blocking(_quote_blocking, wanted, timeout)
         except RateLimited:
@@ -224,7 +219,10 @@ async def quotes(tickers: list[str], *, timeout: float = 20.0) -> dict[str, dict
             raise
         except Exception as exc:  # noqa: BLE001
             raise QuoteSocketError(f"{type(exc).__name__}: {exc}") from exc
-        paced.cache_set(key, rows)
+        if any(row.get("lp") is not None for row in rows.values()):
+            # Only a real print is reusable. An entirely empty or price-less
+            # socket response gets another subscription on the next call.
+            paced.cache_set(key, rows)
         return rows
 
     return await call(PROVIDER, _once)

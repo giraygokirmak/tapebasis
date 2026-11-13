@@ -62,12 +62,15 @@ async def quote(symbol: str) -> dict[str, Any]:
     return await _call(quote_service.get_quote(symbol), "quote")
 
 
-async def screener_rows(tickers: list[str], *, columns: str | None = None) -> list[dict[str, Any]]:
-    """Screener rows for an explicit ticker list (bulk quote / cross-check leg)."""
+async def screener_rows(
+    tickers: list[str], *, columns: str | None = None, filters: str | None = None
+) -> list[dict[str, Any]]:
+    """Return screener rows for tickers, optionally narrowed by Finviz filters."""
     joined = ",".join(tickers)
     data = await _call(
         screener_service.screen(
             tickers=joined,
+            filters=filters,
             order="-change",
             view="111",
             page=1,
@@ -170,7 +173,7 @@ async def chart(
     technicals: bool = True,
 ) -> dict[str, Any]:
     return await _call(
-        chart_service.download_chart(
+        chart_service.get_chart_base64(
             symbol,
             period=period,
             chart_type=chart_type,

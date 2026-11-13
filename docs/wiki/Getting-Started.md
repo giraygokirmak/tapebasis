@@ -134,7 +134,12 @@ Five things to notice:
    close, so the session-relative fields (day change, previous close, volume) were **not** compared.
    Reporting that is more honest than calling it a conflict, or silently implying agreement.
 5. `resolutions` shows the ticker each provider was asked for. This is where a symbol surprise
-   becomes explicable.
+   becomes explicable. If that symbol was resolved but a provider returned nothing, its error stays
+   `NO_DATA`; it is not turned into `NOT_ATTEMPTED`.
+
+The positive `Compared fields agree within tolerance` notice requires an actual agreeing pair.
+Unusable pairs stay visible with `match: null` and a `not_comparable` reason. If no comparison can
+reach a verdict, the notice states that instead of implying agreement.
 
 If `data_provider` were `TRADINGVIEW`, `FINVIZ`, `YAHOO`, `SA` or `BLOOMBERG`, the notice would say the data
 is **not corroborated** and an agent must relay that. A `BLOOMBERG` label is worth one extra check:

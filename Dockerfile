@@ -12,8 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 WORKDIR /app
 
-# Copy everything (needed for editable install + packaged coinlists)
-COPY . .
+# Copy only the distribution inputs. Setuptools includes the coinlist text files
+# as package data; the installed package, not a checkout, supplies them at runtime.
+COPY pyproject.toml README.md LICENSE NOTICE ./
+COPY src/ ./src/
 
 # Install the package and its dependencies into the system Python
 RUN uv pip install --system .
@@ -27,8 +29,8 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin/tapebasis /usr/local/bin/tapebasis
 
-# Copy app source (needed for the packaged coinlist data files)
-COPY --from=builder /app /app
+# The installed package contains the coinlist text files. Do not copy the
+# checkout into runtime: credentials and local state must not enter the image.
 
 # eMudhra/emSign CA incident (Oct 2026): python base images built before the fix ship a pip and
 # certifi that still trust the compromised chain. Upgrade both before anything else touches PyPI.

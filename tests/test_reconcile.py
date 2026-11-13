@@ -126,6 +126,15 @@ def test_compare_symbol_normalises_case():
     assert compare_symbol("AAPL", "aapl")["match"] is True
 
 
+def test_compare_values_rejects_blank_symbols_instead_of_calling_them_equal():
+    row = compare_values({TRADINGVIEW: "", FINVIZ: "   "}, kind="symbol")
+
+    assert row["match"] is None
+    assert row["not_comparable"] is True
+    assert row["pairs"][0]["match"] is None
+    assert "no usable symbol" in row["pairs"][0]["not_comparable"]
+
+
 def test_compare_values_is_pairwise_across_three_providers():
     row = compare_values(
         {TRADINGVIEW: 100.0, FINVIZ: 100.1, YAHOO: 100.2}, tolerance_pct=0.5
@@ -151,6 +160,47 @@ def test_compare_values_single_reading_is_unknown():
     assert row["match"] is None
     assert row["values"] == {TRADINGVIEW: 100.0}
 
+
+def test_compare_values_keeps_non_numeric_pairs_visible_and_not_comparable():
+    row = compare_values({TRADINGVIEW: "n/a", FINVIZ: "pending"})
+    assert row["match"] is None
+    assert row["not_comparable"] is True
+    assert row["values"] == {TRADINGVIEW: "n/a", FINVIZ: "pending"}
+    assert len(row["pairs"]) == 1
+    assert row["pairs"][0]["match"] is None
+    assert "non-numeric" in row["pairs"][0]["not_comparable"]
+
+
+def test_notice_does_not_claim_agreement_without_a_comparable_pair():
+    specs = (FieldSpec("status", lambda p: p["status"], lambda p: p["status"]),)
+    merged = merge_many(
+        {TRADINGVIEW: {"status": "n/a"}, FINVIZ: {"status": "pending"}},
+        specs,
+    )
+    from tapebasis.reconcile import notice_for
+
+    notice = notice_for(merged)
+    assert "Compared fields agree within tolerance" not in notice
+    assert "status" in merged.not_comparable
+    assert merged.mismatches == []
+    assert "status" in notice
+    assert "No compared fields reached an agreement verdict." in notice
+
+
+def test_session_reason_takes_precedence_over_generic_missing_time():
+    row = compare_values(
+        {TRADINGVIEW: 100, FINVIZ: 100},
+        sessions={TRADINGVIEW: "post_market", FINVIZ: None},
+        require_all_times=True,
+        max_skew_seconds=15 * 60,
+        session_boundary=True,
+    )
+
+    reason = row["pairs"][0]["not_comparable"]
+    assert row["match"] is None
+    assert "different trading sessions" in reason
+    assert "post_market" in reason and "None" in reason
+    assert "at least one provider reported no print time" not in reason
 
 # ── merge ───────────────────────────────────────────────────────────────────
 
@@ -551,3 +601,29 @@ def test_finalize_override_data_and_provider():
     body = finalize(pair, data={"custom": True}, provider=DataProvider.ALL)
     assert body["data"] == {"custom": True}
     assert body["data_provider"] == "ALL"
+
+
+def test_additional_errors_preserve_primary_failures_and_extra_contract():
+    """Secondary failures append without changing existing extra error behavior."""
+    pair = Pair(attempts={
+        TRADINGVIEW: _ok(TRADINGVIEW, {"a": 1}),
+        FINVIZ: _fail(FINVIZ, "primary failure"),
+    })
+    replacement = [{
+        "provider": FINVIZ, "code": "NO_DATA", "message": "row-scoped",
+    }]
+    legacy = finalize(pair, extra={"errors": replacement}, data={"a": 1})
+    assert legacy["errors"] == replacement
+
+    extra_failure = {
+        "provider": YAHOO,
+        "code": "UPSTREAM_TIMEOUT",
+        "message": "overnight timed out",
+        "detail": {"capability": "overnight"},
+    }
+    combined = finalize(
+        pair,
+        additional_errors=[extra_failure],
+        data={"a": 1},
+    )
+    assert combined["errors"] == [*pair.errors, extra_failure]

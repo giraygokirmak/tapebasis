@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
@@ -61,6 +62,13 @@ _SCALE_MAP = {"l": "linear", "linear": "linear", "log": "logarithmic"}
 
 DEFAULT_DIR = os.environ.get(
     "FINVIZ_CHART_DIR", os.path.join(os.path.expanduser("~"), ".tapebasis", "charts")
+)
+
+#: Bounds the only files this service owns. Operator-provided directories are
+#: otherwise left alone: unknown filenames and unrelated content are never pruned.
+MAX_CHART_FILES = 32
+_CHART_FILENAME = re.compile(
+    r"^\^?[A-Z0-9][A-Z0-9.\-^]{0,11}_[dwm]_.+_\d{8}T\d{12}Z\.png$"
 )
 
 
@@ -167,19 +175,19 @@ async def download_chart(
 
     directory = output_dir or DEFAULT_DIR
     try:
-        os.makedirs(directory, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        filename = f"{symbol}_{period}_{chart_type}_{stamp}.png"
-        path = os.path.join(directory, filename)
-        with open(path, "wb") as handle:
-            handle.write(png)
+        path = _write_local_copy(
+            png,
+            ticker=symbol,
+            period=validate_period(period),
+            chart_type=chart_type,
+            output_dir=output_dir,
+        )
     except OSError as exc:
         raise FinvizServiceError(
             ErrorCode.INTERNAL_ERROR,
             f"Could not write chart to {directory}: {exc}",
             directory=directory,
         ) from exc
-
     return {
         "ticker": symbol,
         "path": os.path.abspath(path),
@@ -194,6 +202,49 @@ async def download_chart(
     }
 
 
+def _prune_local_copies(directory: str) -> None:
+    """Remove oldest service-generated PNGs beyond the fixed retention limit."""
+    entries = []
+    try:
+        with os.scandir(directory) as children:
+            for entry in children:
+                if (
+                    entry.is_file()
+                    and entry.name.endswith(".png")
+                    and _CHART_FILENAME.fullmatch(entry.name)
+                ):
+                    entries.append((entry.stat().st_mtime_ns, entry.name))
+    except OSError:
+        return
+    for _, name in sorted(entries, reverse=True)[MAX_CHART_FILES:]:
+        try:
+            os.unlink(os.path.join(directory, name))
+        except OSError:
+            # The current response must not fail because an old local copy
+            # could not be pruned. Do not delete unknown files to compensate.
+            continue
+
+
+def _write_local_copy(
+    png: bytes,
+    *,
+    ticker: str,
+    period: str,
+    chart_type: str,
+    output_dir: str | None = None,
+) -> str:
+    """Persist one fetched PNG, prune older copies and return its absolute path."""
+    directory = output_dir or DEFAULT_DIR
+    os.makedirs(directory, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    filename = f"{ticker}_{period}_{chart_type}_{stamp}.png"
+    path = os.path.join(directory, filename)
+    with open(path, "wb") as handle:
+        handle.write(png)
+    _prune_local_copies(directory)
+    return path
+
+
 async def get_chart_base64(
     ticker: str,
     *,
@@ -203,11 +254,15 @@ async def get_chart_base64(
     width: int = 900,
     height: int = 500,
     technicals: bool = True,
+    output_dir: str | None = None,
 ) -> dict[str, Any]:
-    """Return the PNG inline as base64 (for clients that cannot read files).
+    """Return one fetched PNG inline and, when writable, as a local copy.
 
-    Prefer :func:`download_chart` for large images: base64 inflates the payload
-    by ~33% and most MCP clients render a path just fine.
+    Fetch exactly once so ``stock_chart`` can serve remote MCP clients and
+    preserve its path without requesting the same chart twice. A local write
+    failure leaves ``path`` null and records a warning; the inline image stays
+    available. Only service-generated PNGs are pruned, at most
+    ``MAX_CHART_FILES`` files.
     """
     url = build_chart_url(
         ticker,
@@ -219,10 +274,41 @@ async def get_chart_base64(
         technicals=technicals,
     )
     png = await finviz_client.fetch_bytes(url)
+    if not png.startswith(b"\x89PNG"):
+        raise FinvizServiceError(
+            ErrorCode.UPSTREAM_ERROR,
+            "Chart endpoint did not return a PNG",
+            url=url,
+        )
+    symbol = validate_ticker(ticker)
+    warnings: list[str] = []
+    path = None
+    try:
+        path = os.path.abspath(
+            _write_local_copy(
+                png,
+                ticker=symbol,
+                period=validate_period(period),
+                chart_type=chart_type,
+                output_dir=output_dir,
+            )
+        )
+    except OSError as exc:
+        warnings.append(
+            f"The chart is available inline, but its local copy was not retained: {exc}"
+        )
     return {
-        "ticker": validate_ticker(ticker),
+        "ticker": symbol,
         "mime_type": "image/png",
+        "path": path,
         "bytes": len(png),
+        "width": clamp_int(width, low=200, high=2000, name="width"),
+        "height": clamp_int(height, low=150, high=1200, name="height"),
+        "period": validate_period(period),
+        "chart_type": chart_type,
+        "scale": validate_scale(scale),
+        "technicals": technicals,
         "image_base64": base64.b64encode(png).decode("ascii"),
         "source": url,
+        "warnings": warnings,
     }

@@ -1035,29 +1035,171 @@ session the row belongs to.
 
 ---
 
-## 51. The overnight session is TradingView-only, and says so
+## 51. Overnight is an independently read session, not a chart inference
 
-**Decision:** `stock_extended_hours` returns an `overnight` block from TradingView's quote websocket,
-plus `overnight_source: "TRADINGVIEW"`. It is never compared, because no other provider has the data.
+**Decision:** `stock_extended_hours` asks TradingView's `BOATS:` quote socket and Yahoo's
+`/v7/finance/quote` endpoint with `overnightPrice=true` for separate Blue Ocean ATS observations.
+`overnight` and `overnight_source` select the newest eligible print; `overnight_readings` retains every
+provider block, `overnight_comparison` contains the pairwise verdict, and `overnight_errors` preserves
+endpoint failures. Those failures also append to the envelope's `errors` without replacing primary
+quote-fetch failures. Neither provider's regular, pre/post or primary price is an overnight fallback.
 
-**Why:** the alternative venues (Blue Ocean ATS among them) trade 20:00-04:00 ET, which is a real
-session with real prints. Measured: BOATS last prints arrived at 03:58-03:59 ET, and 10 of 10 symbols
-resolved in one socket connection in 6.4 s. Only TradingView carries it:
+**Why:** Blue Ocean trades 20:00-04:00 ET, a real session with real prints. Yahoo's 1-minute chart does
+not cover that window, but its quote header publishes `overnightMarketPrice`, `overnightMarketChange`,
+`overnightMarketChangePercent` and `overnightMarketTime`. Yahoo's `regularMarketPrice` is the published
+overnight change reference; regular previous close, `fulldayPrice` and post-market price are not
+substitutes. The same header supplies no overnight volume, so that field stays null. TradingView's
+scanner has no BOATS row, while its quote socket supplies the venue's price, print time, volume,
+exchange and feed mode. Live NVDA observations on 2026-11-13 were 166.52 at 08:59:48 UTC through Yahoo
+and 166.58 at 08:59:59 UTC through TradingView.
 
-- Yahoo's 2-day 1-minute chart had 0 bars between 20:00 and 04:00, with hours covered 04-19.
-- Finviz has no overnight field, and its quote page's extended block is after-hours only.
-- StockAnalysis's extended block is pre/post only.
+**Comparison has a calendar boundary.** A common `overnight` label is insufficient because the session
+crosses midnight. Each print's 20:00 ET occurrence is calculated, retained as
+`session_window_start_utc`, and compared only with the other provider's same occurrence. Usable print
+times and the ordinary price-time skew limit are still required. Agreement between two readers of BOATS
+is not represented as independent market-venue evidence. Print timestamps retain seconds in `as_of_utc`.
 
-**The scanner cannot reach it.** `BOATS:AAPL` is rejected with `symbol_not_exists` on every scanner
-market, and there is no BOATS scan market at all. The public web chart does not use the scanner for
-this: it subscribes on the quote websocket, which is a different upstream inside TradingView. That
-socket resolves symbols the scanner does not index and states each print's session
-(`out_of_session` for the overnight window), so it is TradingView's own data rather than a proxy for
-anyone else's.
+**Closed-venue evidence stays dated rather than becoming live.** At and after 04:00 ET, a last BOATS
+print is preserved with `is_current: false`; `overnight_is_current` is false and that print cannot
+replace a pre-market print. TradingView's `out_of_session` and `update_mode: "streaming"` labels alone
+do not establish an open venue. A current print must lie between the current occurrence's start and the
+response clock, so an old evening print cannot masquerade as the following morning's overnight print.
 
-**Consequence:** 24-hour coverage exists, is labelled single-source, and is only claimed where it was
-measured. A caller that needs overnight volume gets the venue's own number and knows not to treat it as
-cross-checked. The block is `None` rather than a fabricated zero when the venue has no print.
+**Socket deltas are not replacement snapshots.** Each `qsd.v` dictionary is merged onto earlier fields,
+so a later volume- or timestamp-only packet cannot erase the price. A quiet empty response and a
+price-less result are not cached. Receive deadlines distinguish the websocket timeout class from a
+transport failure, and limiter exhaustion remains a typed rate-limit error rather than an unexplained
+`overnight: null`.
+
+**Consequence:** consumers can identify the selected provider, read every raw observation, distinguish
+no print from an attempted endpoint failure, and avoid mistaking the last overnight trade for live
+premarket activity.
+
+---
+
+## 52. Inline images are portable output; local chart files are secondary
+
+**Decision:** `stock_chart` uses `chart_service.get_chart_base64` to obtain bytes once, then returns
+base64 and `mime_type` in the JSON envelope alongside an optional local path. It does not call
+`download_chart` separately. A local write failure preserves the inline image, returns a null path and
+records a warning. The existing path-only service remains available for callers that do not want an
+inline payload.
+
+**Why:** a remote client cannot follow a path inside the server's container, and a second fetch wastes
+upstream capacity and can serve a different image in the two forms. Inline output is portable and the
+path remains for local clients that already use it.
+
+**Retention:** the service keeps at most 32 generated PNGs, ordered by modification time, and never
+deletes unknown filenames or other contents of an operator-supplied directory. Pruning is best effort;
+a live path is not an archive interface and may eventually refer to a pruned file. A local storage
+failure does not turn a working PNG into an unavailable MCP result.
+
+---
+
+## 53. Only build inputs enter the image; the host listener starts closed to other devices
+
+**Decision:** Docker copies only explicit distribution inputs and the installed Python package, not the
+checkout. The ignore rules exclude local environments, docs, tests, caches, source-control state and
+credential-shaped files, while retaining `.env.example`. Compose binds its host port to loopback by
+default and only uses a different host address when `TAPEBASIS_BIND_ADDRESS` is explicitly set. The
+container's listener remains `0.0.0.0` so its published port can work.
+
+**Why:** copying the checkout carries the entire build context into an unauthenticated runtime image,
+including any local `.env` and credentials. Publishing without a host address exposes the listener on
+every interface on common Docker installations. The default must be safe even when an operator is
+setting up the service for the first time.
+
+**Boundary:** this is not an authentication feature and not a replacement for content-based secret
+scanning. A deliberate remote deployment still requires authentication and TLS in front of the server.
+DNS rebinding and host-header protections are a separate server-level change, not silently assumed to
+exist here.
+
+---
+
+## 54. Close-confirmed backtest signals fill at the next open
+
+**Decision:** RSI, Bollinger, MACD, EMA cross, Supertrend, RSI pullback, Keltner breakout and triple
+EMA evaluate a signal at a completed close and execute its entry or exit at the next bar's open.
+A final-bar signal cannot create a position. An open position is forced out at the final close.
+
+**Why:** filling at the same close whose value established the signal used a price the strategy could
+no longer trade at. It also allowed a final-bar entry and forced exit on the same bar, which is not an
+implementable trade. Separating the signal bar from the execution bar makes the trade log, per-bar
+equity and return calculation describe the same fills. Entry-bar equity is marked to that bar's close,
+and transaction costs still apply at exit.
+
+**Donchian exception:** its existing high/low breakout model identifies an intrabar event and fills at
+the same bar's close. That assumption is preserved rather than silently changing the strategy to a
+close-confirmed model; the separate assumption and final-bar entry suppression are explicit in
+`execution_model`.
+
+---
+
+## 55. Option identity includes side and expiry, and missing is not zero
+
+**Decision:** an option comparison key is side, expiry and strike, all required. Contract-level dates
+take precedence, with the chain-level date supplying a missing contract date. Volume, open interest,
+IV and quote fields use the first non-`None` provider alias, so a reported `0` is preserved. Missing
+values remain `null`, never a fabricated zero. Session price parsing likewise rejects non-finite
+numeric values rather than allowing `NaN` or infinity into freshness and comparison calculations.
+
+**Why:** the same strike can describe calls, puts and multiple expiries. Strike-only matching could
+report agreement between different contracts, especially when `expiry=None` lets each provider choose
+its nearest expiry. Eager `or` aliases also replaced a zero with an unrelated fallback and made absent
+activity indistinguishable from real zero activity.
+
+**Consequence:** when the providers do not establish one shared expiry, `stock_options_chain` leaves
+`data.expiry` null and records `data.overlap.not_comparable` with its reason. Differing nearest expiries
+are not compared. An explicit expiry for which both providers return the same evidenced date retains
+normal comparison behaviour.
+
+---
+
+## 56. A non-comparison is evidence, not agreement
+
+**Decision:** every multi-value pair that cannot be judged remains in `pairs` with `match: null` and
+a specific reason: non-numeric values, blank symbols, different sessions and
+missing print times all receive reasons. `notice` claims compared fields agree only after at least
+one comparison reached agreement. If every comparison is unresolved, it states that no agreement
+verdict was reached.
+
+`stock_extended_hours` selects the active or latest evidenced pre/post window rather than preferring
+whichever session happens to contain a price. Different named windows and undated reads in a shared
+window are not judged. StockAnalysis's own pre/post label remains useful evidence even without a
+timestamp, but an undated pair cannot agree.
+
+**Why:** silently dropping invalid pairs made an all-empty agreement aggregate indistinguishable from
+success. A generic comparison of the first populated extended field could turn yesterday's post print
+and today's pre print into a provider conflict. Preserving the raw readings and reason distinguishes
+uncorroborated data from both agreement and conflict.
+
+---
+
+## 57. A resolved miss stays visible and keeps its type
+
+**Decision:** resolution is a capability check, not a guarantee of data. In `stock_quote`, a
+`NoDataError` after resolution remains `NO_DATA`. `NOT_ATTEMPTED` is reserved for a provider that the
+request never asked.
+
+`stock_prices` records a provider's per-symbol exceptions instead of reducing them to message strings
+or converting an entirely empty result to `NOT_ATTEMPTED`. Each row exposes `misses` and `errors`,
+with `provider`, `symbol`, the retained exception `code` and `message`. Missing TradingView/Finviz
+batch keys become `NO_DATA`, as does a returned payload with no usable price. The envelope
+aggregates those same symbol-tagged errors. `agrees` is `null` when neither price nor change percent
+reached a verdict, and envelope coverage, comparisons and notice are built from the row verdicts.
+Coverage belongs to each provider-symbol request, not a union of provider names: a complete `ALL`
+row does not overwrite an attempted miss for another symbol. A Bloomberg budget cutoff is never a
+request, so that symbol is absent from its ask set and has no Bloomberg error.
+
+`technical_analysis` passes the resolved TradingView identity to the upstream analysis rather than a
+bare ticker with an assumed exchange. A resolved venue wins, then an explicit exchange prefix, then
+the caller's exchange argument.
+
+**Why:** dropping these distinctions hid provider misses, discarded actionable error codes and could
+claim `ALL` while listing failed legs or claiming agreement without a judged pair. Finviz's
+last-reported earnings timestamp is likewise not evidence of an upcoming event, so only TradingView
+or Yahoo can populate `next_earnings_date`. `finviz_filters` remains an explicit filter over the
+TradingView-selected screener universe rather than an ignored argument or an independent ranking.
 
 ---
 
