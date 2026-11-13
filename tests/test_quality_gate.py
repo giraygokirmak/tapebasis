@@ -13,6 +13,7 @@ import subprocess
 import pytest
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "quality_gate.py"
+ROOT = SCRIPT.parents[1]
 
 
 @pytest.fixture()
@@ -40,7 +41,8 @@ def tree(tmp_path, gate, monkeypatch):
 
 def _git(directory: pathlib.Path, *args: str) -> None:
     subprocess.run(
-        ["git", *args],
+        # These fixtures are independent repositories, never children of this checkout's hook.
+        ["git", "-c", f"core.hooksPath={directory / 'no-repository-hooks'}", *args],
         cwd=directory,
         check=True,
         capture_output=True,
@@ -49,6 +51,8 @@ def _git(directory: pathlib.Path, *args: str) -> None:
             "GIT_AUTHOR_EMAIL": "test@example.com",
             "GIT_COMMITTER_NAME": "Test",
             "GIT_COMMITTER_EMAIL": "test@example.com",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "XDG_CONFIG_HOME": str(directory / "config"),
             "PATH": "/usr/bin:/bin",
             "HOME": str(directory),
         },
@@ -173,6 +177,26 @@ def test_doc_with_code_requires_documentation_for_a_new_signature(tree, gate):
         "src/tapebasis/mod.py changes a public signature with no documentation in the "
         "same batch: add the matching edit under docs/ or README.md"
     ]
+
+
+@pytest.mark.parametrize("parent_binding", ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"])
+def test_git_checks_ignore_a_parent_repository_binding(tree, gate, monkeypatch, parent_binding):
+    """A stored fixture commit stays in its own repository during a parent git hook."""
+    module = tree / "src" / "tapebasis" / "mod.py"
+    module.write_text('def public(value):\n    """Doc."""\n    return value\n', encoding="utf-8")
+    _git(tree, "init")
+    _git(tree, "add", "-A")
+    _git(tree, "commit", "-m", "base")
+    module.write_text(
+        'def public(value, extra):\n    """Doc."""\n    return value\n', encoding="utf-8"
+    )
+    (tree / "docs" / "wiki" / "Development.md").write_text("changed\n", encoding="utf-8")
+    monkeypatch.setenv(parent_binding, str(ROOT / ".git" / "missing-parent-binding"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.name")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "Parent repository")
+    assert gate.doc_with_code() == []
+    assert list(gate._text_files())
 
 
 def test_doc_with_code_accepts_a_batch_that_carries_docs(tree, gate):

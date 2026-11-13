@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -21,6 +22,29 @@ EM_DASH = "\u2014"
 SKIP_PARTS = {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache"}
 TEXT_SUFFIXES = {"", ".md", ".py", ".toml", ".json", ".yml", ".yaml", ".sh", ".example", ".txt"}
 DOC_FILES = ("README.md", "NOTICE", "docs/")
+GIT_CONTEXT = {
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR",
+    "GIT_GRAFT_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX",
+    "GIT_SHALLOW_FILE", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
+}
+
+
+def _git_environment() -> dict[str, str]:
+    """Return an environment that cannot replace this checkout with a parent repository."""
+    return {key: value for key, value in os.environ.items() if key not in GIT_CONTEXT}
+
+
+def _git(*args: str) -> list[str]:
+    """Run git in this checkout without inheriting a parent commit's repository context."""
+    environment = _git_environment()
+    result = subprocess.run(
+        ["git", *args], cwd=ROOT, env=environment,
+        capture_output=True, text=True, timeout=120,
+    )
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.splitlines() if line.strip()]
 
 
 def _text_files():
@@ -34,7 +58,8 @@ def _text_files():
     """
     listed = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
-        cwd=ROOT, capture_output=True, text=True, timeout=120,
+        cwd=ROOT, env=_git_environment(),
+        capture_output=True, text=True, timeout=120,
     )
     if listed.returncode == 0:
         candidates = [ROOT / relative for relative in listed.stdout.splitlines() if relative]
@@ -196,16 +221,6 @@ def tool_count() -> list[str]:
             if int(match.group(1)) != count:
                 failures.append(f"{relative}: says {match.group(1)} tools, the surface has {count}")
     return failures
-
-
-def _git(*args: str) -> list[str]:
-    """Run a git command and return its non-empty output lines."""
-    result = subprocess.run(
-        ["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=120,
-    )
-    if result.returncode != 0:
-        return []
-    return [line for line in result.stdout.splitlines() if line.strip()]
 
 
 def _pending_paths() -> list[str]:

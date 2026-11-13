@@ -23,6 +23,9 @@ RUN uv pip install --system .
 # ---- Stage 2: Runtime ----
 FROM python:3.11-slim
 
+# MCP Registry ownership verification for the published OCI image.
+LABEL io.modelcontextprotocol.server.name="io.github.giraygokirmak/tapebasis"
+
 WORKDIR /app
 
 # Copy installed packages from builder

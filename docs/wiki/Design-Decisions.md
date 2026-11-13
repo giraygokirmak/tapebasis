@@ -1236,6 +1236,50 @@ normalized change and closed-session status.
 
 **Consequence:** `is_current: false` after 04:00 ET remains an ordinary closed-overnight observation,
 not an outage. The premarket reading and its comparison stay available independently.
+---
+
+## 59. Release publication is downstream of the tested artifact
+
+**Decision:** main tests and package checks never publish. A version tag must match every distribution
+and registry version, and the built wheel, sdist, npm tarball and image receive real install or startup
+smoke checks. One `release` environment gates all publication. The approved job uses those artifacts
+with checksum verification, publishing PyPI, npm and GHCR in sequence, then the MCP Registry after the
+packages resolve. Main has no moving image publication and no independent tag image publisher bypasses
+this gate.
+
+**Why:** a tag string, a green unit test, or a successfully built file alone does not prove the code
+being released. Independent publication workflows allow a later registry to ship after an earlier
+smoke test or upload failed. Rebuilding after approval also loses the correspondence between tested
+bytes and published bytes.
+
+**Boundary:** registry uploads cannot form one transaction. If a later upload fails, an earlier upload
+can remain visible. The pipeline stops instead of pretending a rollback occurred. Its fix is reviewed
+deliberately, generally with a new version rather than different bytes carrying an already used one.
+
+---
+
+## 60. Publishing identity is short-lived; npm bootstraps once
+
+**Decision:** PyPI, npm and the MCP Registry use GitHub OIDC in the protected `release` publish job.
+No persistent PyPI, npm or MCP Registry token is configured in CI. The PyPI pending publisher can
+create the first project. npm cannot be configured as a trusted publisher before its package exists,
+so its first public upload is an explicit maintainer operation with interactive two-factor
+authentication before the release tag. A set release-environment variable then lets the tag job verify
+that exact existing version instead of uploading it twice. Registry version and SHA-512 integrity must
+match the tested artifact; the marker alone never skips or replaces a package. Subsequent npm releases
+use `release.yml`, the `release` environment and Node.js 24 with its bundled npm CLI, which satisfies
+npm's minimum CLI requirement for trusted publishing.
+
+**Why:** a persistent CI token is unnecessary ongoing account exposure. The pending-publisher difference
+between registries matters: assuming they both support pre-creation OIDC would guarantee a failed first
+npm release, or tempt a permanent token fallback merely to bypass account provisioning. The MCP Registry
+namespace needs no separate registry account: its `github-oidc` login proves the workflow's repository
+identity and permits the matching `io.github.giraygokirmak/tapebasis` namespace.
+
+**Consequence:** registry availability and account provisioning are release prerequisites, not CI
+successes claimed in advance. `server.json`, the npm and PyPI ownership markers and the OCI ownership
+label support verified MCP Registry publication after package uploads. `uvx tapebasis` always runs the
+Python server; npm supplies only its launcher, not a separate implementation.
 
 ---
 
@@ -1243,4 +1287,5 @@ not an outage. The premarket reading and its comparison stay available independe
 
 - [Architecture](Architecture): how these decisions are implemented
 - [Response Contract](Response-Contract): the observable result
+- [Releasing](Releasing): account setup and the release procedure
 - [Development](Development): house rules derived from these decisions

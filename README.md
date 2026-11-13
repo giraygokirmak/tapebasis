@@ -467,11 +467,32 @@ verdict.
 
 ## Install
 
+<!-- mcp-name: io.github.giraygokirmak/tapebasis -->
+
 Requires Python 3.10–3.13.
+
+Run directly without cloning the repository. `uvx` creates the Python environment
+isolated from the current project. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first; Python 3.10–3.13 is selected from the package requirements.
+
+```bash
+uvx tapebasis --help
+```
+
+Or use the anonymous npm launcher with Node.js 18 or newer:
+
+```bash
+npx tapebasis --help
+```
+
+The first registry publication is not complete yet. These commands will work after
+`v1.0.0` is released; until then, install from a checkout as shown below.
+
+For a checkout or development build:
 
 ```bash
 git clone https://github.com/giraygokirmak/tapebasis.git
 cd tapebasis
+# Install the checkout in a virtual environment.
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
@@ -482,12 +503,17 @@ pip install -e .
 {
   "mcpServers": {
     "tapebasis": {
-      "command": "/path/to/.venv/bin/tapebasis",
+      "command": "npx",
+      "args": ["tapebasis"],
       "env": { "MARKETAUX_API_TOKEN": "" }
     }
   }
 }
 ```
+
+The npm launcher calls `uvx tapebasis`, inherits its stdio and environment, and
+requires uv on `PATH`. An alternative is `"command": "uvx", "args": ["tapebasis"]`.
+The `mcp-name` marker above is used by the MCP Registry for PyPI ownership verification; the corresponding `mcpName` field in `package.json` does the same for npm.
 
 ### Streamable HTTP
 
@@ -500,7 +526,7 @@ curl -s localhost:8000/health
 
 ### Prebuilt image (GHCR)
 
-Every push to `main` publishes a multi-arch image to the GitHub Container Registry:
+A multi-arch image is published to the GitHub Container Registry as part of an approved `v*` release. It is not available until the first release and the package's GHCR visibility are set up:
 
 ```bash
 docker pull ghcr.io/giraygokirmak/tapebasis:latest
@@ -509,9 +535,7 @@ docker run -d --name tapebasis -p 127.0.0.1:6013:8000 \
   ghcr.io/giraygokirmak/tapebasis:latest
 ```
 
-Tags are `latest` and `main` for the branch head, `sha-<shortsha>` for an exact commit, and
-`<major>.<minor>.<patch>` (plus `major.minor` and `major`) once a `v*` tag is pushed. The image is
-built for `linux/amd64` and `linux/arm64`.
+Main pushes build and check the image without publishing it. An approved `v*` tag publishes `<major>.<minor>.<patch>`, `<major>.<minor>`, `<major>` and `latest` from the image that passed the release checks. The manifest covers `linux/amd64` and `linux/arm64`. Pin a version tag for reproducible deployments.
 
 ### Build locally
 

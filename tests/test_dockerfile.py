@@ -40,6 +40,17 @@ def _instructions() -> list[str]:
     ]
 
 
+def test_oci_label_matches_the_registry_manifest():
+    """The image identifies this server for MCP Registry ownership verification."""
+    registry = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+    label = (
+        "LABEL io.modelcontextprotocol.server.name="
+        f'"io.github.giraygokirmak/tapebasis"'
+    )
+    assert label in _instructions()
+    assert registry["name"] == "io.github.giraygokirmak/tapebasis"
+
+
 def test_image_installs_an_init():
     assert any(
         instruction.startswith("RUN") and "tini" in instruction

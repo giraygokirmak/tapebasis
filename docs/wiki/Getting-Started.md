@@ -7,6 +7,26 @@
 
 ## Install
 
+### PyPI or npm, after the first release
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and run the Python distribution directly:
+
+```bash
+uvx tapebasis --help
+```
+
+With Node.js 18 or newer, the npm launcher runs that same `uvx tapebasis` command:
+
+```bash
+npx tapebasis --help
+```
+
+The launcher has no runtime dependencies of its own, forwards arguments and environment, and works over stdio. Set `TAPEBASIS_UVX` if uvx is not on the client's `PATH`. It prints an installation link when uv is missing. On Windows it invokes an executable directly, without a command shell.
+
+The first PyPI and npm publications are **not complete yet**. Until the approved `v1.0.0` tag release has succeeded, use the checkout installation below. `pip install tapebasis` is also available after the first PyPI publication. Main-image and release-image availability depends on GHCR package visibility. MCP Registry ownership markers do not mean an MCP Registry entry has been published.
+
+### Checkout
+
 ```bash
 git clone https://github.com/giraygokirmak/tapebasis.git
 cd tapebasis
@@ -32,7 +52,8 @@ stdio is the default transport. The client spawns the process and talks over std
 {
   "mcpServers": {
     "tapebasis": {
-      "command": "/absolute/path/to/.venv/bin/tapebasis",
+      "command": "npx",
+      "args": ["tapebasis"],
       "env": {
         "MARKETAUX_API_TOKEN": "",     // optional; leave empty to use local scoring
       }
@@ -41,7 +62,7 @@ stdio is the default transport. The client spawns the process and talks over std
 }
 ```
 
-Use an **absolute** path: MCP clients do not inherit your shell's `PATH`.
+Alternatively, use `"command": "uvx", "args": ["tapebasis"]`, or the absolute path to the checkout's tapebasis executable. `npx` and `uvx` must be available in the client process's `PATH`; some GUI clients do not inherit your shell's `PATH`.
 
 ## Run over streamable HTTP
 

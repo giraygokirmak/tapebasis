@@ -47,8 +47,18 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_extended_hours.py` | Pre/post volumes, Yahoo's native overnight header fields and cookie/crumb renewal, two-provider same-occurrence comparison, historical prints, and visible secondary errors |
 | `test_quote_socket.py` | TradingView `qsd` delta merging, deadline and receive error behavior, empty-result caching, and rate-limit conversion |
 | `test_server.py` | Tool registration, MCP surface |
-| `test_dockerfile.py` | The deployment contract: `tini` as PID 1, the entrypoint argv, `init: true` in compose |
+| `test_dockerfile.py` | The deployment contract: `tini` as PID 1, the entrypoint argv, `init: true` in compose, MCP image label |
+| `test_packaging.py` | Real wheel/sdist build and isolated installation, MCP stdio smoke, uvx and npm tarball checks |
+| `test_release_metadata.py` | Version, tag, registry, lockfile, launcher and previous-ref validation |
+| `smoke_test.py` | Installed-package initialize and tools-list exchange through a real MCP stdio client |
 | `test_quality_gate.py` | The gate's own documentation checks, against a temporary repository |
+
+Tests that create temporary git repositories give those fixtures an empty `core.hooksPath`, an
+isolated `HOME`, no system git configuration, and no `GIT_*` repository bindings inherited from a
+parent git hook. The documentation and release checkers apply the same isolation to their child Git
+commands while retaining the caller's other configuration. Their `ROOT` therefore selects both the
+files and the repository history under inspection. This prevents recursive hook execution and changes
+no hook or safety check in the real repository.
 
 `test_upstream_contract.py` is the file to extend when live probing finds a provider behaving
 surprisingly. Every case in it was found by calling the real upstream and getting something the
@@ -266,12 +276,21 @@ python -m compileall -q src/tapebasis
 
 ## CI
 
-Two GitHub Actions workflows:
+Three GitHub Actions workflows:
 
 | Workflow | Purpose |
 | --- | --- |
-| `test.yml` | Install on 3.10–3.13, run `pytest`, run the documentation gate, smoke-test the tool surface |
-| `publish-image.yml` | Build and publish the multi-arch image to `ghcr.io/<owner>/<repo>` |
+| `test.yml` | Install on Python 3.10–3.13, run the suite, build and install Python artifacts, run MCP and npm package checks, and check release metadata and documentation. No uploads |
+| `release.yml` | Validate on main and `v*` tags, build reusable release artifacts, then publish tag artifacts to PyPI, npm, GHCR and the MCP Registry after approval |
+| `publish-image.yml` | Reuse `test.yml` for main and pull requests. The old main-image publisher has been removed; it makes no registry uploads |
+
+The tag publish job runs on GitHub-hosted Ubuntu with the pinned npm CLI bundled by Node.js 24. That
+runtime satisfies npm trusted publishing's minimum requirements without installing a floating CLI
+version during publication.
+
+The npm package is a dependency-free launcher for `uvx tapebasis`, not a separate TypeScript server.
+`npm test` exercises its argument forwarding, exit status, executable selection and signals. Releases,
+first-time account provisioning and recovery are in [Releasing](Releasing).
 
 ## Editing these docs
 

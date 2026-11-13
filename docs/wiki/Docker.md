@@ -5,8 +5,7 @@ healthcheck and a named volume for state.
 
 ## Prebuilt image (GHCR)
 
-Every push to `main` publishes a multi-arch image to the GitHub Container Registry, so a deployment
-can skip the build entirely:
+An approved `v*` tag publishes the multi-arch image that passed release validation, so a deployment can skip the build entirely. Main pushes build and check the image but never publish it, so `latest` cannot move without a release. Existing or newly created GHCR packages must allow the intended anonymous or authenticated pulls:
 
 ```bash
 docker pull ghcr.io/giraygokirmak/tapebasis:latest
@@ -18,14 +17,16 @@ curl -s localhost:6013/health
 
 | Tag | Points at |
 | --- | --- |
-| `latest`, `main` | Head of `main` |
-| `sha-<shortsha>` | One exact commit |
-| `<major>.<minor>.<patch>`, `<major>.<minor>`, `<major>` | A pushed `v*` tag |
+| `latest` | Most recently approved release |
+| `<major>.<minor>.<patch>`, `<major>.<minor>`, `<major>` | Exact image built and smoke-tested for that tag |
 
-One manifest covers `linux/amd64` and `linux/arm64`. The package is public, so no login is needed to
-pull it. If you fork the repository, the workflow publishes to your own namespace automatically
-(`images: ghcr.io/${{ github.repository }}`) using the built-in `GITHUB_TOKEN`, no extra secret
-required.
+One manifest covers `linux/amd64` and `linux/arm64`. The package must be set to public on GHCR before unauthenticated pulls work. Publication waits for the `release` environment approval. Only then is the tested OCI archive imported and tagged through the built-in `GITHUB_TOKEN`; no long-lived container registry secret is needed. Forks need their own registry configuration.
+
+Tagged images are imported from the tested release OCI archive only after PyPI and npm uploads
+succeed. A failed test, package smoke test or earlier registry upload leaves no release image. The
+build also checks the `io.modelcontextprotocol.server.name` label on both platform images. This is
+MCP Registry ownership metadata, not evidence that the package or MCP Registry entry has been
+published. See [Releasing](Releasing) for sequence and account prerequisites.
 
 ## Compose (recommended)
 

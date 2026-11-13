@@ -60,6 +60,7 @@ asks them all, compares, and tells the agent what it is holding.
 | [Configuration](Configuration) | Every environment variable |
 | [Docker](Docker) | Standalone image, compose, volumes, healthcheck |
 | [Development](Development) | Tests, layout, adding a tool |
+| [Releasing](Releasing) | Version checks, package smoke tests, OIDC setup and gated publication |
 | [Troubleshooting](Troubleshooting) | Symptom → cause → fix |
 | [Design Decisions](Design-Decisions) | Non-obvious choices and the reasons behind them |
 
