@@ -547,7 +547,17 @@ jobs:
           chmod +x regctl
           ./mcp-publisher login github-oidc
 
-      - name: Complete GHCR from the source OCI archive without replacing matches
+      - name: Complete GHCR with a specifically reviewed predecessor for 1 and latest
+        if: inputs.resume_tag == 'v1.1.1'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIOUS_RELEASE_DIGEST: sha256:4ff12fdcdc79e7c5cd065a3ffb685dcbe6daee518442b7751e0479e0da1e3167
+        run: >-
+          bash ./scripts/verify_ghcr.sh "$VERSION" publish-missing
+          --advance-major-latest-from "$PREVIOUS_RELEASE_DIGEST"
+
+      - name: Complete other GHCR releases from source OCI archives without replacing matches
+        if: inputs.resume_tag != 'v1.1.1'
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash ./scripts/verify_ghcr.sh "$VERSION" publish-missing

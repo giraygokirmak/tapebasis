@@ -64,8 +64,15 @@ publishable registry content absent. Do not move the tag or rebuild replacement 
    only that absent file. Any unexpected, duplicate or conflicting file remains fatal. Other absent
    PyPI files,
    npm content, GHCR tags or MCP metadata enter their corresponding write step. Any conflict, transport
-   failure or non-404 lookup stops publication. An approved older release can consequently update its
-   short GHCR aliases and `latest`; review that before proceeding.
+   failure or non-404 lookup stops publication unless an explicit predecessor digest was reviewed for
+   that continuation. The `v1.1.1` continuation alone advances `1` and `latest`, and only when a second
+   manifest lookup matches the tested `1.0.0` root digest
+   `sha256:4ff12fdcdc79e7c5cd065a3ffb685dcbe6daee518442b7751e0479e0da1e3167`. It copies those
+   aliases to the tested `1.1.1` root digest
+   `sha256:18a54e02f28d195030cd02ee1f45088eeb05a34792d532197f143f6a73a209d7`. An exact-version or
+   minor-version conflict, wrong predecessor, other tag, authorization failure or other mismatch remains
+   fatal. Ordinary tag publication and every other continuation keep missing-only image writes.
+   Review that predecessor before dispatching or approving any comparable future exception.
 5. Only after all registry checks does it write the source tag's Reviewed GitHub Release notes from the
    dispatched main commit's `CHANGELOG.md`. Use the notes-only operation when a publication step should
    not run at all.
@@ -117,13 +124,12 @@ publication jobs use non-cancelling concurrency within their class, so two packa
   section rather than an auto-generated commit list. PyPI's file-level status is `verified`, `missing`
   or `partial`; separate wheel and sdist outputs ensure attestations and uploads cover only absent
   files. Post-upload reads wait for incomplete status and accept only eventual `verified` content.
-  GHCR publication authenticates once before any
-  import or alias copy, including when the exact image already exists. PyPI and npm visibility checks
-  after successful
-  uploads retry only explicit `missing` or `partial` package results for a finite interval and require
-  eventual verified content. GHCR distinguishes HTTP 404
-  absence through its registry API and compares `Docker-Content-Digest` with the tested OCI archive;
-  unrelated error text, authorization failures and conflicting digests never authorize a write.
+  GHCR publication authenticates once before any import or alias copy, including when the exact image
+  already exists. PyPI and npm post-upload reads retry only explicit `missing` or `partial` package
+  results for a finite interval and require eventual verified content. GHCR distinguishes HTTP 404
+  absence through its registry API and compares `Docker-Content-Digest` with the tested OCI archive.
+  Unrelated error text, authorization failures and conflicting digests never authorize a write. The
+  sole reviewed alias exception for `v1.1.1` is stated above and does not apply automatically elsewhere.
 - Publication is sequential within the approval-gated publish job: PyPI, then npm, then GHCR. Each
   step must succeed before the next one starts. Only after those package versions resolve does the
   job publish `server.json` to the MCP Registry. A registry has no transaction that can retract an

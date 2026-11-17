@@ -29,12 +29,14 @@ MCP Registry ownership metadata, not evidence that the package or MCP Registry e
 published. See [Releasing](Releasing) for sequence and account prerequisites.
 
 Before every write, `scripts/verify_ghcr.sh` reads the registry manifest with a scoped pull token.
-Only an explicit HTTP 404 permits an import or a copy from the exact source image. Existing tags must
-report the tested root digest, and authorization, transport, malformed-response or mismatch failures
-stop the job. Each absent tag has at most one write, followed by bounded read-back checks that never
-write again. The MCP-only recovery has no write path. A protected older-tag package continuation may
-update the short aliases and `latest` to that older tested image; use [Releasing](Releasing)'s review
-procedure rather than assuming aliases move only in version order.
+An explicit HTTP 404 permits an import or a copy from the exact source image. Other tags must report
+the tested root digest, and authorization, transport, malformed-response or mismatch failures stop the
+job. Each absent tag has at most one write, followed by bounded read-back checks that never write
+again. The only exception is a protected caller supplying `--advance-major-latest-from` with an exact
+reviewed predecessor digest. It permits only the major and `latest` aliases after their existing
+manifest independently matches that digest; ordinary release and MCP-only recovery commands never
+supply it. The `v1.1.1` continuation records its specific predecessor in [Releasing](Releasing).
+Do not assume aliases move only in version order.
 
 ## Compose (recommended)
 

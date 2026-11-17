@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 # Verify every GHCR release tag against the tested OCI root index digest.
-# Optional protected publication imports only an explicit HTTP 404, never a conflict.
+# Missing tags have one write. An explicit reviewed predecessor digest can
+# authorize only the major and latest aliases to advance under publication.
 set -euo pipefail
 
 VERSION="${1:?release version is required}"
 MODE="${2:-verify}"
+ADVANCE_FROM=""
+if [ "$#" -eq 4 ] && [ "$MODE" = publish-missing ] && [ "$3" = --advance-major-latest-from ]; then
+    ADVANCE_FROM="$4"
+elif [ "$#" -ne 2 ]; then
+    printf 'Usage: verify_ghcr.sh VERSION [verify | publish-missing [--advance-major-latest-from DIGEST]]\n' >&2
+    exit 2
+fi
+if [ -n "$ADVANCE_FROM" ] && [[ ! "$ADVANCE_FROM" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    printf 'The reviewed predecessor must be one SHA-256 digest\n' >&2
+    exit 2
+fi
 IMAGE="ghcr.io/${GITHUB_REPOSITORY:?repository is required}"
 VERSION_IMAGE="$IMAGE:$VERSION"
 REGCTL="${REGCTL:-./regctl}"
@@ -34,9 +46,23 @@ for tag in "$VERSION" "${VERSION%.*}" "${VERSION%%.*}" latest; do
     else
         status=$?
     fi
+    if [ "$status" -eq 1 ] && [ "$MODE" = publish-missing ] && [ -n "$ADVANCE_FROM" ]; then
+        # The approval permits only these two mutable aliases. A second lookup
+        # rejects every predecessor except the reviewed immutable image digest.
+        if [ "$tag" != "${VERSION%%.*}" ] && [ "$tag" != latest ]; then
+            exit 1
+        fi
+        if python3 "${GHCR_LOOKUP:-scripts/ghcr_manifest.py}" \
+            --repository "$GITHUB_REPOSITORY" --tag "$tag" --expected "$ADVANCE_FROM"; then
+            status=2
+        else
+            exit 1
+        fi
+    fi
     [ "$status" -eq 2 ] || exit 1
     if [ "$MODE" = publish-missing ]; then
-        # This branch runs once per absent tag. All later reads are verification.
+        # This branch runs once per absent or explicitly reviewed alias. All
+        # later reads require the new tested digest and never write again.
         if [ "$tag" = "$VERSION" ]; then
             "$REGCTL" image import "$VERSION_IMAGE" dist/tapebasis-image.tar
         else

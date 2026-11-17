@@ -554,6 +554,20 @@ if status in {"present-before-publish", "exact-present"}:
         status = "match"
     else:
         status = "match" if f"ghcr.io/example/tapebasis:{tag}" in written else "absent"
+if status == "approved-alias":
+    state = root / "last-publish"
+    written = state.read_text().splitlines() if state.exists() else []
+    if tag in {"1", "latest"} and f"ghcr.io/example/tapebasis:{tag}" not in written:
+        expected = args[args.index("--expected") + 1]
+        if expected == "sha256:" + "a" * 64:
+            status = "conflict"
+        elif expected == os.environ.get("PREDECESSOR_DIGEST"):
+            print(expected)
+            sys.exit(0)
+        else:
+            sys.exit(1)
+    else:
+        status = "match" if f"ghcr.io/example/tapebasis:{tag}" in written else "absent"
 if status == "remain-absent":
     status = "absent"
 if status == "absent":
@@ -600,10 +614,10 @@ def ghcr_environment(fixture, status="match", python=None):
 
 def run_ghcr(fixture, environment):
     """Execute the shell verifier with no actual GHCR or image credentials."""
-    return subprocess.run(
-        ["bash", "scripts/verify_ghcr.sh", "1.0.0", environment.pop("MODE", "verify")],
-        cwd=fixture[0], env=environment, capture_output=True, text=True,
-    )
+    command = ["bash", "scripts/verify_ghcr.sh", "1.0.0", environment.pop("MODE", "verify")]
+    if environment.get("ADVANCE"):
+        command.extend(environment.pop("ADVANCE").split("=", 1))
+    return subprocess.run(command, cwd=fixture[0], env=environment, capture_output=True, text=True)
 
 
 def test_ghcr_all_tags_retries_absence_and_never_imports_in_verify_mode(tmp_path):
@@ -665,6 +679,62 @@ def test_ghcr_only_explicit_absence_can_publish(tmp_path):
     assert sum(line.startswith("image copy") for line in commands) == 3
     assert "image copy ghcr.io/example/tapebasis:1.0.0 ghcr.io/example/tapebasis:1.0" in commands
     assert "VERSIONIMAGE" not in calls.read_text()
+
+
+def test_ghcr_advances_only_approved_major_and_latest_aliases(tmp_path):
+    """The explicit predecessor policy writes two aliases, then verifies the new image."""
+    fixture = ghcr_workspace(tmp_path)
+    predecessor = "sha256:" + "b" * 64
+    environment = ghcr_environment(fixture, "approved-alias")
+    environment.update(
+        MODE="publish-missing",
+        ADVANCE="--advance-major-latest-from=" + predecessor,
+        PREDECESSOR_DIGEST=predecessor,
+    )
+    result = run_ghcr(fixture, environment)
+    assert result.returncode == 0, result.stderr
+    commands = fixture[1].read_text().splitlines()
+    assert commands.count("lookup 1") == 3
+    assert commands.count("lookup latest") == 3
+    copies = [line for line in commands if line.startswith("image copy")]
+    assert copies == [
+        "image copy ghcr.io/example/tapebasis:1.0.0 ghcr.io/example/tapebasis:1.0",
+        "image copy ghcr.io/example/tapebasis:1.0.0 ghcr.io/example/tapebasis:1",
+        "image copy ghcr.io/example/tapebasis:1.0.0 ghcr.io/example/tapebasis:latest",
+    ]
+    assert sum(line.startswith("registry login") for line in commands) == 1
+    assert fixture[1].read_text().count("image copy ghcr.io/example/tapebasis:1.0.0 ghcr.io/example/tapebasis:1\n") == 1
+
+
+def test_ghcr_rejects_unapproved_aliases_and_never_advances_in_other_modes(tmp_path):
+    """A predecessor cannot replace unrelated images or silently enable alias writes."""
+    predecessor = "sha256:" + "b" * 64
+    advance = "--advance-major-latest-from=" + predecessor
+    fixture = ghcr_workspace(tmp_path)
+    environment = ghcr_environment(fixture, "match")
+    environment["ADVANCE"] = advance
+    result = run_ghcr(fixture, environment)
+    assert result.returncode == 2
+    for status in ("conflict", "approved-alias"):
+        calls = fixture[1]
+        calls.write_text("")
+        environment = ghcr_environment(fixture, status)
+        environment.update(PREDECESSOR_DIGEST=predecessor)
+        result = run_ghcr(fixture, environment)
+        assert result.returncode != 0
+        assert "image copy" not in calls.read_text()
+    for invalid in ("", "sha256:" + "b" * 63, "sha256:" + "B" * 64):
+        calls.write_text("")
+        environment = ghcr_environment(fixture, "conflict")
+        environment["ADVANCE"] = "--advance-major-latest-from=" + invalid
+        result = run_ghcr(fixture, environment)
+        assert result.returncode == 2
+        assert "registry login" not in calls.read_text()
+    calls.write_text("")
+    environment = ghcr_environment(fixture, "conflict")
+    environment["ADVANCE"] = "--advance-major-latest-from=" + ("sha256:" + "c" * 64)
+    result = run_ghcr(fixture, environment)
+    assert result.returncode != 0 and "image copy" not in calls.read_text()
 
 
 def test_ghcr_failed_publish_is_not_misreported_as_verified(tmp_path):

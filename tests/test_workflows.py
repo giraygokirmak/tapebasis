@@ -111,6 +111,15 @@ def test_package_continuation_is_distinct_and_source_bound():
     assert "dist/tapebasis-${VERSION}.tgz" in text
     assert "npm publish \"./dist/tapebasis-${VERSION}.tgz\"" in text and "uv publish" in text
     assert "verify_ghcr.sh \"$VERSION\" publish-missing" in text
+    assert "--advance-major-latest-from \"$PREVIOUS_RELEASE_DIGEST\"" in " ".join(text.split())
+    continuation = workflow()["jobs"]["resume-publication"]["steps"]
+    alias = next(step for step in continuation if "reviewed predecessor" in step.get("name", ""))
+    assert alias["if"] == "inputs.resume_tag == 'v1.1.1'"
+    assert alias["run"].strip().endswith('--advance-major-latest-from "$PREVIOUS_RELEASE_DIGEST"')
+    assert alias["env"]["PREVIOUS_RELEASE_DIGEST"] == "sha256:4ff12fdcdc79e7c5cd065a3ffb685dcbe6daee518442b7751e0479e0da1e3167"
+    ordinary = next(step for step in continuation if "other GHCR releases" in step.get("name", ""))
+    assert ordinary["if"] == "inputs.resume_tag != 'v1.1.1'"
+    assert "--advance-major-latest-from" not in ordinary["run"]
     assert "publish source-server.json" in text
     assert "server.json --output \"$GITHUB_OUTPUT\"" not in text.replace("source-server.json --output \"$GITHUB_OUTPUT\"", "")
     assert text.count("--await-visible") == 2

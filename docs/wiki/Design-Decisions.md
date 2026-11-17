@@ -1361,6 +1361,11 @@ source commit. The old immutable tag remains the source of its version and commi
 the Release must match. Release writes omit `target_commitish` after verifying a live immutable tag, so GitHub does
 not demand separate workflow-modification authority for an old source commit. This needs only `contents: write`, never
 a persistent personal access token or tag movement. No such helper automatically grants the required environment approval.
+The `v1.1.1` continuation alone has a reviewed alias exception: a second lookup must show `1` or
+`latest` at the tested `1.0.0` digest before it can copy that alias to the tested `1.1.1` digest. The
+normal tag writer, other continuations and MCP-only recovery omit this predecessor argument. An exact
+or minor-version conflict, unknown predecessor and every lookup error remain fatal. Each operation
+still performs at most one write per tag, followed by read-only verification of the new target.
 
 ---
 

@@ -23,6 +23,9 @@ Registry availability is recorded separately where a tag was published only part
 - Bootstrapped a reviewed historical Release note for `1.0.0` without moving its tag, and documented the
   rejected `1.1.0` and partial `1.1.1` publication states without implying unavailable package releases.
 - Added explicit HTTP-status GHCR lookups and tests for fatal authorization, transport and conflict cases.
+- Bound the approved `v1.1.1` GHCR `1` and `latest` alias advancement to its tested source image and
+  the verified predecessor digest for `1.0.0`. Other tag conflicts remain fatal; no ordinary release
+  or recovery path receives that exception.
 - Added per-file PyPI continuation so an existing verified wheel or sdist is never re-uploaded.
 
 - Reviewed changelog sections become idempotently updated GitHub Release notes for source tags.
