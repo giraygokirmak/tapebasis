@@ -52,8 +52,11 @@ OPENER = urllib.request.build_opener(SameHostRedirects())
 def load_metadata(root: pathlib.Path) -> tuple[str, dict]:
     """Return the common project version and source MCP server manifest."""
     try:
-        import tomllib
+        import tomllib  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        import tomli as tomllib  # type: ignore[import-not-found,no-redef]
 
+    try:
         version = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
         package = json.loads((root / "package.json").read_text(encoding="utf-8"))
         server = json.loads((root / "server.json").read_text(encoding="utf-8"))

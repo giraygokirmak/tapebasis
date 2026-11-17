@@ -1295,7 +1295,10 @@ content match those artifacts. It can only publish missing MCP Registry metadata
 packages or modify container images. If any package registry differs or is missing, the job stops.
 The source bootstrap supplies the required npm bootstrap marker in the `release-recovery` environment.
 GitHub Contents API base64 wrapping and ordinary ZIP files without Unix file-type bits are supported;
-invalid encoding, path traversal, symlinks, missing members and checksum differences remain fatal.
+invalidve encoding, path traversal, symlinks, missing members and checksum differences remain fatal.
+Its source metadata parser falls back to the declared `tomli` dependency on Python 3.10, where the
+standard library has no `tomllib`, exactly as `check_release.py` does. Both read the complete TOML
+document; a pre-3.11 import failure is not permission to skip version identity.
 
 **Why:** retrying a failed tag run reuses the old tag's YAML and risks duplicate uploads or overwriting
 existing packages with different bytes. A main-only recovery path allows fixing workflow bugs without

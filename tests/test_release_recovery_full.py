@@ -116,6 +116,30 @@ def test_registry_errors_and_malformed_metadata_stop(monkeypatch):
         module.check_mcp({"name": "wrong", "version": "1.0.0"}, "1.0.0")
 
 
+def test_source_metadata_uses_toml_fallback_before_311(monkeypatch):
+    """Read identical release metadata through the declared pre-3.11 parser."""
+    module = load("release_artifact_source")
+    if sys.version_info >= (3, 11):
+        import tomllib as parser
+    else:
+        import tomli as parser
+    expected = module.load_metadata(ROOT)
+    original_import = __import__
+
+    def hide_tomllib(name, *args, **kwargs):
+        """Exercise the compatibility import on every test interpreter."""
+        if name == "tomllib":
+            raise ModuleNotFoundError("No module named 'tomllib'")
+        if name == "tomli":
+            return parser
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", hide_tomllib)
+    monkeypatch.delitem(sys.modules, "tomllib", raising=False)
+    monkeypatch.setitem(sys.modules, "tomli", parser)
+    assert module.load_metadata(ROOT) == expected
+
+
 def source_fixture():
     """Return the essential successful-source, approved-but-failed publish tuple."""
     run = {"id": 43435266134, "event": "push", "name": "Release", "head_branch": "v1.0.0", "head_sha": "a" * 40, "status": "completed"}

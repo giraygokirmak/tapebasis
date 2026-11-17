@@ -161,7 +161,9 @@ endpoints are readable.
 3. Run `PATH=<uv-install-directory>:$PATH scripts/quality-gate.sh --commit` locally after installing
    the project and its development extras in `.venv`. Omit the `PATH=` prefix when uv is already
    installed. On Python 3.10 the project installs `tomli`, so `check_release.py` parses TOML with the
-   same implementation used by Python 3.11 and later rather than accepting malformed metadata. Add
+   same implementation used by Python 3.11 and later rather than accepting malformed metadata.
+   Source-artifact metadata validation uses the same `tomli` fallback and validates the original
+   version, package lockfiles and source server manifest as one identity. Add
    `npm test`, `npm run check`, and `npm pack --dry-run` for launcher changes. The full test gate
    already performs the real build, installation and MCP smoke tests.
 4. Land the tested commit on main. Do not tag an uncommitted working tree, and do not tag merely to make
