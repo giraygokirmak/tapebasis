@@ -10,12 +10,16 @@ this repository uses immutable OIDC subject claims, and npm answers that token e
 [npm/cli#9969](https://github.com/npm/cli/issues/9969). Package availability therefore does not prove
 that configuration works, and the repository cannot switch the claim format off.
 For `v1.1.1`, continuation runs `44089890432` and `44092787410` verified the original tested PyPI files
-without re-upload but failed before any npm upload. The npm `1.1.1` version remains absent. GHCR,
-MCP and GitHub Release steps were skipped: GHCR `1.1.1` and `1.1` remain absent, `1` and `latest`
-remain on the tested `1.0.0` image, MCP metadata remains at `1.0.0`, and only `v1.0.0` has an ordinary
-GitHub Release. No retry of either run is permitted. Direct npm publication is replaced by staged
-publication, which needs your approval on npm before the remaining registries are completed. The
-in-development `1.1.2` release is not published.
+without re-upload but failed before any npm upload. No retry of either run is permitted. Run
+`44106300065` staged the tested npm tarball, and the maintainer approved it on npm with two-factor
+authentication. Run `44107314499` verified the live npm `1.1.1` SHA-512 integrity against the original
+artifact rather than staging or uploading it again, then completed and verified GHCR, MCP Registry
+metadata and the ordinary GitHub Release. GHCR `1.1.1`, `1.1`, `1` and `latest` all independently match
+the tested root digest
+`sha256:18a54e02f28d195030cd02ee1f45088eeb05a34792d532197f143f6a73a209d7`. The release environment's
+stage-only token remains limited to the single package but must be revoked when staging is no longer
+needed. The `1.1.2` release is not published while this completed `v1.1.1` status is recorded separately
+from the existing Release body.
 The rejected `v1.1.0` run
 `44060097251` has no tested release artifacts: its Python 3.10 validation failed before the build or
 protected publication started. No package, image, MCP entry or ordinary GitHub Release is published for
@@ -149,6 +153,16 @@ publication jobs use non-cancelling concurrency within their class, so two packa
 - `publish-image.yml` retains its filename but only calls the validation workflow. Main, pull requests
   and manual runs have no registry publication. An approved release tags its tested image `latest`;
   there is no moving main-branch image.
+
+## GitHub Release identity
+
+The writer verifies the existing immutable tag's source commit before creating or updating its Release.
+It deliberately omits `target_commitish`, so GitHub can show `main` as the target while the Release's tag
+still names the immutable artifact source. Do not patch this display field to imply that the old tag moved
+or that the main revision is its tested source. The tag object, tag target, source artifact digest,
+Release title and reviewed changelog body are the binding checks. A `v1.1.1` Release created after its
+npm staging and completion runs therefore has `target_commitish: main`, while its immutable `v1.1.1` tag
+still targets the tested `e1b2083406eaac34b72ba1d964cfc51e63610faa` source commit.
 
 ## GitHub release approval
 

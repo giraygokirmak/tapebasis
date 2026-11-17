@@ -1390,6 +1390,11 @@ The `v1.1.1` continuation alone has a reviewed alias exception: a second lookup 
 normal tag writer, other continuations and MCP-only recovery omit this predecessor argument. An exact
 or minor-version conflict, unknown predecessor and every lookup error remain fatal. Each operation
 still performs at most one write per tag, followed by read-only verification of the new target.
+Because Release creation deliberately omits `target_commitish`, GitHub can display `main` there without
+changing the verified immutable tag. Later status documentation must not move the tag, patch that display
+field to claim the old commit, or alter an existing reviewed Release body merely to record later registry
+completion. Independent live checks rather than a Release `target_commitish` value establish registry
+content.
 
 ---
 

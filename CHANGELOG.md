@@ -44,13 +44,18 @@ Registry availability is recorded separately where a tag was published only part
 
 ### Publication status
 
-- PyPI wheel and sdist match the original tested tag artifacts byte-for-byte.
-- Continuation runs `44089890432` and `44092787410` failed before any npm upload. npm rejects this
-  repository's OIDC token exchange with `package not found`; the second run identified the immutable
-  OIDC subject claims behind that response rather than a trusted-publisher mismatch. npm remains absent,
-  GHCR, MCP and GitHub Release steps were skipped, and the `1` and `latest` aliases remain on `1.0.0`.
-  Neither run may be retried. The next continuation stages the tarball for maintainer approval on npm,
-  after which a later dispatch completes the remaining registries.
+- PyPI wheel and sdist match the original tested tag artifacts byte-for-byte. Continuation runs
+  `44089890432` and `44092787410` failed before any npm upload after npm rejected this repository's
+  immutable OIDC subject claims. Neither run may be retried.
+- Run `44106300065` staged the original tested npm tarball with the release-only stage credential.
+  A maintainer approved it with npm two-factor authentication. Run `44107314499` then verified its
+  live SHA-512 integrity without staging or uploading it again. npm `1.1.1` and its `latest` tag now
+  match the original tarball; the stage-only credential still requires revocation when staging ends.
+- Run `44107314499` completed GHCR without replacing matching package content. The `1.1.1`, `1.1`,
+  `1` and `latest` aliases independently match the tested image root digest
+  `sha256:18a54e02f28d195030cd02ee1f45088eeb05a34792d532197f143f6a73a209d7`. MCP Registry metadata
+  for `1.1.1` matches the immutable source `server.json`, and the GitHub Release carries this reviewed
+  changelog section. The `v1.1.1` tag remains on its original source commit.
 
 ## [1.1.0] - 2026-11-17
 
