@@ -49,6 +49,23 @@ def test_npm_publication_addresses_a_local_tarball_not_a_github_shortcut():
         assert "npm publish \"dist/tapebasis-${VERSION}.tgz\"" not in text
 
 
+def test_npm_oidc_keeps_tokenless_node_setup_and_enables_diagnostics():
+    """Publish jobs expose token-exchange errors without introducing stored tokens."""
+    for job_name in ("publish", "resume-publication"):
+        job = workflow()["jobs"][job_name]
+        setup = next(step for step in job["steps"]
+                     if step.get("uses", "").startswith("actions/setup-node@"))
+        assert setup["with"] == {"node-version": "24"}
+        publishes = [step for step in job["steps"] if "npm publish " in step.get("run", "")]
+        assert len(publishes) == 1
+        assert publishes[0]["run"] == (
+            'npm publish "./dist/tapebasis-${VERSION}.tgz" --access public --loglevel verbose'
+        )
+    recovery = yaml.safe_dump(workflow()["jobs"]["recover-mcp"])
+    assert "npm publish" not in recovery and "--loglevel verbose" not in recovery
+    assert "registry-url:" not in (ROOT / ".github/workflows/release.yml").read_text()
+
+
 def test_only_tag_publishes_packages_and_recovery_is_main_only():
     """Normal publication uses release; MCP-only recovery uses another protected environment."""
     jobs = workflow()["jobs"]

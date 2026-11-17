@@ -1281,7 +1281,13 @@ identity and permits the matching `io.github.giraygokirmak/tapebasis` namespace.
 successes claimed in advance. Npm publication supplies the tested archive with an explicit `./dist/`
 path. Without `./`, npm parses the argument as a GitHub repository shortcut and may fail over SSH
 before trusted publishing starts. The CLI version, repository binding and OIDC identity remain
-unchanged when correcting this argument parsing. `server.json`, the npm and PyPI ownership markers
+unchanged when correcting this argument parsing. The source `publishConfig.registry` already selects the
+official registry. Newer npm examples use `registry-url`, but pinned `setup-node` v4 also injects a
+`NODE_AUTH_TOKEN` placeholder and a dummy credential. Adding that input would obscure the tokenless
+failure, so it remains unset. The command uses `--loglevel verbose`, because npm otherwise hides a token-exchange rejection behind a
+generic `ENEEDAUTH`. Diagnostic review uses only non-secret error messages, never token values. There is
+no fallback to `NPM_TOKEN`, `NODE_AUTH_TOKEN` or a persistent npm credential. `server.json`, the npm
+and PyPI ownership markers
 and the OCI ownership label support verified MCP Registry publication after package uploads. `uvx tapebasis` always runs the
 Python server; npm supplies only its launcher, not a separate implementation.
 

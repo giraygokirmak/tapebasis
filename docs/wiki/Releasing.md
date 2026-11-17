@@ -3,11 +3,15 @@
 The `v1.0.0` wheel, sdist and npm launcher are published and match the original tag-run artifacts.
 GHCR serves `1.0.0`, `1.0`, `1` and `latest` for `linux/amd64` and `linux/arm64`, all with the tested
 root digest `sha256:4ff12fdcdc79e7c5cd065a3ffb685dcbe6daee518442b7751e0479e0da1e3167`.
-The protected recovery independently verified these package bytes and image tags before its read-only
-MCP lookup failed because of a command-line parser bug. The MCP Registry entry remains incomplete
-until the corrected protected recovery succeeds. The npm trusted publisher configuration has not yet
-completed a real OIDC publish, so package availability does not prove that configuration works.
-The in-development `1.1.2` release is not published. The rejected `v1.1.0` run
+The protected recovery independently verified these package bytes and image tags, and MCP Registry
+metadata is published for `1.0.0`. The npm trusted publisher configuration has not yet completed a real
+OIDC publish, so package availability does not prove that configuration works.
+For `v1.1.1`, continuation run `44089890432` verified the original tested PyPI files without re-upload
+but failed its missing npm publish with `ENEEDAUTH`. The npm `1.1.1` version remains absent. GHCR,
+MCP and GitHub Release steps were skipped: GHCR `1.1.1` and `1.1` remain absent, `1` and `latest`
+remain on the tested `1.0.0` image, MCP metadata remains at `1.0.0`, and only `v1.0.0` has an ordinary
+GitHub Release. No retry of that run is permitted. The in-development `1.1.2` release is not published.
+The rejected `v1.1.0` run
 `44060097251` has no tested release artifacts: its Python 3.10 validation failed before the build or
 protected publication started. No package, image, MCP entry or ordinary GitHub Release is published for
 this tag; its reviewed publication status remains in `CHANGELOG.md`. Do not move the tag or synthesize
@@ -192,12 +196,20 @@ OIDC publisher. This is a bootstrap limitation, not a permanent token requiremen
    must complete its first successful publish within 2 days, or it expires and must be recreated.
 5. The workflow uses GitHub-hosted Node.js 24 and its bundled npm CLI. It exchanges GitHub's OIDC
    identity for a short-lived publish credential; no `NPM_TOKEN`, `NODE_AUTH_TOKEN`, or persistent
-   automation token is used. On a public repository publishing a public package, trusted publishing
-   creates provenance automatically. The publish command passes the tested tarball as
-   `npm publish "./dist/tapebasis-${VERSION}.tgz" --access public`. The leading `./` is required for
-   a relative local path: without it npm interprets `dist/tapebasis-1.1.1.tgz` as a GitHub repository
-   shortcut and attempts an unrelated SSH `ls-remote`, failing before any npm publication or OIDC
-   authentication. Do not confuse that argument-parsing error with a trusted publisher rejection.
+   automation token is used. The pinned `setup-node` v4 deliberately has no `registry-url`: although
+   newer npm examples include it, v4 also injects a `NODE_AUTH_TOKEN` placeholder and dummy credential.
+   The tested tarball's `publishConfig.registry` already selects `https://registry.npmjs.org`. Keep this
+   setup tokenless rather than following that example blindly. On a public repository publishing a
+   public package, trusted publishing creates provenance automatically. The publish command passes the
+   tested tarball as `npm publish "./dist/tapebasis-${VERSION}.tgz" --access public --loglevel verbose`.
+   The leading `./` is required for a relative local path: without it npm interprets
+   `dist/tapebasis-1.1.1.tgz` as a GitHub repository shortcut and attempts an unrelated SSH `ls-remote`,
+   failing before any npm publication or OIDC authentication. Do not confuse that argument-parsing error
+   with a trusted publisher rejection. Verbose logging exposes the otherwise hidden token-exchange body
+   message when publication ends in generic `ENEEDAUTH`. Read only that non-secret message and never
+   copy or expose token values. An account mismatch, including repository, workflow, environment or
+   direct-publish permission, still requires maintainer correction on npm; the diagnostic is not itself
+   a publisher repair. Any next publication uses a fresh dispatch and separate `release` approval.
 6. Prefer restricting ordinary token publishing in npm after the trusted publisher is working. Remove
    the bootstrap credential from the local machine as usual with `npm logout`.
 

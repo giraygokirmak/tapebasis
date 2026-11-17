@@ -291,7 +291,7 @@ jobs:
         if: steps.npm.outputs.npm_status == 'missing'
         env:
           VERSION: ${{ needs.build.outputs.version }}
-        run: npm publish "./dist/tapebasis-${VERSION}.tgz" --access public
+        run: npm publish "./dist/tapebasis-${VERSION}.tgz" --access public --loglevel verbose
 
       - name: Verify npm after conditional publication
         env:
@@ -520,7 +520,7 @@ jobs:
 
       - name: Publish only the missing source npm version through GitHub OIDC
         if: steps.npm.outputs.npm_status == 'missing'
-        run: npm publish "./dist/tapebasis-${VERSION}.tgz" --access public
+        run: npm publish "./dist/tapebasis-${VERSION}.tgz" --access public --loglevel verbose
 
       - name: Verify source npm integrity with bounded visibility waiting
         run: python3 scripts/release_registry.py npm --version "$VERSION" --dist dist --require-existing --await-visible

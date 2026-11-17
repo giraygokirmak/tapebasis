@@ -14,6 +14,8 @@ Registry availability is recorded separately where a tag was published only part
 - Associated reviewed Release notes with an existing verified tag without resubmitting a workflow-changing
   `target_commitish` that the built-in token cannot modify.
 - Passed npm publication an explicit `./` local-tarball path instead of an accidental GitHub repository shortcut.
+- Exposed verbose, non-secret npm OIDC token-exchange diagnostics without a persistent token or claiming
+  publisher repair. Retained tokenless `setup-node` because v4's `registry-url` injects a dummy credential.
 
 ### Release process
 
@@ -39,7 +41,9 @@ Registry availability is recorded separately where a tag was published only part
 ### Publication status
 
 - PyPI wheel and sdist match the original tested tag artifacts byte-for-byte.
-- npm, GHCR and MCP Registry publication remain pending their separately approved continuation.
+- Continuation run `44089890432` failed its missing npm publish with `ENEEDAUTH`. npm remains absent,
+  GHCR, MCP and GitHub Release steps were skipped, and the `1` and `latest` aliases remain on `1.0.0`.
+  A later separately approved continuation remains necessary; the failed run must not be retried.
 
 ## [1.1.0] - 2026-11-17
 
