@@ -1278,8 +1278,11 @@ namespace needs no separate registry account: its `github-oidc` login proves the
 identity and permits the matching `io.github.giraygokirmak/tapebasis` namespace.
 
 **Consequence:** registry availability and account provisioning are release prerequisites, not CI
-successes claimed in advance. `server.json`, the npm and PyPI ownership markers and the OCI ownership
-label support verified MCP Registry publication after package uploads. `uvx tapebasis` always runs the
+successes claimed in advance. Npm publication supplies the tested archive with an explicit `./dist/`
+path. Without `./`, npm parses the argument as a GitHub repository shortcut and may fail over SSH
+before trusted publishing starts. The CLI version, repository binding and OIDC identity remain
+unchanged when correcting this argument parsing. `server.json`, the npm and PyPI ownership markers
+and the OCI ownership label support verified MCP Registry publication after package uploads. `uvx tapebasis` always runs the
 Python server; npm supplies only its launcher, not a separate implementation.
 
 ---
@@ -1295,7 +1298,7 @@ content match those artifacts. It can only publish missing MCP Registry metadata
 packages or modify container images. If any package registry differs or is missing, the job stops.
 The source bootstrap supplies the required npm bootstrap marker in the `release-recovery` environment.
 GitHub Contents API base64 wrapping and ordinary ZIP files without Unix file-type bits are supported;
-invalidve encoding, path traversal, symlinks, missing members and checksum differences remain fatal.
+invalid encoding, path traversal, symlinks, missing members and checksum differences remain fatal.
 Its source metadata parser falls back to the declared `tomli` dependency on Python 3.10, where the
 standard library has no `tomllib`, exactly as `check_release.py` does. Both read the complete TOML
 document; a pre-3.11 import failure is not permission to skip version identity.
@@ -1307,7 +1310,10 @@ modification during incident response.
 
 **Boundary:** recovery requires the original tag's artifacts to be intact and unexpired. If the tag
 artifacts are missing or damaged, recovery cannot proceed; a new tag with a new version is required.
-The `release-recovery` environment must be configured with main-only deployment restrictions and
+A rejected validation run such as `v1.1.0` has no artifact to resume and no package status to recover.
+Its `CHANGELOG.md` publication status records that it was not published, rather than creating an
+ordinary GitHub Release that could imply availability. Notes-only recovery still requires passing
+validation, a successful build and an intact immutable artifact. The `release-recovery` environment must be configured with main-only deployment restrictions and
 reviewer approval to prevent unauthorized registry changes.
 
 ---
@@ -1355,6 +1361,20 @@ source commit. The old immutable tag remains the source of its version and commi
 the Release must match. Release writes omit `target_commitish` after verifying a live immutable tag, so GitHub does
 not demand separate workflow-modification authority for an old source commit. This needs only `contents: write`, never
 a persistent personal access token or tag movement. No such helper automatically grants the required environment approval.
+
+---
+
+## 64. Rejected source tags stay visibly unpublished
+
+**Decision:** a source tag that fails validation or has no immutable build artifact does not acquire a
+normal GitHub Release through a relaxed recovery route. The reviewed `CHANGELOG.md` section records
+the rejection and the registry absence; continuation remains bound to tested artifacts.
+
+**Why:** GitHub Releases represent published releases in the ordinary user interface, while their
+prerelease flag means unstable, not unpublished. Creating one for a failed tag would contradict
+the artifact checks and could imply installable packages that never existed. A separate record would
+require an explicitly non-publication interface, not a silent weakening of the immutable artifact
+contract. The rejected `v1.1.0` tag therefore remains a documented, unpublished source milestone.
 
 ---
 

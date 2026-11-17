@@ -41,6 +41,14 @@ def test_workflows_parse_and_actions_are_pinned():
                 assert version and version.startswith("v"), owner
 
 
+def test_npm_publication_addresses_a_local_tarball_not_a_github_shortcut():
+    """Every publish command prevents npm from treating dist/name as a GitHub repository."""
+    for job_name in ("publish", "resume-publication"):
+        text = yaml.safe_dump(workflow()["jobs"][job_name])
+        assert text.count("npm publish \"./dist/tapebasis-${VERSION}.tgz\"") == 1
+        assert "npm publish \"dist/tapebasis-${VERSION}.tgz\"" not in text
+
+
 def test_only_tag_publishes_packages_and_recovery_is_main_only():
     """Normal publication uses release; MCP-only recovery uses another protected environment."""
     jobs = workflow()["jobs"]
@@ -101,7 +109,7 @@ def test_package_continuation_is_distinct_and_source_bound():
     assert "check_oci_image.py dist/tapebasis-image.tar" in text
     assert "check_release.py" not in text and "load_metadata" not in text
     assert "dist/tapebasis-${VERSION}.tgz" in text
-    assert "npm publish" in text and "uv publish" in text
+    assert "npm publish \"./dist/tapebasis-${VERSION}.tgz\"" in text and "uv publish" in text
     assert "verify_ghcr.sh \"$VERSION\" publish-missing" in text
     assert "publish source-server.json" in text
     assert "server.json --output \"$GITHUB_OUTPUT\"" not in text.replace("source-server.json --output \"$GITHUB_OUTPUT\"", "")

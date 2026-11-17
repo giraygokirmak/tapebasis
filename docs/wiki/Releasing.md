@@ -7,8 +7,12 @@ The protected recovery independently verified these package bytes and image tags
 MCP lookup failed because of a command-line parser bug. The MCP Registry entry remains incomplete
 until the corrected protected recovery succeeds. The npm trusted publisher configuration has not yet
 completed a real OIDC publish, so package availability does not prove that configuration works.
-The in-development `1.1.2` release is not published. Older partial releases require registry-specific
-inspection and protected continuation; their Git tags alone do not establish registry completeness.
+The in-development `1.1.2` release is not published. The rejected `v1.1.0` run
+`44060097251` has no tested release artifacts: its Python 3.10 validation failed before the build or
+protected publication started. No package, image, MCP entry or ordinary GitHub Release is published for
+this tag; its reviewed publication status remains in `CHANGELOG.md`. Do not move the tag or synthesize
+release artifacts for it.
+Older partial releases require registry-specific inspection and protected continuation; their Git tags alone do not establish registry completeness.
 
 ## Partial release recovery
 
@@ -77,7 +81,8 @@ Create a `release-notes` environment restricted to `main`, with required reviewe
 import or copy images, or publish MCP metadata. The normal and resumed package paths also create or update
 Release notes after their registry checks, using their package identity and tested source commit.
 
-To fill only missing or stale notes, including for a validated source tag whose publish job never started:
+To fill only missing or stale notes for a validated source tag whose immutable artifact is intact,
+including a tag whose publish job never started:
 dispatch on `main` with `notes_source_run` and `notes_tag`. Supply both values and no other operation pair.
 The original tag validation and build must both have passed, and its immutable artifact must still be
 available and intact. The writer reads the section for the old tag's version from the dispatched main
@@ -109,15 +114,16 @@ publication jobs use non-cancelling concurrency within their class, so two packa
 - A tag build produces the wheel, sdist, npm tarball and OCI image once. The publish job downloads
   those tested artifacts and verifies their SHA-256 checksums instead of silently rebuilding them.
 - Reviewed changelog summaries for the declared version are mandatory. Each GitHub Release uses that
-   section rather than an auto-generated commit list. PyPI's file-level status is `verified`, `missing`
-   or `partial`; separate wheel and sdist outputs ensure attestations and uploads cover only absent
-    files. Post-upload reads wait for either incomplete status and accept only an eventual `verified`. GHCR publication authenticates once before any
-   import or alias copy, including when the exact image already exists. PyPI and npm visibility checks
-   after successful
-   uploads retry only explicit `missing` or `partial` package results for a finite interval and require
-   eventual verified content. GHCR distinguishes HTTP 404
-   absence through its registry API and compares `Docker-Content-Digest` with the tested OCI archive;
-   unrelated error text, authorization failures and conflicting digests never authorize a write.
+  section rather than an auto-generated commit list. PyPI's file-level status is `verified`, `missing`
+  or `partial`; separate wheel and sdist outputs ensure attestations and uploads cover only absent
+  files. Post-upload reads wait for incomplete status and accept only eventual `verified` content.
+  GHCR publication authenticates once before any
+  import or alias copy, including when the exact image already exists. PyPI and npm visibility checks
+  after successful
+  uploads retry only explicit `missing` or `partial` package results for a finite interval and require
+  eventual verified content. GHCR distinguishes HTTP 404
+  absence through its registry API and compares `Docker-Content-Digest` with the tested OCI archive;
+  unrelated error text, authorization failures and conflicting digests never authorize a write.
 - Publication is sequential within the approval-gated publish job: PyPI, then npm, then GHCR. Each
   step must succeed before the next one starts. Only after those package versions resolve does the
   job publish `server.json` to the MCP Registry. A registry has no transaction that can retract an
@@ -181,7 +187,11 @@ OIDC publisher. This is a bootstrap limitation, not a permanent token requiremen
 5. The workflow uses GitHub-hosted Node.js 24 and its bundled npm CLI. It exchanges GitHub's OIDC
    identity for a short-lived publish credential; no `NPM_TOKEN`, `NODE_AUTH_TOKEN`, or persistent
    automation token is used. On a public repository publishing a public package, trusted publishing
-   creates provenance automatically.
+   creates provenance automatically. The publish command passes the tested tarball as
+   `npm publish "./dist/tapebasis-${VERSION}.tgz" --access public`. The leading `./` is required for
+   a relative local path: without it npm interprets `dist/tapebasis-1.1.1.tgz` as a GitHub repository
+   shortcut and attempts an unrelated SSH `ls-remote`, failing before any npm publication or OIDC
+   authentication. Do not confuse that argument-parsing error with a trusted publisher rejection.
 6. Prefer restricting ordinary token publishing in npm after the trusted publisher is working. Remove
    the bootstrap credential from the local machine as usual with `npm logout`.
 

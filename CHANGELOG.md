@@ -13,13 +13,15 @@ Registry availability is recorded separately where a tag was published only part
 - Prevented GHCR authorization or transport errors from triggering image writes.
 - Associated reviewed Release notes with an existing verified tag without resubmitting a workflow-changing
   `target_commitish` that the built-in token cannot modify.
+- Passed npm publication an explicit `./` local-tarball path instead of an accidental GitHub repository shortcut.
 
 ### Release process
 
 - Kept `v1.1.1` immutable; raised the declared next version to `1.1.2` without claiming its publication.
 - Added separate `resume_*` package continuation and `notes_*` Release-note dispatch pairs, preserving
   MCP-only recovery's prohibition on package and image writes.
-- Bootstrapped reviewed historical notes for `1.0.0`, `1.1.0` and `1.1.1` without moving their tags.
+- Bootstrapped a reviewed historical Release note for `1.0.0` without moving its tag, and documented the
+  rejected `1.1.0` and partial `1.1.1` publication states without implying unavailable package releases.
 - Added explicit HTTP-status GHCR lookups and tests for fatal authorization, transport and conflict cases.
 - Added per-file PyPI continuation so an existing verified wheel or sdist is never re-uploaded.
 
