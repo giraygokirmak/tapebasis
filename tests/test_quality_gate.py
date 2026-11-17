@@ -7,6 +7,7 @@ a temporary repository, with no network and no dependency on this checkout.
 from __future__ import annotations
 
 import importlib.util
+import os
 import pathlib
 import subprocess
 
@@ -27,7 +28,10 @@ def gate():
 
 @pytest.fixture()
 def tree(tmp_path, gate, monkeypatch):
-    """A minimal repository-shaped tree with a frozen baseline."""
+    """A minimal repository-shaped tree, isolated from the caller's Git target."""
+    for variable in os.environ:
+        if variable.startswith("GIT_"):
+            monkeypatch.delenv(variable)
     (tree_dir := tmp_path / "repo").mkdir()
     for relative in ("src/tapebasis", "docs/wiki", "scripts"):
         (tree_dir / relative).mkdir(parents=True)
@@ -45,6 +49,10 @@ def _git(directory: pathlib.Path, *args: str) -> None:
         check=True,
         capture_output=True,
         env={
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("GIT_")
+        } | {
             "GIT_AUTHOR_NAME": "Test",
             "GIT_AUTHOR_EMAIL": "test@example.com",
             "GIT_COMMITTER_NAME": "Test",
@@ -147,7 +155,10 @@ def test_public_surface_reads_signatures():
     assert module._public_surface(source) == {"public(a, b)", "class Box", "Box.open(self)"}
 
 
-def test_doc_with_code_ignores_a_body_only_change(tree, gate):
+def test_doc_with_code_ignores_caller_git_environment(tree, gate, monkeypatch):
+    """An outer commit's repository variables cannot target this test repository."""
+    monkeypatch.setenv("GIT_DIR", str(tree / "wrong-repository"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tree / "wrong-index"))
     module = tree / "src" / "tapebasis" / "mod.py"
     module.write_text('def public(value):\n    """Doc."""\n    return value\n', encoding="utf-8")
     _git(tree, "init")

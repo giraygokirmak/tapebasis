@@ -38,7 +38,8 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_tools_merge.py` | also: the live print replaces the stale regular field, and a row's price, change and previous close describe one session |
 | `test_health.py` | Probe verdicts, fingerprints, drift detection, `rate_limits` block |
 | `test_sentiment.py` | Local scoring: direction, neutrality, determinism, aggregation |
-| `test_sentiment_tool.py` | Token-free path, backend switching, no fabricated scores |
+| `test_sentiment_tool.py` | Token-free path, backend switching, no fabricated scores, separate news provenance |
+| `test_symbol_news.py` | News matching and consensus, Finviz clocks, newest-first limits and all news-bearing tool integrations |
 | `test_bloomberg.py` | Symbol mapping, `print_time` from the intraday series, sentinel rejection, the tie-break, declared-delay comparability, single-source envelope |
 | `test_stockanalysis.py` | Quote shaping (epoch-ms conversion, `cl` vs `pd`, extended block), mechanical plus not-carried resolution, transport status mapping |
 | `test_finviz_breakdown.py` | The `income-breakdown` island (statement scale, bank row sets, `converted` axes, absent/ETF cases) and the classification-chip markup |
@@ -48,7 +49,7 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_quote_socket.py` | TradingView `qsd` delta merging, deadline and receive error behavior, empty-result caching, and rate-limit conversion |
 | `test_server.py` | Tool registration, MCP surface |
 | `test_dockerfile.py` | The deployment contract: `tini` as PID 1, the entrypoint argv, `init: true` in compose |
-| `test_quality_gate.py` | The gate's own documentation checks, against a temporary repository |
+| `test_quality_gate.py` | The gate's own documentation checks against a temporary repository, isolated from an outer Git hook's `GIT_*` environment |
 
 `test_upstream_contract.py` is the file to extend when live probing finds a provider behaving
 surprisingly. Every case in it was found by calling the real upstream and getting something the
@@ -84,6 +85,7 @@ src/tapebasis/
 ├── sessions.py           session classification + which print is the live one
 ├── ratelimit.py          per-provider pacing, shared cooldown, TTL cache
 ├── merge_helpers.py      pure payload shapers
+├── news.py              symbol news merging, per-story consensus and duplicate collapsing
 ├── sentiment.py          token-free headline scoring
 ├── symbols.py            dynamic per-provider symbol resolution
 ├── health.py             upstream probes, fingerprints, drift state

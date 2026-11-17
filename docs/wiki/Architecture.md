@@ -60,6 +60,7 @@ src/tapebasis/
 ├── singleflight.py       merge identical concurrent work (not a cache)
 ├── blocking_pool.py      bounded thread pool for blocking provider calls
 ├── merge_helpers.py      pure payload shapers (raw provider dict → normalised fields)
+├── news.py              symbol news merge, per-story consensus, duplicates_collapsed
 ├── sentiment.py          token-free headline scoring (VADER + finance lexicon)
 ├── symbols.py            dynamic per-provider symbol resolution, the instrument registry
 ├── health.py             upstream probes, fingerprints, drift state, background loop

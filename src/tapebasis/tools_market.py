@@ -25,16 +25,13 @@ from .health import MONITOR
 from .merge_helpers import (
     fv_earnings_fields,
     fv_indices_fields,
-    fv_news_fields,
     fv_options_fields,
     fv_quote_fields,
-    news_overlap,
     option_overlap,
     tv_indices_fields,
-    tv_news_fields,
     tv_options_fields,
-    yahoo_news_fields,
 )
+from .news import NEWS_LIMIT
 from .providers_state import (
     PROVIDER_ORDER,
     DataProvider,
@@ -2058,78 +2055,48 @@ async def market_indices() -> dict[str, Any]:
 # ── News ─────────────────────────────────────────────────────────────────────
 
 
-async def stock_news(symbol: str, limit: int = 20, include_reactions: bool = True) -> dict[str, Any]:
-    """Headlines for one ticker from every provider that publishes them.
+async def stock_news(symbol: str, limit: int = NEWS_LIMIT, include_reactions: bool = True) -> dict[str, Any]:
+    """Latest 10 stories for one ticker, merged across every news provider.
 
-    Finviz supplies headlines with the price reaction around each item (the
-    day-of move and, when the story broke after the close, the next session's
-    move). TradingView's side is the provider's licensed news feed, Yahoo adds
-    its search feed. Headline titles are matched across feeds to report overlap.
+    Finviz supplies price reactions around an item, Yahoo supplies its search
+    feed and TradingView supplies its licensed Marketaux feed. The feeds are
+    deduplicated and ordered by publication time, so Finviz no longer hides
+    Yahoo's more recent headlines. Each story names its providers, their exact
+    alternate headlines and ``consensus``: true when multiple providers carry
+    it, false for a single-provider item. Matching uses the article URL or a
+    supported headline similarity, never just the company name.
 
     Args:
         symbol: Ticker.
-        limit: Maximum headlines per provider.
+        limit: Maximum unique stories returned, default 10 and capped at 50.
         include_reactions: Ask Finviz for price-reaction columns.
 
     Returns:
-        Envelope with ``data.items`` (Finviz ordering, which carries reactions)
-        and ``data.overlap`` describing how many TradingView headlines were also
-        present on Finviz.
+        Envelope whose ``data.items`` is the newest-first merged feed. The real
+        ``count`` may be below ``limit`` when upstreams supply fewer stories.
+        Coverage reflects providers with valid headlines, while ``provider_calls``
+        preserves the raw call outcomes. ``by_provider`` audits each feed and
+        ``pairwise`` compares every pair. Provider similarity is not a claim of
+        independent editorial verification.
     """
-    ticker = strip_exchange(symbol).upper()
-    resolved = await _symbols_for(symbol)
+    from . import news as symbol_news
 
-    async def tv_call() -> dict[str, Any]:
-        # Headlines are not a price feed, so the licensed news leg is the honest
-        # source here; without MARKETAUX_API_TOKEN it has nothing to return.
-        return await tv_access.news(resolved["TRADINGVIEW"].symbol or ticker)
-
-    async def fv_call() -> dict[str, Any]:
-        if not resolved["FINVIZ"].found:
-            raise NotApplicable(FINVIZ, resolved["FINVIZ"].note or "Finviz has no page")
-        return await fv_access.news(
-            resolved["FINVIZ"].symbol, limit=limit, include_reactions=include_reactions
-        )
-
-    async def yh_call() -> dict[str, Any]:
-        if not resolved["YAHOO"].found:
-            raise NotApplicable(YAHOO, resolved["YAHOO"].note or "no Yahoo symbol")
-        return await yh_access.news(resolved["YAHOO"].symbol, limit=limit)
-
-    pair = await ask(tv_call, fv_call, yh_call)
-    tv_norm = tv_news_fields(pair.tv.payload) if pair.tv.payload else None
-    fv_norm = fv_news_fields(pair.fv.payload) if pair.fv.payload else None
-    yh_norm = yahoo_news_fields(pair.yh.payload) if pair.yh.payload else None
-
-    tv_items = (tv_norm or {}).get("items") or []
-    fv_items = (fv_norm or {}).get("items") or []
-    yh_items = (yh_norm or {}).get("items") or []
-    overlap = None
-    if tv_items and fv_items:
-        overlap = news_overlap(tv_items, fv_items)
-    yahoo_overlap = None
-    if yh_items and fv_items:
-        yahoo_overlap = news_overlap(yh_items, fv_items)
-
-    items = fv_items or yh_items or tv_items
-    data = {
-        "ticker": ticker,
-        "items": items,
-        "tradingview_items": tv_items,
-        "yahoo_items": yh_items,
-        "overlap": overlap,
-        "yahoo_overlap": yahoo_overlap,
-        "count": len(items),
-    }
+    result = await symbol_news.fetch_news(
+        symbol, limit=limit, include_reactions=include_reactions
+    )
+    pair = result["pair"]
+    data = {"ticker": result["ticker"], **result["block"]}
     return finalize(
         pair,
         specs=(),
-        sources={
-            TRADINGVIEW: "Marketaux news feed (via TradingView provider)",
-            FINVIZ: f"https://finviz.com/api/news/quote/{resolved['FINVIZ'].symbol or ticker}",
-            YAHOO: "query1.finance.yahoo.com/v1/finance/search",
-        },
-        extra={"news": data, "resolutions": resolved["resolutions"]},
+        provider=DataProvider(data["data_provider"]),
+        answered=data["providers_answered"],
+        sources=result["block"]["endpoints"],
+        warnings=[
+            "News returned fewer stories than requested: "
+            + data["shortfall_reason"] + "."
+        ] if data["shortfall_reason"] else [],
+        extra={"news": data, "resolutions": result["resolutions"]},
         data=data,
         health_warn=MONITOR.warnings_for(providers_in(pair) or ALL_PROVIDERS),
         degraded=any(

@@ -36,14 +36,17 @@ why.
 
 ## `data_provider` is `NONE`
 
-**Cause:** no provider answered.
+**Cause:** no provider supplied the requested primary value. A news-bearing tool can still return
+independently labelled stories in its `news` block.
 
-1. Check `errors`: usually several entries.
+1. Check `errors`: usually several entries. Successful but empty news feeds instead appear in
+   `news.shortfall_reason` and are not required to synthesize an error.
 2. Run `tapebasis_health(refresh=True)`.
 3. Most common root cause is a lost network path or DNS, not the code.
 4. For an unknown symbol: `NO_DATA` from every provider is correct behaviour, not an outage.
 
-Never present a value when `data_provider` is `NONE`.
+Never invent the primary value when `data_provider` is `NONE`; use only independently present and
+labelled news stories, with their coverage stated.
 
 ---
 
@@ -204,10 +207,13 @@ explicit valence is the fix. Use a **float**: VADER adds valences arithmetically
 
 ---
 
-## `combined_analysis` has an empty `news` leg
+## `combined_analysis` has no Marketaux headlines in `news`
 
-**Expected** without `MARKETAUX_API_TOKEN`: that leg is Marketaux-only. The sentiment leg still works
-(local scoring), and `data.news` says why it is empty. The price cross-check is unaffected.
+**Expected** without `MARKETAUX_API_TOKEN`: only the licensed TradingView leg is unavailable. The
+shared `data.news` block still merges Finviz and Yahoo, and the sentiment leg still works through
+local scoring. An empty merged list means none of the attempted feeds supplied a valid headline;
+`data.news.shortfall_reason` says why; `errors` lists any attempted feeds that failed, while valid
+empty feeds need not create an error. The price cross-check is unaffected.
 
 ---
 

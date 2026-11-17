@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from tapebasis import tools_finviz, tools_market
+from tapebasis import news, tools_finviz, tools_market
 from tapebasis.symbols import Resolution
 
 
@@ -287,10 +287,21 @@ async def test_finviz_only_tool_reports_none_on_failure(monkeypatch):
     async def broken(symbol):
         raise ProviderError("FINVIZ", "upstream blocked", code="UPSTREAM_BLOCKED")
 
+    async def fake_news(symbol, **kwargs):
+        return {"block": {
+            "items": [], "count": 0, "limit": 10, "unique_stories": 0,
+            "errors": [], "data_provider": "YAHOO", "providers_answered": ["YAHOO"],
+            "endpoints": {"YAHOO": "Yahoo news"},
+            "shortfall_reason": "available feeds supplied no stories; no filler",
+        }}
+
+    monkeypatch.setattr(news, "fetch_news", fake_news)
     monkeypatch.setattr(fv_access, "why_moving", broken)
     result = await tools_finviz.stock_why_moving("AAPL")
     assert result["data_provider"] == "NONE"
     assert result["errors"][0]["code"] == "UPSTREAM_BLOCKED"
+    assert result["data"] is None
+    assert result["news"]["data_provider"] == "YAHOO"
 
 
 @pytest.mark.asyncio

@@ -57,7 +57,7 @@ Every tool result carries exactly one of eight values. It states **coverage**, n
 | `YAHOO`        | Only Yahoo Finance answered. Served, but **not** corroborated.             |
 | `SA`           | Only StockAnalysis answered. Served, but **not** corroborated; US equities and ETFs only. |
 | `BLOOMBERG`    | Only Bloomberg answered. Served, but **not** corroborated; its quote can be delayed. |
-| `NONE`         | No provider could supply it. No value is presented.                        |
+| `NONE`         | No provider could supply the primary value; a separately labelled `news` block can still be available. |
 
 `ALL` means "every provider asked answered", not "they agree". Agreement is a separate axis, and it
 lives in `comparisons[].match`. A provider that was asked and failed makes the response `PARTIAL`,
@@ -223,11 +223,11 @@ served and clearly labelled, not hidden.
 | `stock_earnings` | TradingView + Finviz + Yahoo | next release date; EPS history |
 | `stock_extended_hours` | TradingView + Finviz + Yahoo + StockAnalysis | after-hours / pre-market price; TradingView + Yahoo overnight price |
 | `technical_analysis` | TradingView + Finviz + Yahoo | price, RSI(14), ATR(14), volume |
-| `stock_news` | Finviz + Yahoo (+ TradingView/Marketaux) | headline title overlap between the feeds |
+| `stock_news` | Finviz + Yahoo (+ TradingView/Marketaux) | latest 10 unique stories, per-story consensus (same_url / same_title / similar_title); duplicates_collapsed |
 | `stock_backtest` | TradingView + Yahoo | strategy metrics run twice on two independent OHLCV feeds |
 | `stock_backtest_compare` | TradingView + Yahoo | same, plus whether both feeds pick the same winning strategy |
 | `market_snapshot` | TradingView + Yahoo | indices, major crypto, FX pairs, ETFs |
-| `combined_analysis` | TradingView + Finviz + Yahoo | underlying price |
+| `combined_analysis` | TradingView + Finviz + Yahoo | underlying price; data.news merges latest 10 stories with per-story consensus |
 
 A provider absent from a row is absent because it has no endpoint for that capability: StockAnalysis
 carries no index, FX, crypto or foreign listing, and no provider but Finviz publishes a curated peer
@@ -246,9 +246,22 @@ reads for agreement. Its overnight endpoint failures are appended to the envelop
 than replacing primary-provider errors. `technical_analysis` uses the resolved TradingView symbol
 and venue rather than applying the default exchange to a bare ticker.
 
-`stock_news`'s TradingView leg is the provider's licensed Marketaux feed and needs
-`MARKETAUX_API_TOKEN`; without it that leg is `NOT_ATTEMPTED` and the response reports the feeds that
-did answer.
+`stock_news` merges every news-capable feed, deduplicates across providers and
+sorts newest-first. Each story names its providers, `provider_count` and
+`consensus` (true when multiple providers carry the same event). Similarity
+rules: same URL, same normalized headline, or at least four shared significant
+words with Jaccard ≥ 0.55. Duplicates inside one provider are counted in
+`duplicates_collapsed` and never upgrade to consensus; cross-provider agreement
+is provider corroboration, not independent editorial verification. When fewer
+than 10 unique stories exist, `count` is the real number, `shortfall_reason`
+explains why, and the list is never padded with duplicates. TradingView's leg
+needs `MARKETAUX_API_TOKEN`; without it that attempted leg reports `NO_DATA`
+and the other feeds still supply their real headlines. StockAnalysis and Bloomberg have no symbol-news
+adapter and do not contribute. `market_sentiment`, `combined_analysis` and `stock_why_moving` embed
+the same merged block under both `data.news` and top-level `news` without re-attributing the primary
+leg's provenance. `fields.news.source` is `null`; its `coverage` and `supplied` describe only valid
+news contributors. Unparsable times remain `published_at: null` and sort last. If the Finviz
+editorial leg fails, `data` is `null` and independent news remains only in top-level `news`.
 
 **No tool requires an API key.** `market_sentiment` prefers Marketaux when `MARKETAUX_API_TOKEN` is
 set, and otherwise scores Finviz headlines locally (VADER with a financial lexicon). That path is
@@ -257,7 +270,8 @@ deterministic, offline and free. Because the headlines are Finviz's, that path i
 ### Finviz-only, served, labelled `FINVIZ`, explicitly single-source
 
 `stock_filings` · `stock_ownership` (insider + institutional + short interest) · `stock_peers` ·
-`stock_why_moving` · `stock_chart` (PNG) · `stock_dilution` · `stock_screener_filters`
+`stock_why_moving` (with merged latest-10 news block under `data.news`, single-source
+editorial headline and summary) · `stock_chart` (PNG) · `stock_dilution` · `stock_screener_filters`
 
 `stock_chart` carries `image_base64` and `mime_type: "image/png"` in its `data` object, so a remote MCP
 client can decode the image without reading the server's filesystem. The best-effort `path` and
@@ -384,7 +398,7 @@ the payload always says which one ran (`provider`, `scoring`, and the top-level 
 | --- | --- | --- |
 | `MARKETAUX_API_TOKEN` set and usable | Marketaux entity sentiment (licensed) | `TRADINGVIEW` |
 | no token, or Marketaux rejected/quota/outage | Finviz headlines scored locally (VADER) | `FINVIZ` |
-| neither available | labelled empty payload, `sentiment_score: null` | `NONE` |
+| neither available | labelled empty payload, `sentiment_score: null`, `sentiment_label: Unavailable` | `NONE` |
 
 Why the labels differ: the **numbers are Finviz headlines** in the local path; only the scoring is
 ours. Labelling that `TRADINGVIEW` would claim a provenance the data does not have.
@@ -405,14 +419,17 @@ Scoring is deterministic: the same headlines always produce the same number, and
 the network.
 
 **A data gap is never dressed up as a finding.** `sentiment_score: 0.0` means "the tone is
-balanced", so it is never used for "nothing could be fetched". When there is no material to score
-the field is `null`, `sentiment_label` is `Unavailable`, and `note` says why. An invalid or
-expired Marketaux token therefore falls back to local scoring and records the reason in
+balanced", so it is never used for "nothing could be fetched". When Finviz's headlines are
+unavailable and Marketaux is rejected, `sentiment_score` becomes `null`,
+`sentiment_label` becomes `Unavailable` and `data_provider` becomes `NONE`
+(the news block still carries whatever feeds did answer). An invalid or expired
+Marketaux token falls back to local scoring and records the reason in
 `licensed_path_unavailable`; it does not report a neutral market.
 
-`MARKETAUX_API_TOKEN` also adds the second leg of `stock_news` (licensed article text + URLs).
-Without it, `stock_news` reports the Finviz and Yahoo feeds only: complete, labelled and still
-useful.
+`MARKETAUX_API_TOKEN` adds licensed TradingView/Marketaux headlines into the
+merged `stock_news` feed (typically 3 per request on the free plan). Without it
+the feed still merges Finviz + Yahoo with the same consensus and dedup rules.
+News coverage is labelled separately and missing Marketaux coverage is reported.
 
 ---
 
@@ -601,7 +618,8 @@ No proxy configuration exists: every provider reaches its upstream directly.
    BLOOMBERG   -> same, but find out why in comparisons: a delayed print is
                   reported as not_comparable with the delay named. Quote
                   exchange_delay / print_time before calling a price live.
-   NONE        -> say no data is available. Do not invent one.
+   NONE        -> say the primary value is unavailable. Do not invent one;
+                  independently labelled news may still be available.
 
 2. Check degraded / warnings.
    Non-empty -> tell the user an upstream API changed or is down, and that
@@ -611,16 +629,20 @@ No proxy configuration exists: every provider reaches its upstream directly.
    (e.g. price.source is FINVIZ while price.supplied names four providers, and
    peers.source is FINVIZ alone). Read `supplied` for who answered and
    `compared` for whose reading was actually cross-checked; `agreement`
-   describes only that second set.
+   describes only that second set. Composite `news` instead has `source: null`;
+   read its `coverage`, `supplied` and the news block's own provider labels.
 
-4. Check comparisons when you need to show how far apart the providers are.
+4. Check news separately for its coverage. Short lists report their real count
+   and reason; consensus is provider corroboration, not editorial verification.
+
+5. Check comparisons when you need to show how far apart the providers are.
    match: true  -> they agree within tolerance.
    match: false -> a real disagreement; every reading is in `values`.
    match: null  -> not comparable: no print time, a session/age difference, a
                    declared feed delay (Bloomberg's 15 minutes), or a field
                    with no shared definition (FX day change).
 
-5. Check resolutions when a symbol behaved unexpectedly: it shows exactly which
+6. Check resolutions when a symbol behaved unexpectedly: it shows exactly which
    ticker each provider was asked for, and why.
 ```
 
@@ -675,6 +697,7 @@ src/tapebasis/
 ├── ratelimit.py          per-provider pacing, shared cooldown, TTL cache
 ├── http_pool.py          one pooled HTTP client and resolver warm-up per upstream
 ├── merge_helpers.py      pure payload shapers (raw provider dict -> fields)
+├── news.py               symbol news merge, per-story consensus and shortfall reporting
 ├── sentiment.py          token-free headline scoring (VADER + finance lexicon)
 ├── symbols.py            dynamic per-provider symbol resolution + index aliases
 ├── health.py             upstream probes, fingerprints, drift state

@@ -5,7 +5,7 @@ violate by accident.
 
 ---
 
-## 1. Seven provider states, not two
+## 1. Eight provider states, not two
 
 **Decision:** `ALL` / `TRADINGVIEW` / `FINVIZ` / `YAHOO` / `SA` / `BLOOMBERG` / `NONE`, never a
 boolean like `verified: true`.
@@ -257,15 +257,16 @@ silent switch from licensed to locally-computed numbers would misrepresent the o
 
 ## 19. News sources were evaluated for independence, not just availability
 
-**Decision:** keep Finviz as the news spine; use Yahoo as the second free leg and Marketaux as the
-optional licensed one; score sentiment locally.
+**Decision:** merge valid stories directly from Finviz, Yahoo and the optional licensed Marketaux
+feed, with no primary feed hiding a newer story from another. Score the separate sentiment leg
+locally when licensed entity sentiment is unavailable. The original source evaluation follows.
 
 **Why:** candidate feeds were tested live and rejected on concrete grounds:
 
 | Candidate | Rejected because |
 | --- | --- |
 | Nasdaq RSS (`rssoutbound?symbol=`) | Does not actually filter by symbol, `THYAO.IS` and `BTC-USD` returned identical items |
-| Yahoo `/v1/finance/search` as a *primary* news spine | `Disallow: /` in robots.txt and a brittle feed; kept only as a secondary leg behind Finviz |
+| Yahoo `/v1/finance/search` as a *primary* news spine | `Disallow: /` in robots.txt and a brittle feed; never a spine, but its valid headlines join the independently requested merged feed |
 | Yahoo RSS feeds | User-Agent sensitive, browser UA got `429`, Windows UA got `200`; too brittle to depend on |
 | Google News RSS | 100 items and genuinely independent, but article links are unresolvable Google redirects and `/rss/` is not in its robots allow-list |
 | Reddit / StockTwits | Blocked (`403`) from this network |
@@ -1236,6 +1237,25 @@ normalized change and closed-session status.
 
 **Consequence:** `is_current: false` after 04:00 ET remains an ordinary closed-overnight observation,
 not an outage. The premarket reading and its comparison stay available independently.
+
+---
+
+## 59. News consensus is provider corroboration, not independent verification
+
+**Decision:** the news merge matches a new provider item against an existing
+story by same_url, then same_title, then a Jaccard threshold of 0.55 over at
+least four significant shared tokens. If a feed already contributed to the
+story and the new item matches, the duplicate is counted under
+`duplicates_collapsed` and dropped. Consensus requires
+`provider_count >= 2`, never a single-provider duplicate, and is labelled
+with `consensus_kind: provider_corroboration` so a downstream agent cannot
+read it as independent editorial verification. The merged list reorders by
+`published_at`, with unknown timestamps sorted last. The default limit of 10,
+with requested limits clamped to 1 through 50, is a cap on real unique stories,
+not a target to fill, and a shortfall carries
+an explicit `shortfall_reason`. Sentiment or editorial providers keep their
+primary provenance, and the embedded `data.news` block carries its own labels
+so a failed primary leg does not suppress or rebrand the aggregated news.
 
 ---
 

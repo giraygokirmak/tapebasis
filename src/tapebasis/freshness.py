@@ -197,6 +197,71 @@ def parse_market_timestamp(
     return None
 
 
+#: Finviz's ticker-news API renders ``Nov-16-26 06:02PM``: hyphens rather than
+#: whitespace, and a two-digit year. Neither shape parses as a market print.
+_NEWS_HYPHEN_DATE = re.compile(
+    r"(?P<mon>[A-Za-z]{3})[a-z]*-(?P<day>\d{1,2})-(?P<year>\d{2}|\d{4})\s+"
+    r"(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*(?P<ampm>AM|PM)",
+    re.I,
+)
+
+#: ``04:58PM`` with no date or zone: Finviz writes today's bare wall clock.
+_NEWS_BARE_TIME = re.compile(
+    r"^(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*(?P<ampm>AM|PM)$",
+    re.I,
+)
+
+
+def parse_news_timestamp(
+    raw: object,
+    *,
+    reference: datetime | None = None,
+) -> datetime | None:
+    """Return a news item's publication time as an aware UTC datetime.
+
+    News feeds are looser than price feeds: on top of the ISO, epoch and
+    market-print forms handled by :func:`parse_market_timestamp`, Finviz writes
+    ``Nov-16-26 06:02PM`` and ``04:58PM``. Those two are parsed here, in
+    US/Eastern like the rest of Finviz's wall clocks. Anything still not
+    understood returns ``None`` so the story sorts as "time unknown" instead of
+    being ordered by guesswork.
+    """
+    parsed = parse_market_timestamp(raw, reference=reference)
+    if parsed is not None:
+        return parsed
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    now = (reference or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    eastern_now = now.astimezone(_EASTERN) if _EASTERN is not None else now
+    match = _NEWS_HYPHEN_DATE.search(text)
+    if match:
+        year = int(match["year"])
+        if year < 100:
+            year += 2000
+        month = _MONTHS.get(match["mon"].lower()[:3])
+        if month is None:
+            return None
+        hour = _hour_24(int(match["hour"]), match["ampm"])
+        if hour is None:
+            return None
+        try:
+            wall = datetime(year, month, int(match["day"]), hour, int(match["minute"]))
+        except ValueError:
+            return None
+        return _to_eastern(wall).astimezone(timezone.utc)
+    bare = _NEWS_BARE_TIME.match(text)
+    if bare:
+        hour = _hour_24(int(bare["hour"]), bare["ampm"])
+        if hour is None:
+            return None
+        wall = eastern_now.replace(
+            hour=hour, minute=int(bare["minute"]), second=0, microsecond=0
+        )
+        return wall.astimezone(timezone.utc)
+    return None
+
+
 def session_date(moment: datetime | None) -> date | None:
     """Calendar date of a print in US/Eastern, the session key for US markets.
 

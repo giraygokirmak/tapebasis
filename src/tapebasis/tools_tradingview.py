@@ -15,9 +15,10 @@ Two exceptions genuinely combine providers:
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
-from . import blocking_pool, fv_access, sentiment, tv_access, yh_access
+from . import blocking_pool, fv_access, news as symbol_news, sentiment, tv_access, yh_access
 from .health import FINVIZ, MONITOR, TRADINGVIEW, YAHOO
 from .providers_state import (
     DataProvider,
@@ -700,38 +701,61 @@ async def market_sentiment(symbol: str, category: str = "all", limit: int = 20) 
     names the backend in ``provider``/``scoring`` and never fabricates a score
     when there is no material to score.
 
+    The accompanying ``data.news`` block always aggregates the latest 10
+    stories from TradingView/Marketaux, Finviz and Yahoo, naming every item's
+    providers and cross-provider consensus. It does not change which backend
+    computed the sentiment score.
+
     Args:
         symbol: Ticker.
         category: News category (used by the Marketaux path only).
-        limit: Headlines to analyse.
+        limit: Headlines to analyse for sentiment.
 
     Returns:
-        Envelope labelled ``TRADINGVIEW`` whose ``data`` carries
-        ``sentiment_score``, ``sentiment_label``, the bullish/bearish/neutral
-        counts and the strongest headlines.
+        Envelope labelled ``TRADINGVIEW``, ``FINVIZ`` or ``NONE`` whose ``data``
+        carries ``sentiment_score``, ``sentiment_label``, the
+        bullish/bearish/neutral counts, the strongest headlines and the
+        aggregated ``news`` block. ``NONE`` describes only an unavailable
+        sentiment computation, not an absence of independently fetched news.
     """
     ticker = strip_exchange(symbol).upper()
     try:
-        data = await _sentiment_payload(ticker, limit=limit)
+        data, news = await asyncio.gather(
+            _sentiment_payload(ticker, limit=limit),
+            symbol_news.fetch_news(ticker),
+        )
     except Exception as exc:  # noqa: BLE001
         return _failed(exc)
     if data.get("sentiment_score") is None:
-        return _single_response(
+        response = _single_response(
             data,
             source="No sentiment backend available",
             warnings=[data.get("note", "Sentiment unavailable.")],
+            provider="NONE",
         )
+        response["notice"] = (
+            "No sentiment backend could compute a score; `sentiment_score` is "
+            "null rather than a fabricated neutral value."
+        )
+        symbol_news.attach_news(response, news)
+        return response
+    if not data.get("provider"):
+        data["provider"] = "unavailable"
     if data.get("provider") == "marketaux":
-        return _single_response(
+        response = _single_response(
             data, source="Marketaux entity sentiment (via TradingView provider)"
         )
+        symbol_news.attach_news(response, news, provider=TRADINGVIEW)
+        return response
     # The numbers are Finviz headlines; only the scoring is ours. Labelling this
     # TRADINGVIEW would claim a provenance the data does not have.
-    return _single_response(
+    response = _single_response(
         data,
         source="Finviz headlines scored locally (VADER)",
         provider=FINVIZ,
     )
+    symbol_news.attach_news(response, news, provider=FINVIZ)
+    return response
 
 
 async def egx_market_overview(timeframe: str = "1D", limit: int = 10) -> dict[str, Any]:
@@ -759,12 +783,14 @@ async def combined_analysis(symbol: str, exchange: str = "NASDAQ", timeframe: st
     Runs the TradingView technical read plus news sentiment, then asks Finviz and
     Yahoo independently for the latest price to confirm the value the analysis
     was built on. This composite can legitimately return ``ALL``: the price leg
-    is multi-source, while the analysis and sentiment legs remain single-source
-    and are labelled per field.
+    is multi-source. The sentiment payload names its own backend, and the
+    top-level ``sentiment_source`` repeats that provenance.
 
     Sentiment needs no API key: Marketaux is used when ``MARKETAUX_API_TOKEN`` is
-    set, otherwise Finviz headlines are scored locally. The ``data.news`` leg
-    stays Marketaux-only, so it is empty (and says why) without a token.
+    set, otherwise Finviz headlines are scored locally. ``data.news`` always
+    merges the latest 10 stories from TradingView/Marketaux, Finviz and Yahoo,
+    with per-item providers and consensus; no Marketaux token is required for
+    the other feeds.
 
     Args:
         symbol: Ticker.
@@ -783,10 +809,7 @@ async def combined_analysis(symbol: str, exchange: str = "NASDAQ", timeframe: st
             ticker, exchange=exchange, timeframe=timeframe
         )
         sentiment_data = await _sentiment_payload(ticker, limit=20)
-        news = await _run(
-            marketaux_service.fetch_news_summary, ticker, limit=10
-        )
-        return {"analysis": analysis, "sentiment": sentiment_data, "news": news}
+        return {"analysis": analysis, "sentiment": sentiment_data}
 
     async def fv_call() -> dict[str, Any]:
         return await fv_access.snapshot(to_finviz(ticker))
@@ -796,7 +819,10 @@ async def combined_analysis(symbol: str, exchange: str = "NASDAQ", timeframe: st
             raise NotApplicable(YAHOO, yh_res.note or f"no Yahoo symbol for {symbol}")
         return await yh_access.quote(yh_res.symbol)
 
-    pair = await ask(tv_call, fv_call, yh_call)
+    pair, news = await asyncio.gather(
+        ask(tv_call, fv_call, yh_call),
+        symbol_news.fetch_news(ticker),
+    )
 
     from .reconcile import compare_values
 
@@ -818,13 +844,13 @@ async def combined_analysis(symbol: str, exchange: str = "NASDAQ", timeframe: st
         "symbol": ticker,
         "analysis": analysis,
         "sentiment": tv_payload.get("sentiment"),
-        "news": tv_payload.get("news"),
+        "news": news["block"],
         "price_cross_check": compare_values(
             {TRADINGVIEW: tv_price, FINVIZ: fv_price, YAHOO: yh_price},
             tolerance_pct=0.5,
         ),
     }
-    return finalize(
+    response = finalize(
         pair,
         sources={
             TRADINGVIEW: "TradingView technical analysis",
@@ -838,6 +864,8 @@ async def combined_analysis(symbol: str, exchange: str = "NASDAQ", timeframe: st
             issue["provider"] in providers_in(pair) for issue in MONITOR.issues()
         ),
     )
+    symbol_news.attach_news(response, news)
+    return response
 
 
 _TOOLS = (

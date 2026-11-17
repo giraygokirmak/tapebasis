@@ -78,7 +78,7 @@ Every tool result carries exactly one of eight values. It states **coverage**, n
 | `YAHOO` | Only Yahoo Finance answered. Served, but **not** corroborated. |
 | `SA` | Only StockAnalysis answered. Served, but **not** corroborated; US equities and ETFs only. |
 | `BLOOMBERG` | Only Bloomberg answered. Served, but **not** corroborated; its quote can be delayed. |
-| `NONE` | No provider could supply it. No value is presented. |
+| `NONE` | No provider supplied the primary value; a separately labelled `news` block may remain available. |
 
 `ALL` says every provider asked answered, never that they agree, and a leg that was asked and
 failed downgrades the label to `PARTIAL` rather than hiding behind `ALL`.
