@@ -27,6 +27,6 @@ See :mod:`tapebasis.reconcile` for the fan-out/comparison engine,
 upstream schema-drift monitor.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = ["__version__"]

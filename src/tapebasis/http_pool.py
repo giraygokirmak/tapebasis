@@ -45,6 +45,7 @@ _CLIENTS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, httpx.
 #: absent on purpose: it is fetched with ``curl_cffi``, whose resolver is libcurl,
 #: so an ``getaddrinfo`` warm-up here does nothing for it.
 _WARM_ORIGINS: tuple[str, ...] = (
+    "www.tradingview.com",
     "scanner.tradingview.com",
     "symbol-search.tradingview.com",
     "finviz.com",

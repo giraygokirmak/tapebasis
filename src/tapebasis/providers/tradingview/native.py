@@ -1,6 +1,6 @@
 """TradingView's own data, scanner and chart websocket.
 
-Two upstreams, both TradingView's, both native:
+TradingView's native scanner, forecast page and chart websocket:
 
 ``scanner.tradingview.com``
     One POST returns a row per symbol with ``close``, ``open``, ``high``,
@@ -24,7 +24,9 @@ loop, a deeper hole is the failure mode.
 """
 from __future__ import annotations
 
+import html as html_lib
 import json
+import re
 import random
 import string
 from typing import Any
@@ -35,6 +37,7 @@ from ... import blocking_pool, singleflight
 from ...http_pool import shared_client
 from ...ratelimit import RateLimited, call, limiter
 from ...symbols import INSTRUMENTS, INDEX_SNAPSHOT
+from ...utils import BROWSER_UA
 
 PROVIDER = "TRADINGVIEW"
 _POOL = "tradingview"
@@ -73,6 +76,12 @@ QUOTE_COLUMNS: tuple[str, ...] = (
     "ATR",
     "earnings_release_next_date",
     "earnings_release_date",
+    # These are fundamental analyst fields, not the technical Recommend.All
+    # oscillator. The forecast-page reader supplies the target estimate count
+    # that the scanner does not publish in this row.
+    "price_target_average",
+    "recommendation_total",
+    "recommendation_mark",
     # The scanner names the session it is in and carries each extended
     # session's own print. ``close`` is the regular feed's last trade, so
     # without these there is no way to tell a stale regular price from the
@@ -85,6 +94,89 @@ QUOTE_COLUMNS: tuple[str, ...] = (
     "postmarket_change",
     "postmarket_volume",
 )
+
+
+def shape_analyst_forecasts(html: str) -> dict[str, Any] | None:
+    """Return the published forecast counts and targets from TradingView's page.
+
+    The rendered forecast page publishes ``initForecastQuotes`` inside its
+    ``application/prs.init-data+json`` blocks. In particular,
+    ``price_target_estimates_num`` is the number of analysts contributing a
+    one-year price forecast, while ``recommendation_total`` counts analysts who
+    gave a stock rating in the past three months. They are different populations
+    and are never added or substituted for one another. Missing or revised page
+    markup returns ``None`` rather than a guessed count.
+    """
+    for raw in re.findall(
+        r'<script[^>]*type="application/prs\.init-data\+json"[^>]*>(.*?)</script>',
+        html,
+        re.S,
+    ):
+        try:
+            payload = json.loads(html_lib.unescape(raw.strip()))
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for block in payload.values():
+            if not isinstance(block, dict):
+                continue
+            forecasts = block.get("initForecastQuotes")
+            if isinstance(forecasts, dict):
+                return {key: forecasts.get(key) for key in (
+                    "price_target_average",
+                    "price_target_estimates_num",
+                    "recommendation_total",
+                    "recommendation_mark",
+                )}
+    return None
+
+
+async def analyst_forecasts(ticker: str) -> dict[str, Any]:
+    """Read TradingView's own forecast page for one resolved symbol.
+
+    Returns the target estimate count, the three-month rating count and the
+    page's average target. This page is a complementary TradingView capability:
+    the scanner supplies the current quote and rating total but returns null for
+    ``price_target_estimates_num``, so no count is inferred from distribution
+    buckets or from another provider.
+    """
+    symbol = ticker.strip().upper()
+    if not symbol:
+        raise SymbolNotFound("a TradingView symbol is required for analyst forecasts")
+    url = (
+        "https://www.tradingview.com/symbols/"
+        + symbol.replace(":", "-")
+        + "/forecast-price-target/"
+    )
+    paced = limiter(PROVIDER)
+    key = "analyst_forecasts|" + symbol
+    cached = paced.cache_get(key, ttl=15.0)
+    if cached is not None:
+        return cached
+
+    async def _once() -> dict[str, Any]:
+        client = shared_client(_POOL, timeout=25.0)
+        response = await client.get(
+            url,
+            headers={
+                "User-Agent": BROWSER_UA,
+                "Accept": "text/html,application/xhtml+xml",
+            },
+            timeout=25.0,
+        )
+        if response.status_code == 429:
+            raise RateLimited(PROVIDER, "forecast page HTTP 429")
+        response.raise_for_status()
+        shaped = shape_analyst_forecasts(response.text)
+        if shaped is None:
+            raise SymbolNotFound(f"forecast page has no analyst data for {symbol}")
+        return {"ticker": symbol, "source": url, **shaped}
+
+    result = await call(PROVIDER, _once)
+    paced.cache_set(key, result)
+    return result
+
 
 #: TradingView resolution codes by the interval names our tools accept.
 RESOLUTIONS: dict[str, str] = {

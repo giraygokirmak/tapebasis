@@ -7,7 +7,7 @@ unit-testable without any network access.
 """
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any
 
 from .symbols import canonical_index
 from .utils import lead_float, to_float
@@ -45,6 +45,7 @@ def fv_quote_fields(payload: dict[str, Any]) -> dict[str, Any]:
         "relative_volume": lead_float(snapshot.get("Rel Volume")),
         "shares_float": snapshot.get("Shs Float"),
         "short_float": snapshot.get("Short Float"),
+        "price_target_average": snapshot.get("Target Price"),
         "sma20": snapshot.get("SMA20"),
         "sma50": snapshot.get("SMA50"),
         "sma200": snapshot.get("SMA200"),
@@ -202,10 +203,6 @@ def tv_indices_fields(payload: dict[str, Any]) -> dict[str, Any]:
 # ── News ─────────────────────────────────────────────────────────────────────
 
 
-def _norm_title(title: Any) -> str:
-    return " ".join(str(title or "").lower().split())
-
-
 def fv_news_fields(payload: dict[str, Any]) -> dict[str, Any]:
     items = payload.get("news") or payload.get("items") or []
     normalised = []
@@ -219,7 +216,6 @@ def fv_news_fields(payload: dict[str, Any]) -> dict[str, Any]:
                 "url": item.get("url") or item.get("link"),
                 "reaction_day_percent": item.get("reaction_day_percent"),
                 "reaction_next_day_percent": item.get("reaction_next_day_percent"),
-                "titles_key": _norm_title(title),
             }
         )
     return {"items": normalised, "count": len(normalised), "ticker": payload.get("ticker")}
@@ -236,7 +232,7 @@ def tv_news_fields(payload: dict[str, Any]) -> dict[str, Any]:
                 "published": item.get("published"),
                 "url": item.get("url"),
                 "summary": item.get("summary"),
-                "titles_key": _norm_title(item.get("title")),
+                "tickers": item.get("tickers"),
             }
         )
     return {"items": normalised, "count": len(normalised), "ticker": payload.get("symbol")}
@@ -259,21 +255,6 @@ def yahoo_quote_fields(payload: dict[str, Any]) -> dict[str, Any]:
         "exchange": payload.get("exchange"),
         "market_state": payload.get("market_state"),
         "price_timestamp": payload.get("market_time"),
-    }
-
-
-def news_overlap(tv_items: Iterable[dict[str, Any]], fv_items: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    """Share of TradingView headline titles also present in the Finviz list."""
-    tv_keys = {item["titles_key"] for item in tv_items if item.get("titles_key")}
-    fv_keys = {item["titles_key"] for item in fv_items if item.get("titles_key")}
-    if not tv_keys or not fv_keys:
-        return {"overlap_pct": None, "shared": 0, "tv_count": len(tv_keys), "fv_count": len(fv_keys)}
-    shared = tv_keys & fv_keys
-    return {
-        "overlap_pct": round(len(shared) / max(1, len(tv_keys)) * 100, 1),
-        "shared": len(shared),
-        "tv_count": len(tv_keys),
-        "fv_count": len(fv_keys),
     }
 
 

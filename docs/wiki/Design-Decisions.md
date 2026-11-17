@@ -5,7 +5,7 @@ violate by accident.
 
 ---
 
-## 1. Seven provider states, not two
+## 1. Eight provider states, not two
 
 **Decision:** `ALL` / `TRADINGVIEW` / `FINVIZ` / `YAHOO` / `SA` / `BLOOMBERG` / `NONE`, never a
 boolean like `verified: true`.
@@ -257,15 +257,16 @@ silent switch from licensed to locally-computed numbers would misrepresent the o
 
 ## 19. News sources were evaluated for independence, not just availability
 
-**Decision:** keep Finviz as the news spine; use Yahoo as the second free leg and Marketaux as the
-optional licensed one; score sentiment locally.
+**Decision:** merge valid stories directly from Finviz, Yahoo and the optional licensed Marketaux
+feed, with no primary feed hiding a newer story from another. Score the separate sentiment leg
+locally when licensed entity sentiment is unavailable. The original source evaluation follows.
 
 **Why:** candidate feeds were tested live and rejected on concrete grounds:
 
 | Candidate | Rejected because |
 | --- | --- |
 | Nasdaq RSS (`rssoutbound?symbol=`) | Does not actually filter by symbol, `THYAO.IS` and `BTC-USD` returned identical items |
-| Yahoo `/v1/finance/search` as a *primary* news spine | `Disallow: /` in robots.txt and a brittle feed; kept only as a secondary leg behind Finviz |
+| Yahoo `/v1/finance/search` as a *primary* news spine | `Disallow: /` in robots.txt and a brittle feed; never a spine, but its valid headlines join the independently requested merged feed |
 | Yahoo RSS feeds | User-Agent sensitive, browser UA got `429`, Windows UA got `200`; too brittle to depend on |
 | Google News RSS | 100 items and genuinely independent, but article links are unresolvable Google redirects and `/rss/` is not in its robots allow-list |
 | Reddit / StockTwits | Blocked (`403`) from this network |
@@ -1305,6 +1306,54 @@ modification during incident response.
 artifacts are missing or damaged, recovery cannot proceed; a new tag with a new version is required.
 The `release-recovery` environment must be configured with main-only deployment restrictions and
 reviewer approval to prevent unauthorized registry changes.
+
+---
+
+## 59. News consensus is provider corroboration, not independent verification
+
+**Decision:** the news merge matches a new provider item against an existing
+story by same_url, then same_title, then a Jaccard threshold of 0.55 over at
+least four significant shared tokens. If a feed already contributed to the
+story and the new item matches, the duplicate is counted under
+`duplicates_collapsed` and dropped. Consensus requires
+`provider_count >= 2`, never a single-provider duplicate, and is labelled
+with `consensus_kind: provider_corroboration` so a downstream agent cannot
+read it as independent editorial verification. The merged list reorders by
+`published_at`, with unknown timestamps sorted last. The default limit of 10,
+with requested limits clamped to 1 through 50, is a cap on real unique stories,
+not a target to fill, and a shortfall carries
+an explicit `shortfall_reason`. Sentiment or editorial providers keep their
+primary provenance, and the embedded `data.news` block carries its own labels
+so a failed primary leg does not suppress or rebrand the aggregated news.
+
+---
+
+## 62. Analyst counts retain their provider and population
+
+**Decision:** `stock_quote` exposes provider-specific `analyst_targets` outside `data`, and compares
+only the shared `price_target_average`. TradingView's count of analysts offering one-year targets and
+its count of analysts rating the stock in the past three months are separate fields. Finviz's visible
+`AnalystRatings` island supplies a distinct visible-firm count together with its rating rows, an
+`includes_previous_ratings` marker and its date. These are different populations and never form an
+agreement verdict or a combined count. Finviz's count does not claim to measure the contributors to
+its average target.
+
+**Why:** reading only Finviz's snapshot drops its analyst block because `Target Price` and `Recom` are
+the only analyst snapshot fields. Reading only TradingView's scanner omits the target-estimate count:
+the scanner returns null for `price_target_estimates_num`, while the forecast page publishes it. Live
+AAPL reads on 17 November 2026 produced 16 distinct Finviz firms in 20 visible rating rows, 39
+TradingView target-estimate contributors and 50 TradingView rating contributors. Neither Finviz's
+firm count nor TradingView's rating count can substitute for its target-estimate population.
+
+The displayed average of 348.52 in Finviz and 348.519916 in TradingView is compared at 0.1 % tolerance,
+which accommodates Finviz's rounding. Agreement of these web properties is not proof of independent
+analyst or editorial coverage.
+
+**Consequence:** Finviz's derivation is auditable rather than an unexplained integer. TradingView's two
+population definitions remain visible at the point of use. Its forecast page is an auxiliary request,
+not another primary quote provider: a failure adds an `analyst_forecasts` capability error without
+changing `data_provider` or primary provider coverage, and no other provider's count replaces the
+missing one. The independently selected price target in `data` still has one source per decision 36.
 
 ---
 

@@ -33,6 +33,7 @@ from tapebasis.providers.finviz.core.services.html_utils import (
     extract_script_json,
     parse_peers,
     parse_profile,
+    parse_analyst_ratings,
     parse_quote_header,
     parse_snapshot,
 )
@@ -309,6 +310,10 @@ async def get_quote(ticker: str) -> dict[str, Any]:
         "snapshot_pairs": snapshot["pairs"],
         "descriptions": snapshot["descriptions"],
         "income_breakdown": income_breakdown,
+        # The quote page already carries the AnalystRatings SSR island. Read it
+        # from this same response, not from its chart-event list: the latter can
+        # omit a rating that is present in the visible ratings table.
+        "analyst_targets": parse_analyst_ratings(html),
         "profile": profile,
         "peers": peers,
         "source": _stock_url(symbol),

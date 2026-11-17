@@ -164,7 +164,9 @@ def test_source_main_accepts_wrapped_contents_base64_before_download(tmp_path, m
     """A real-shaped Contents response cannot reject recovery before artifact extraction."""
     module = load("release_artifact_source")
     run, jobs, artifact = source_fixture()
-    server = module.load_metadata(ROOT)[1]
+    version, server = module.load_metadata(ROOT)
+    run = {**run, "head_branch": f"v{version}"}
+    jobs = [*jobs[:-1], {**jobs[-1], "name": f"Publish {version}"}]
     encoded = base64.b64encode(json.dumps(server).encode()).decode()
     wrapped = "\n".join(encoded[index:index + 60] for index in range(0, len(encoded), 60)) + "\n"
     tag_object = "b" * 40
@@ -172,9 +174,9 @@ def test_source_main_accepts_wrapped_contents_base64_before_download(tmp_path, m
     bodies = {
         "SHA256SUMS": b"checksums",
         "tapebasis-image.tar": b"image",
-        "tapebasis-1.0.0-py3-none-any.whl": b"wheel",
-        "tapebasis-1.0.0.tar.gz": b"sdist",
-        "tapebasis-1.0.0.tgz": b"npm",
+        f"tapebasis-{version}-py3-none-any.whl": b"wheel",
+        f"tapebasis-{version}.tar.gz": b"sdist",
+        f"tapebasis-{version}.tgz": b"npm",
     }
     with zipfile.ZipFile(extracted, "w") as archive:
         for name, body in bodies.items():
@@ -188,7 +190,7 @@ def test_source_main_accepts_wrapped_contents_base64_before_download(tmp_path, m
         "/actions/runs/43435266134": run,
         "/actions/runs/43435266134/jobs?per_page=100": {"total_count": len(jobs), "jobs": jobs},
         "/actions/runs/43435266134/artifacts": {"total_count": 1, "artifacts": [artifact]},
-        "/git/ref/tags/v1.0.0": {"object": {"sha": tag_object, "type": "tag"}},
+        f"/git/ref/tags/v{version}": {"object": {"sha": tag_object, "type": "tag"}},
         f"/git/tags/{tag_object}": {"object": {"sha": run["head_sha"]}},
         f"/contents/server.json?ref={run['head_sha']}": {"encoding": "base64", "content": wrapped},
     }
@@ -208,13 +210,13 @@ def test_source_main_accepts_wrapped_contents_base64_before_download(tmp_path, m
     monkeypatch.setenv("GITHUB_REPOSITORY", "giraygokirmak/tapebasis")
     monkeypatch.setenv("GITHUB_SHA", "c" * 40)
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    monkeypatch.setenv("REQUIRED_TAG", "v1.0.0")
+    monkeypatch.setenv("REQUIRED_TAG", f"v{version}")
     destination = tmp_path / "result.zip"
     assert module.main(["--run-id", "43435266134", "--token", "test-token", "--zip", str(destination), "--dist", str(tmp_path / "dist"), "--server", str(tmp_path / "server.json")]) == 0
     assert destination.read_bytes() == extracted.read_bytes()
-    assert (tmp_path / "dist/tapebasis-1.0.0.tgz").read_bytes() == b"npm"
+    assert (tmp_path / f"dist/tapebasis-{version}.tgz").read_bytes() == b"npm"
     assert json.loads((tmp_path / "server.json").read_text()) == server
-    assert "version=1.0.0" in output.read_text()
+    assert f"version={version}" in output.read_text()
     assert "artifact_digest=" + artifact["digest"] in output.read_text()
 
 

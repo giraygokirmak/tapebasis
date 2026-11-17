@@ -5,10 +5,13 @@ Yahoo Finance or Finviz: the point of a separate provider is that each leg is
 genuinely independent, and a leg that quietly proxies another one is worth
 nothing as a cross-check.
 
-Two upstreams are used:
+Three native TradingView surfaces are used:
 
 * ``scanner.tradingview.com`` for spot quotes, fundamentals and whole-market
   screens (any asset class, one POST).
+* ``www.tradingview.com`` for the auxiliary equity analyst forecast page, whose
+  target-estimate and rating analyst populations have different definitions.
+  This auxiliary page cannot change the scanner's primary quote coverage.
 * ``data.tradingview.com`` (chart websocket) for OHLCV history, which the
   scanner does not expose.
 """
@@ -76,6 +79,20 @@ async def quote(ticker: str) -> dict[str, Any]:
         raise
     except Exception as exc:  # noqa: BLE001
         _raise_provider_error(exc, "scanner quote")
+
+
+async def analyst_forecasts(ticker: str) -> dict[str, Any]:
+    """Return forecast counts or raise ``NoDataError`` for unavailable coverage."""
+    try:
+        return await native.analyst_forecasts(ticker)
+    except native.SymbolNotFound as exc:
+        # A resolved symbol can legitimately have no forecast coverage. It is
+        # not the scanner's unknown-symbol error and not an invented zero count.
+        raise NoDataError(PROVIDER, str(exc)) from exc
+    except NoDataError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _raise_provider_error(exc, "analyst forecasts")
 
 
 async def quotes(tickers: list[str]) -> dict[str, dict[str, Any]]:

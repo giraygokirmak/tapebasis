@@ -18,6 +18,10 @@ set -euo pipefail
 REPO="giraygokirmak/tapebasis"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/docs/wiki"
 WIKI_REPOSITORY="${TAPEBASIS_WIKI_REPOSITORY:-https://github.com/${REPO}.wiki.git}"
+# A Git hook exports the caller's repository locators. The temporary wiki clone
+# owns a different repository, worktree and index, so none may leak into it.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
+unset GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX
 WORK="$(mktemp -d)"
 DRY_RUN=0
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1

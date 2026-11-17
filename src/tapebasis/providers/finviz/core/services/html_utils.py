@@ -80,6 +80,68 @@ def extract_ssr_island(html: str) -> Optional[Any]:
         return None
 
 
+def extract_ssr_props(html: str, island_id: str) -> Optional[Any]:
+    """Return the JSON props belonging to the named Finviz SSR island.
+
+    The islands have their own ``data-ssr-props`` attribute rather than an
+    ``id``, and more than one island can live on the quote page. Selecting the
+    attribute instead of the first script prevents another island's props from
+    being mistaken for analyst ratings.
+    """
+    pattern = re.compile(
+        r'<script[^>]*\bdata-ssr-props="'
+        + re.escape(island_id)
+        + r'"[^>]*>(.*?)</script>',
+        re.S,
+    )
+    match = pattern.search(html)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(1).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_analyst_ratings(html: str) -> Optional[dict[str, Any]]:
+    """Return Finviz's analyst targets, distinct visible firms and rating rows.
+
+    ``Analysts`` is not a snapshot metric or an integer in the island's JSON.
+    Its displayed value is the number of distinct firm names in the visible
+    ``ratings`` entries, including entries marked as previous ratings. Repeated
+    actions from one firm are therefore not additional firms. Both that count
+    and the source rows are returned so the derivation remains auditable.
+
+    Returns ``None`` when the island or its rating rows are absent. Malformed
+    individual rows are ignored rather than inventing a firm name.
+    """
+    props = extract_ssr_props(html, "ssr-island-analyst-ratings-0")
+    if not isinstance(props, dict) or not isinstance(props.get("ratings"), list):
+        return None
+    ratings = []
+    firm_names = set()
+    for row in props["ratings"]:
+        if not isinstance(row, dict):
+            continue
+        firm = _WS_RE.sub(" ", str(row.get("firm") or "")).strip()
+        if not firm:
+            continue
+        ratings.append(dict(row))
+        firm_names.add(firm.casefold())
+    if not ratings:
+        return None
+    return {
+        "price_target_average": props.get("targetPrice"),
+        "mean_recommendation": props.get("recom"),
+        "rating_firms": len(firm_names),
+        "ratings_included": len(ratings),
+        "includes_previous_ratings": True,
+        "as_of": props.get("today"),
+        "ratings": ratings,
+        "field": "AnalystRatings.ratings distinct firm",
+    }
+
+
 # ── Quote header ──────────────────────────────────────────────────────────────
 
 

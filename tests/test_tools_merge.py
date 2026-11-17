@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from tapebasis import tools_finviz, tools_market
+from tapebasis import news, tools_finviz, tools_market
 from tapebasis.symbols import Resolution
 
 
@@ -132,6 +132,71 @@ async def test_quote_all_when_every_provider_answers(fake_providers):
     fields = {row["field"]: row["match"] for row in result["comparisons"]}
     assert fields["price"] is True
     assert result["data"]["price"] == pytest.approx(331.9)
+
+
+@pytest.mark.asyncio
+async def test_quote_exposes_provider_specific_analyst_counts(fake_providers, monkeypatch):
+    """The same target can coexist with non-equivalent analyst count scopes."""
+    from tapebasis import tv_access
+
+    async def forecast(ticker):
+        assert ticker == "NASDAQ:AAPL"
+        return {
+            "ticker": ticker,
+            "source": "https://www.tradingview.com/symbols/NASDAQ-AAPL/forecast-price-target/",
+            "price_target_average": 348.519916,
+            "price_target_estimates_num": 39,
+            "recommendation_total": 50,
+            "recommendation_mark": 1.61,
+        }
+
+    monkeypatch.setattr(tv_access, "analyst_forecasts", forecast)
+    result = await tools_market.stock_quote("AAPL")
+    blocks = result["analyst_targets"]
+    assert blocks["TRADINGVIEW"]["price_target_estimate_count"] == 39
+    assert blocks["TRADINGVIEW"]["rating_analyst_count"] == 50
+    assert blocks["TRADINGVIEW"]["price_target_period"] == "1 year"
+    assert blocks["TRADINGVIEW"]["rating_period"] == "past 3 months"
+    assert blocks["TRADINGVIEW"]["currency"] == "USD"
+    assert blocks["FINVIZ"]["rating_firm_count"] == 16
+    assert blocks["FINVIZ"]["rating_action_count"] == 20
+    assert blocks["FINVIZ"]["includes_previous_ratings"] is True
+    assert blocks["FINVIZ"]["ratings"][0]["firm"] == "China Renaissance"
+    comparison = next(
+        row for row in result["comparisons"]
+        if row["field"] == "price_target_average"
+    )
+    assert comparison["match"] is True
+    assert comparison["values"] == {"TRADINGVIEW": 348.519916, "FINVIZ": 348.52}
+    assert result["data"]["price_target_average"] == 348.519916
+    assert result["fields"]["price_target_average"]["supplied"] == [
+        "TRADINGVIEW", "FINVIZ"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_forecast_failure_does_not_suppress_quote_or_invent_a_count(
+    fake_providers, monkeypatch
+):
+    """A supplementary page error cannot sink the quote or borrow Finviz's count."""
+    from tapebasis import tv_access
+    from tapebasis.providers_state import ProviderError
+
+    async def failed_forecast(_ticker):
+        raise ProviderError("TRADINGVIEW", "forecast page failed", code="UPSTREAM_ERROR")
+
+    monkeypatch.setattr(tv_access, "analyst_forecasts", failed_forecast)
+    result = await tools_market.stock_quote("AAPL")
+    assert result["data"]["price"] == 331.9
+    assert result["analyst_targets"]["TRADINGVIEW"]["price_target_estimate_count"] is None
+    assert result["analyst_targets"]["TRADINGVIEW"]["rating_analyst_count"] == 50
+    assert result["analyst_targets"]["FINVIZ"]["rating_firm_count"] == 16
+    error = next(
+        error for error in result["errors"]
+        if error["provider"] == "TRADINGVIEW"
+    )
+    assert error["code"] == "UPSTREAM_ERROR"
+    assert error["detail"]["capability"] == "analyst_forecasts"
 
 
 @pytest.mark.asyncio
@@ -287,10 +352,21 @@ async def test_finviz_only_tool_reports_none_on_failure(monkeypatch):
     async def broken(symbol):
         raise ProviderError("FINVIZ", "upstream blocked", code="UPSTREAM_BLOCKED")
 
+    async def fake_news(symbol, **kwargs):
+        return {"block": {
+            "items": [], "count": 0, "limit": 10, "unique_stories": 0,
+            "errors": [], "data_provider": "YAHOO", "providers_answered": ["YAHOO"],
+            "endpoints": {"YAHOO": "Yahoo news"},
+            "shortfall_reason": "available feeds supplied no stories; no filler",
+        }}
+
+    monkeypatch.setattr(news, "fetch_news", fake_news)
     monkeypatch.setattr(fv_access, "why_moving", broken)
     result = await tools_finviz.stock_why_moving("AAPL")
     assert result["data_provider"] == "NONE"
     assert result["errors"][0]["code"] == "UPSTREAM_BLOCKED"
+    assert result["data"] is None
+    assert result["news"]["data_provider"] == "YAHOO"
 
 
 @pytest.mark.asyncio

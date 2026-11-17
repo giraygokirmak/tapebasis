@@ -21,7 +21,8 @@
   reconcile.ask(tv_fn, fv_fn, yh_fn, sa_fn=sa_fn, bb_fn=bb_fn)  ──►  asyncio.gather, never raises
       │
       ├──► tv_access ──► providers/tradingview/native ──► scanner.tradingview.com
-      │                                              └──► data.tradingview.com (ws)
+      │                                              ├──► data.tradingview.com (ws)
+       │                                              └──► www.tradingview.com forecast (auxiliary)
       ├──► fv_access ──► providers/finviz ─────────────► finviz.com (HTML + /api/*)
       ├──► yh_access ──► Yahoo chart API ──────────────► query1.finance.yahoo.com
       ├──► sa_access ──► StockAnalysis quote API ─────► stockanalysis.com/api/quotes/s/<t>
@@ -60,6 +61,7 @@ src/tapebasis/
 ├── singleflight.py       merge identical concurrent work (not a cache)
 ├── blocking_pool.py      bounded thread pool for blocking provider calls
 ├── merge_helpers.py      pure payload shapers (raw provider dict → normalised fields)
+├── news.py              symbol news merge, per-story consensus, duplicates_collapsed
 ├── sentiment.py          token-free headline scoring (VADER + finance lexicon)
 ├── symbols.py            dynamic per-provider symbol resolution, the instrument registry
 ├── health.py             upstream probes, fingerprints, drift state, background loop
@@ -89,10 +91,10 @@ access module and its own upstream:
 
 | Leg | Access module | Upstream |
 | --- | --- | --- |
-| TradingView | `tv_access.py` → `providers/tradingview/native.py` | `scanner.tradingview.com` (quotes, screener), `data.tradingview.com` (chart websocket for OHLCV) |
+| TradingView | `tv_access.py` → `providers/tradingview/native.py` | `scanner.tradingview.com` (quotes, screener, mean target and rating count), `www.tradingview.com/symbols/{symbol}/forecast-price-target/` (target estimate and rating populations), `data.tradingview.com` (chart websocket for OHLCV) |
 | TradingView (overnight) | `tv_access.py` → `providers/tradingview/quote_socket.py` | `data.tradingview.com` quote websocket; `qsd` deltas merge into the preceding symbol snapshot |
 | Yahoo (overnight) | `yh_access.py` | `/v7/finance/quote?overnightPrice=true` with a cookie-bound guest crumb; separate from the chart API |
-| Finviz | `fv_access.py` | `finviz.com` HTML pages and `/api/*` JSON islands |
+| Finviz | `fv_access.py` | `finviz.com` HTML pages and `/api/*` JSON islands; the quote page's `AnalystRatings` SSR props supply visible rating rows and their distinct-firm count |
 | Yahoo Finance | `yh_access.py` | `query1.finance.yahoo.com/v8/finance/chart` |
 | StockAnalysis | `sa_access.py` | `stockanalysis.com/api/quotes/s/<ticker>` |
 | Bloomberg | `bb_access.py` | `bloomberg.com/quote/<id>` and `/markets/rates-bonds`, through `curl_cffi` |

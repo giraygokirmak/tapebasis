@@ -20,7 +20,7 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "providers": "ALL",
         "comparison": (
             "price, change %, previous close, volume, session open/high/low, "
-            "52-week high/low, P/E, RSI(14)"
+            "52-week high/low, P/E, RSI(14), average analyst target"
         ),
         "notes": (
             "TradingView's scanner, Finviz's quote page, Yahoo's chart API, "
@@ -52,7 +52,13 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
             "covers US equities and ETFs only and its quote surface is the same "
             "consolidated tape Yahoo serves, "
             "so agreement between those two is weak corroboration rather than two "
-            "independent witnesses. On FX the day change is never "
+            "independent witnesses. The average analyst target is checked between "
+            "TradingView and Finviz at 0.1 % tolerance. Top-level `analyst_targets` "
+            "keeps their different count populations separate: TradingView one-year "
+            "forecast and three-month rating counts, and Finviz distinct firms in "
+            "its visible ratings list. These counts are not agreement or consensus. "
+            "An auxiliary forecast-page error does not change primary quote coverage. "
+            "On FX the day change is never "
             "compared: spot FX has no single official previous close."
         ),
     },
@@ -109,14 +115,20 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
     },
     {
         "name": "stock_news",
-        "capability": "ticker headlines",
+        "capability": "latest 10 unique stories, newest first, per-story consensus",
         "providers": "ALL",
-        "comparison": "headline-title overlap between the feeds",
+        "comparison": (
+            "same_url / same_title / similar_title (4 shared tokens, "
+            "Jaccard >= 0.55); duplicates_collapsed; pairwise shared"
+        ),
         "notes": (
-            "Finviz supplies price reactions around each headline; Yahoo supplies its own "
-            "search feed. The TradingView leg is the provider's licensed Marketaux feed and "
-            "needs MARKETAUX_API_TOKEN; without it TradingView is NOT_ATTEMPTED and the "
-            "response is labelled with the feeds that did answer."
+            "Finviz supplies price reactions; Yahoo supplies search feed; TradingView's licensed "
+            "Marketaux feed requires MARKETAUX_API_TOKEN; without it that attempted leg is "
+            "NO_DATA, not a successful answer, while other feeds still contribute. "
+            "Sorted by published_at; unknown timestamps last. Each item carries providers, "
+            "provider_count, consensus (multi-provider corroboration, not editorial truth), "
+            "consensus_kind, matching and headlines. Counts below 10 are real and shortfall_reason "
+            "says why; never padded with duplicates."
         ),
     },
     {
@@ -205,10 +217,15 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
     },
     {
         "name": "stock_why_moving",
-        "capability": "narrative explainer for a price move",
+        "capability": "Finviz editorial explainer with merged latest-10 news beside it",
         "providers": "FINVIZ",
-        "comparison": "single-source",
-        "notes": "Finviz's own editorial feed; no TradingView or Yahoo equivalent.",
+        "comparison": "single-source editorial; news block carries its own provider consensus",
+        "notes": (
+            "data.headline, summary and sentiment stay FINVIZ-only. data.news aggregates the "
+            "same merged feed as stock_news (latest 10, per-story consensus, duplicates_collapsed). "
+            "If the editorial feed fails, data stays null and the news block moves to top-level "
+            "news beside the error."
+        ),
     },
     {
         "name": "stock_chart",
@@ -367,15 +384,19 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
     {
         "name": "market_sentiment",
         "capability": "news-based sentiment score",
-        "providers": "FINVIZ",
-        "comparison": "single-source",
+        "providers": (
+            "FINVIZ for local sentiment, TRADINGVIEW for licensed sentiment; "
+            "news coverage is separate"
+        ),
+        "comparison": "single-source sentiment; per-story provider corroboration only inside news",
         "notes": (
             "No API key required. Uses Marketaux entity sentiment when "
             "MARKETAUX_API_TOKEN is set (then labelled TRADINGVIEW); otherwise "
             "scores Finviz headlines locally with VADER + a finance lexicon and "
             "labels the response FINVIZ, because the headlines are Finviz's. "
-            "Returns sentiment_score=null rather than 0.0 when nothing can be "
-            "scored."
+            "Returns sentiment_score=null and data_provider=NONE rather than 0.0 "
+            "when nothing can be scored. data.news aggregates the latest 10 merged "
+            "stories with per-story consensus from every news-capable provider."
         ),
     },
     {
@@ -392,9 +413,11 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "providers": "ALL",
         "comparison": "underlying price across TradingView, Finviz and Yahoo",
         "notes": (
-            "The price leg is multi-source; the analysis and sentiment legs are "
-            "TradingView-only and labelled per field in `fields` (their `source` is "
-            "TRADINGVIEW)."
+            "The price leg is multi-source; the analysis and sentiment origin is "
+            "described in data and sentiment_source, not separate fields entries. "
+            "data.news uses the shared "
+            "merged feed (latest 10 unique stories, per-story consensus, "
+            "duplicates_collapsed) instead of a Marketaux-only leg."
         ),
     },
     # ── Ops ─────────────────────────────────────────────────────────────────

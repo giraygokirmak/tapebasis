@@ -59,6 +59,7 @@ def _round_floats(value: Any) -> Any:
 
 
 async def quote(symbol: str) -> dict[str, Any]:
+    """Return the quote page, including snapshot and visible analyst data."""
     return await _call(quote_service.get_quote(symbol), "quote")
 
 

@@ -8,9 +8,10 @@ notice states plainly that the data is not cross-verified.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
-from . import fv_access
+from . import fv_access, news as symbol_news
 from .health import FINVIZ, MONITOR
 from .providers_state import DataProvider, NoDataError, envelope, error_code
 from .reconcile import field_source, finalize, single
@@ -176,25 +177,40 @@ async def stock_peers(symbol: str, limit: int = 12) -> dict[str, Any]:
 
 
 async def stock_why_moving(symbol: str) -> dict[str, Any]:
-    """Finviz's own explainer for why a ticker moved (Finviz-only).
+    """Finviz's own explainer plus the latest 10 stories for a ticker.
+
+    The editorial headline, summary, sentiment and catalyst remain Finviz-only.
+    ``data.news`` separately merges TradingView/Marketaux, Finviz and Yahoo,
+    naming each story's providers and consensus rather than replacing the
+    editorial feed with generic headlines.
 
     Args:
         symbol: Ticker.
 
     Returns:
-        Envelope labelled ``FINVIZ`` with headline, summary, sentiment and
-        catalyst flag.
+        Envelope labelled ``FINVIZ`` for the editorial leg, with ``data.news``
+        alongside it. If the editorial feed fails, ``data`` stays null and the
+        independent news is in top-level ``news`` beside the preserved error.
     """
     ticker = strip_exchange(symbol).upper()
-    try:
-        data = await fv_access.why_moving(to_finviz(ticker))
-    except Exception as exc:  # noqa: BLE001
-        return _failed(ticker, exc)
-    return _single_response(
+    async def editorial() -> dict[str, Any]:
+        try:
+            return await fv_access.why_moving(to_finviz(ticker))
+        except Exception as exc:  # noqa: BLE001 - news still has its own evidence
+            return {"_error": exc}
+
+    data, news = await asyncio.gather(editorial(), symbol_news.fetch_news(ticker))
+    if "_error" in data:
+        response = _failed(ticker, data["_error"])
+        symbol_news.attach_news(response, news, provider=FINVIZ)
+        return response
+    response = _single_response(
         data,
         symbol=ticker,
         source=f"https://finviz.com/api/stocks-why-moving/{to_finviz(ticker)}",
     )
+    symbol_news.attach_news(response, news, provider=FINVIZ)
+    return response
 
 
 async def stock_chart(

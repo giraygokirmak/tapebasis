@@ -7,7 +7,7 @@ runtime. **Neither requires an API key.**
 | --- | --- | --- |
 | `MARKETAUX_API_TOKEN` set and usable | Marketaux entity sentiment (licensed) | `TRADINGVIEW` |
 | no token, or Marketaux rejected / quota exhausted / outage | Finviz headlines scored locally (VADER) | `FINVIZ` |
-| neither available | labelled empty payload, `sentiment_score: null` | `NONE` |
+| neither available | labelled empty payload, `sentiment_score: null`, `sentiment_label: Unavailable` | `NONE` |
 
 Both produce the same payload shape, so a caller never has to branch on which ran. The payload always
 says which one did: `provider`, `scoring`, and the envelope's `data_provider`.
@@ -18,6 +18,13 @@ The local path scores **Finviz headlines**. The numbers are Finviz's; only the s
 Labelling that response `TRADINGVIEW` would claim a provenance the data does not have: the exact
 mislabelling this server exists to prevent. So the local path is `FINVIZ`, and
 `sources.FINVIZ` reads `"Finviz headlines scored locally (VADER)"`.
+
+`data.news` is a sibling payload, not the score: it merges the latest-10
+stories from Marketaux, Finviz and Yahoo, records per-story `providers`,
+`provider_count` and `consensus`, and sorts newest-first. When Finviz
+headlines themselves are unavailable `sentiment_score` becomes `null`,
+`sentiment_label` becomes `Unavailable` and `data_provider` becomes `NONE`.
+The news block still carries whichever feeds actually answered.
 
 Sentiment is single-source by nature. There is nothing to cross-check a sentiment score against, and
 inventing a second opinion would not make it corroborated. The label names whichever feed supplied
@@ -88,12 +95,18 @@ Free plan: 100 requests/day, 3 articles per request. The service enforces a hard
 (`MARKETAUX_DAILY_BUDGET`, default **90**, a safety margin under 100) and a 4-hour TTL cache, and
 serves stale cache before it serves nothing.
 
-One fetch serves both tools: articles are the news, their entity sentiment is the sentiment. So
-`combined_analysis` costs one request, not two.
+Within one sentiment backend, Marketaux articles and their entity sentiment
+come from one licensed call. A news-bearing tool now also asks Finviz and
+Yahoo independently for its merged news block, so total request cost covers
+every attempted leg rather than only sentiment.
 
-Because the free plan returns only 3 articles per request, `stock_news(limit=20)` is effectively
-capped at 3 headlines on the Marketaux leg. That is a plan limit, not a bug; local scoring over
-Finviz headlines has no such cap.
+The merged `stock_news` feed aggregates headlines from Marketaux, Finviz and
+Yahoo, deduplicates across providers and fills the latest-10 window with
+whatever real stories exist. With no Marketaux token only Finviz and Yahoo
+contribute. With a token, the free plan's cap of three Marketaux articles means
+that feed alone usually cannot supply ten; Finviz and Yahoo still contribute
+their real articles, and a shortfall is reported rather than padded. Local
+scoring over Finviz headlines has no Marketaux cap.
 
 Marketaux is subject to the same outgoing-request discipline as the price providers
 ([`ratelimit.py`](https://github.com/giraygokirmak/tapebasis/blob/main/src/tapebasis/ratelimit.py)),

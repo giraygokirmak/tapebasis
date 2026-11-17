@@ -79,7 +79,7 @@ Every tool result carries exactly one of eight values. It states **coverage**, n
 | `YAHOO` | Only Yahoo Finance answered. Served, but **not** corroborated. |
 | `SA` | Only StockAnalysis answered. Served, but **not** corroborated; US equities and ETFs only. |
 | `BLOOMBERG` | Only Bloomberg answered. Served, but **not** corroborated; its quote can be delayed. |
-| `NONE` | No provider could supply it. No value is presented. |
+| `NONE` | No provider supplied the primary value; a separately labelled `news` block may remain available. |
 
 `ALL` says every provider asked answered, never that they agree, and a leg that was asked and
 failed downgrades the label to `PARTIAL` rather than hiding behind `ALL`.
@@ -290,11 +290,11 @@ Details: [Getting Started](Getting-Started) · [Docker](Docker).
 
 ## Note on labelling
 
-Every provider is asked for its own data: TradingView from `scanner.tradingview.com` and its chart
-websocket, Finviz from `finviz.com` HTML and JSON islands, Yahoo from `query1.finance.yahoo.com`,
+Every provider is asked for its own data: TradingView from `scanner.tradingview.com`, its analyst
+forecast page and its chart websocket, Finviz from `finviz.com` HTML and JSON islands, Yahoo from `query1.finance.yahoo.com`,
 StockAnalysis from `stockanalysis.com/api/quotes`, Bloomberg from `bloomberg.com` quote pages and its
-market board. Nothing is proxied through another provider, and `sources` records the upstream each
-leg used.
+market board. Nothing is proxied through another provider. `sources` records the primary quote
+upstream each leg used; the auxiliary forecast URL is at `analyst_targets.TRADINGVIEW.source`.
 
 Where a capability exists on only some providers, that is stated, not simulated: options chains come
 from Finviz and Yahoo (TradingView contributes only the underlying price), backtests run twice on

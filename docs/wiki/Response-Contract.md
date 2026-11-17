@@ -13,7 +13,7 @@ Every tool returns the same envelope. Learn it once and every tool is readable.
 | `YAHOO` | `SINGLE_SOURCE` | Only Yahoo Finance answered | Same, from the Yahoo side |
 | `SA` | `SINGLE_SOURCE` | Only StockAnalysis answered | Same; note it covers US equities and ETFs only |
 | `BLOOMBERG` | `SINGLE_SOURCE` | Only Bloomberg answered | Same, but state `exchange_delay` / `print_time` before calling a price live |
-| `NONE` | `UNAVAILABLE` | No provider answered | Say no data is available. Do not invent one. |
+| `NONE` | `UNAVAILABLE` | No provider supplied the primary value | Say the primary value is unavailable. Do not invent one; an independently labelled `news` block may still be present |
 
 `verification` is derived, never independent: `ALL` and `PARTIAL` → `MULTI_SOURCE`, a single provider
 `→ SINGLE_SOURCE`, `NONE → UNAVAILABLE`.
@@ -29,10 +29,39 @@ failure. `PARTIAL` says the values are served but a leg was asked and produced n
 separate axis, reported per field in `comparisons[].match` and summarised in `notice`/`warnings`.
 Providers answering but diverging is still `ALL`, with the conflict named.
 
-**`ALL` never applies to a single value.** `data_provider` describes the call's coverage; each value
-in `data` came from exactly one provider, and `fields.<field>.source` says which. Four providers
-answering means the price was cross-checked four ways, not that `data.price` is a number four
-providers produced together.
+**`ALL` never applies to a single compared value.** `data_provider` describes the call's coverage;
+each compared value in `data` came from exactly one provider, and `fields.<field>.source` says which.
+Four providers answering means the price was cross-checked four ways, not that `data.price` is a
+number four providers produced together.
+
+**Composite news has its own coverage.** `stock_news` resolves symbols and asks Finviz, Yahoo and
+TradingView's licensed Marketaux feed. Without a token, the attempted licensed leg returns `NO_DATA`
+and stays visible in coverage and errors. StockAnalysis and Bloomberg have no symbol-news adapter and
+are not credited. For `market_sentiment`, `combined_analysis` and
+`stock_why_moving`, the top-level `data_provider` describes the primary sentiment, analysis or
+editorial leg, not the merged news. `data.news` also appears as top-level `news`; both carry their
+own `data_provider`, `providers_answered`, `errors` and technical `provider_calls` audit. A primary
+failure can therefore return `NONE` while real news remains available. If the Finviz editorial leg
+fails, `stock_why_moving` keeps `data: null` and exposes its independent news only at top level.
+
+**Provider-specific analyst targets stay outside `data`.** `stock_quote` compares
+`price_target_average` between TradingView and Finviz at 0.1 % tolerance, accommodating Finviz's
+rounding. Its top-level `analyst_targets` block instead retains each provider's own figures: a
+TradingView one-year `price_target_estimate_count` is distinct from its past-three-month
+`rating_analyst_count`, and Finviz's `rating_firm_count` counts distinct firms in its shorter visible
+ratings table, not contributors to its average target. Finviz also exposes its `rating_action_count`,
+`includes_previous_ratings`, `as_of` and source `ratings`. Counts do not form agreement, consensus or
+independent editorial verification. TradingView's auxiliary forecast-page failure adds an error with
+`detail.capability: analyst_forecasts` but does not change primary quote coverage or `data_provider`;
+a missing forecast count remains null.
+
+News `providers_answered` means providers that supplied at least one valid headline, not merely a
+successful HTTP response. `provider_calls.answered` preserves the lower-level call result. Stories
+are newest first, defaulting to 10 and capped at 50 on request. Unknown publication times sort last
+and stably. Same-provider duplicates never create `consensus`; a corroborated story requires at
+least two providers. Even that is not independent editorial verification because outlets can carry
+one syndicated wire report. Fewer stories than requested are returned at their true `count`, with
+`shortfall_reason`, never filler.
 
 **`ALL` does not mean every provider in the catalogue.** A tool asks only the providers that could
 serve the field. If TradingView and Yahoo answer and Finviz has no page for the instrument, that
@@ -80,9 +109,11 @@ field could not be compared it says why. When the health monitor has seen drift,
 appended.
 
 ### `data`
-The reconciled payload. Its shape is tool-specific (a dict for `stock_quote`, a list for
-`stock_prices`, a nested object for `market_indices`). This is the only place a value should be read
-from.
+The primary reconciled payload plus any documented sibling block, such as `data.news`. Its shape is
+tool-specific (a dict for `stock_quote`, a list for `stock_prices`, a nested object for
+`market_indices`). Read a value with its `fields` descriptor; merged news has the separate coverage
+described above. Independently available news can also appear at top-level `news` when a failed
+primary leg leaves `data: null`.
 
 **One value per compared field.** `data` holds exactly one price, the reading whose market print is
 newest. Every original stays in `comparisons`, and `freshness` records which one won and why. An
@@ -128,16 +159,19 @@ Per-field provenance, one descriptor per key in `data`:
 }
 ```
 
-`data` holds exactly one value per field, so a field has exactly one `source`: the provider whose
-reading was placed there. **A field is never labelled with more than one provider**, because a value
-sourced from four providers does not exist: the four readings were compared, one was chosen, and
-`source` names the one that was. The earlier `{"price": "ALL"}` spelling collapsed that distinction
-and read as if the number were a joint product of every provider; the descriptor separates the facts
-that used to be fused:
+`data` holds exactly one value per compared field, so that field has exactly one `source`: the
+provider whose reading was placed there. **A compared field is never labelled with more than one
+provider**, because a value sourced from four providers does not exist: the four readings were
+compared, one was chosen, and `source` names the one that was. The earlier `{"price": "ALL"}`
+spelling collapsed that distinction and read as if the number were a joint product of every
+provider. Composite `data.news` is the documented exception: it is a merge of stories, not a chosen
+numeric reading, so its `source` is `null` and its `coverage` describes the contributing feeds. The
+descriptor separates the facts that used to be fused:
 
 | Key | Meaning |
 | --- | --- |
-| `source` | The one provider whose reading is in `data`. Never `ALL` |
+| `source` | The one provider whose compared reading is in `data`. Never `ALL` or `PARTIAL`; `null` for the composite `news` object |
+| `coverage` | Present on composite `news`: its own `ALL`/`PARTIAL`/single-provider/`NONE` coverage |
 | `supplied` | Every provider that returned a reading for this field, in display order. This answers "who answered" |
 | `compared` | Every provider whose reading was actually judged against another one. Never wider than `supplied` |
 | `agreement` | `true` every compared pair agreed, `false` a real disagreement, `null` nothing was judged |
@@ -156,7 +190,11 @@ The three differ on any tool with uneven coverage: a quote gets its price from f
 peer list from Finviz alone.
 
 To go one step further: `comparisons[].values` holds every provider's raw reading keyed by label, and
-`sources[fields.<field>.source]` names the upstream that produced the chosen one.
+`sources[fields.<field>.source]` names the upstream that produced a chosen scalar. For composite
+`data.news`, `source` is `null`, `coverage` carries the news call's provider state, `supplied` lists
+feeds with valid headlines, `compared` is empty and `agreement` is `null`. These are not claims
+about a numeric comparison. Per-story matching lives in `data.news.items[].providers` and
+`data.news.items[].consensus`, whose meaning is limited to provider corroboration.
 
 ### `comparisons`
 One row per compared field:
@@ -393,6 +431,7 @@ readings are not flagged over rounding noise.
 | session open/high/low | 0.5 % | Same session, different print moments; open is compared only where both sides publish it |
 | P/E | 2 % | Rounding in the Finviz snapshot |
 | RSI(14) | 5 % (floor 0.5) | Different lookback windows |
+| average analyst target | 0.1 % | Finviz rounds its displayed mean target; provider-specific analyst counts are not compared |
 | volume | 1 % | Intraday accumulation timing |
 | index level | 0.5 % | Same index, different print times |
 | VIX level | 3 % | A volatility gauge that moves percent-level within a minute |

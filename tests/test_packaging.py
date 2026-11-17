@@ -202,4 +202,19 @@ def test_npm_tarball_serves_real_mcp_stdio(distributions, tmp_path):
         "TAPEBASIS_UVX": str(wrapper),
         "TAPEBASIS_HEALTH_ENABLED": "false",
     })
+    # Prepare the isolated uv installation through the packed launcher itself.
+    # Cold dependency downloads are installation time, not an MCP response. The
+    # same temporary cache then serves the client, so its startup and discovery
+    # timeouts still measure an already installed, real packaged MCP server.
+    prepared = subprocess.run(
+        [str(launcher), "--help"],
+        cwd=install,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    assert prepared.returncode == 0, prepared.stderr
+    assert "streamable-http" in prepared.stdout
     asyncio.run(asyncio.wait_for(_check_npm_stdio(launcher, environment, install), timeout=180))

@@ -7,6 +7,7 @@ a temporary repository, with no network and no dependency on this checkout.
 from __future__ import annotations
 
 import importlib.util
+import os
 import pathlib
 import subprocess
 
@@ -28,7 +29,10 @@ def gate():
 
 @pytest.fixture()
 def tree(tmp_path, gate, monkeypatch):
-    """A minimal repository-shaped tree with a frozen baseline."""
+    """A minimal repository-shaped tree, isolated from the caller's Git target."""
+    for variable in os.environ:
+        if variable.startswith("GIT_"):
+            monkeypatch.delenv(variable)
     (tree_dir := tmp_path / "repo").mkdir()
     for relative in ("src/tapebasis", "docs/wiki", "scripts"):
         (tree_dir / relative).mkdir(parents=True)
@@ -47,6 +51,10 @@ def _git(directory: pathlib.Path, *args: str) -> None:
         check=True,
         capture_output=True,
         env={
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("GIT_")
+        } | {
             "GIT_AUTHOR_NAME": "Test",
             "GIT_AUTHOR_EMAIL": "test@example.com",
             "GIT_COMMITTER_NAME": "Test",
@@ -151,7 +159,10 @@ def test_public_surface_reads_signatures():
     assert module._public_surface(source) == {"public(a, b)", "class Box", "Box.open(self)"}
 
 
-def test_doc_with_code_ignores_a_body_only_change(tree, gate):
+def test_doc_with_code_ignores_caller_git_environment(tree, gate, monkeypatch):
+    """An outer commit's repository variables cannot target this test repository."""
+    monkeypatch.setenv("GIT_DIR", str(tree / "wrong-repository"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tree / "wrong-index"))
     module = tree / "src" / "tapebasis" / "mod.py"
     module.write_text('def public(value):\n    """Doc."""\n    return value\n', encoding="utf-8")
     _git(tree, "init")
@@ -231,6 +242,50 @@ def test_tool_coverage_flags_a_tool_missing_from_the_contract(tree, gate, monkey
         "README.md does not name `market_snapshot`",
         "Tools-Reference.md does not name `market_snapshot`",
     ]
+
+
+def test_wiki_publish_dry_run_isolates_git_hook_environment(tmp_path):
+    """A dry run commits only to the wiki clone, never the caller's repository."""
+    repo = tmp_path / "project"
+    pages = repo / "docs" / "wiki"
+    pages.mkdir(parents=True)
+    (pages / "Home.md").write_text("Updated wiki\n", encoding="utf-8")
+    script = (pathlib.Path(__file__).resolve().parents[1] / "scripts" / "publish-wiki.sh").read_text(
+        encoding="utf-8"
+    )
+    remote = tmp_path / "wiki.git"
+    remote_url = str(remote).replace("\\", "\\\\").replace('"', '\\"')
+    script = script.replace('"https://github.com/${REPO}.wiki.git"', f'"{remote_url}"')
+    publisher = repo / "scripts" / "publish-wiki.sh"
+    publisher.parent.mkdir()
+    publisher.write_text(script, encoding="utf-8")
+    _git(tmp_path, "init", "--bare", "--initial-branch=master", str(remote))
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    (seed / "Home.md").write_text("Original wiki\n", encoding="utf-8")
+    _git(seed, "init", "--initial-branch=master")
+    _git(seed, "add", "Home.md")
+    _git(seed, "commit", "-m", "seed")
+    _git(seed, "push", str(remote), "HEAD:master")
+    env = {
+        "PATH": os.environ["PATH"],
+        "HOME": os.environ["HOME"],
+        "GIT_DIR": str(tmp_path / "caller-repository"),
+        "GIT_INDEX_FILE": str(tmp_path / "caller-index"),
+        "GIT_WORK_TREE": str(tmp_path / "caller-tree"),
+    }
+    result = subprocess.run(
+        ["bash", str(publisher), "--dry-run"],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    assert "Sync wiki from docs/wiki" in result.stdout
+    assert "dry run" in result.stdout
+    assert not (tmp_path / "caller-repository").exists()
+    assert not (tmp_path / "caller-index").exists()
+    assert not (tmp_path / "caller-tree").exists()
 
 
 def test_every_check_is_a_described_callable(gate):

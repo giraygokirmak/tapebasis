@@ -19,15 +19,15 @@ Quote plus fundamentals snapshot for any instrument class, equity, index, FX, co
 | | |
 | --- | --- |
 | Providers | TradingView scanner · Finviz quote page · Yahoo chart API · StockAnalysis quote API · Bloomberg quote page |
-| Compared | price, change %, previous close, volume, session open/high/low, 52-week high/low, P/E, RSI(14) |
-| Tolerances | price/prev-close/52-week/session range 0.5 % · change % 2 % · P/E 2 % · RSI 5 % · volume 1 % |
+| Compared | price, change %, previous close, volume, session open/high/low, 52-week high/low, P/E, RSI(14), average analyst price target |
+| Tolerances | price/prev-close/52-week/session range 0.5 % · change % 2 % · P/E 2 % · RSI 5 % · volume 1 % · average target 0.1 % to accommodate Finviz's rounding |
 | Observation guards | price, change %, previous close, volume, session high/low/open: `max_skew_seconds = 900` and same US/Eastern session date; change %, volume and the session range also carry an 8 h age ceiling |
 | Declared delay | Bloomberg's 15-minute equity/index delay is itself a comparability boundary: a pair that far apart is `not_comparable`, with the delay named |
 | Never compared | change % on FX, where no shared previous close exists (reported from every provider) |
 
 Each compared field resolves to one value, the newest print, while every reading stays in
-`comparisons`. Finviz-only material rides along, labelled per field in `fields` (each descriptor's
-`source` is FINVIZ): the 84-field
+`comparisons`. Finviz-only material rides along, labelled per field in `fields` (these listed
+extras each have `source: FINVIZ`): the 84-field
 fundamentals snapshot, company profile, peers, the after-hours print, the classification chips
 (`sector`, `industry`, `country`, `market_cap_class`, `exchange`, `etf_type`) and the
 `income_breakdown` island. `resolutions` records the ticker each provider was asked for.
@@ -43,7 +43,34 @@ Symbol resolution only decides who can be asked. Once a symbol resolves, an empt
 remains a visible `NO_DATA` error; it is not reclassified as `NOT_ATTEMPTED` merely because the
 symbol is absent from that provider's payload.
 
-`data.session` (also at the envelope level) names the window `data.price` is a print from:
+#### `analyst_targets` (provider-labelled metadata of `stock_quote`)
+
+The average analyst target is compared as `price_target_average` at 0.1 % tolerance, which accommodates
+Finviz's rounding. For AAPL on 17 November 2026, TradingView returned `348.519916` and Finviz returned
+`348.52`, the same displayed average at different precision. Agreement between those web properties is
+not evidence of independent editorial or analyst coverage.
+
+`analyst_targets` is outside `data`, with a TradingView block when its scanner answers and a Finviz
+block when its quote page answers. Other primary quote providers have no supplied analyst block. It
+never replaces the count from one provider with another's:
+
+* TradingView's scanner supplies its average target, rating mean and rating count. Its forecast page
+  separately supplies `price_target_estimate_count`, the analysts offering one-year price forecasts,
+  and `rating_analyst_count`, those giving stock ratings in the past three months. The scanner returns
+  null for the estimate-count field, so the page's `price_target_estimates_num` is read explicitly; it
+  is not inferred from recommendation buckets. The currency comes from the scanner.
+* Finviz's snapshot contains only `Target Price` and `Recom`, respectively the mean target and mean
+  recommendation. The visible `AnalystRatings` island on the same already-fetched page supplies the
+  target, recommendation, rating list and distinct `rating_firm_count`, with repeated firm actions
+  collapsed. Its `rating_action_count`, `includes_previous_ratings` flag, `as_of` date and source rows
+  expose the derivation. This shorter visible firm list is neither the number of analysts behind its
+  average target nor proof that TradingView's larger populations contradict it.
+
+A failed TradingView forecast page is an `analyst_forecasts` capability error, not a primary quote
+failure. Scanner data and any successful Finviz analyst block remain available, and the absent forecast
+count stays null. Analyst counts do not join a consensus or an agreement verdict.
+
+The `session` key in `data` and at the envelope level names the window `data.price` is a print from:
 `pre_market`, `regular`, `post_market` or `overnight`, and `data.price_field` names the provider field it
 was read from. Each provider's live print is resolved before comparison, because the obvious price field
 goes stale the moment the regular session ends:
@@ -207,11 +234,30 @@ contradicting each other on the page.
 
 ### `stock_news`
 
-Ticker headlines, matched by title across the feeds.
+Latest 10 unique stories for a ticker by default, newest first, merged from every news-capable
+provider. The optional `limit` is clamped to 1 through 50; it is a cap on real stories, not a target
+to fill.
 
 Finviz supplies price reactions around each item; Yahoo supplies its own search feed. The TradingView
-leg is the provider's licensed Marketaux feed and needs `MARKETAUX_API_TOKEN`; without it that leg is
-`NOT_ATTEMPTED` and the response is labelled with the feeds that did answer.
+leg is the provider's licensed Marketaux feed and needs `MARKETAUX_API_TOKEN`. The other feeds still
+contribute when that licensed leg cannot answer. StockAnalysis and Bloomberg have no symbol-news
+adapter, so they are not asked and are not credited. Top-level news coverage counts feeds with at
+least one valid story; `provider_calls` separately audits successful but empty upstream calls.
+
+Items reorder by `published_at`. Unknown publication times sort last. Each item
+carries `providers`, `provider_count`, `consensus` (true only when multiple
+providers carry the same event), `consensus_kind`, `matching` and the
+alternative `headlines` with their original wording.
+
+Matching uses a hierarchy: same normalized URL (tracking-insensitive), same
+normalized headline, then similar headlines that share at least four
+significant words with Jaccard ≥ 0.55. A single repeated provider item is
+collapsed and counted in `duplicates_collapsed`; it never upgrades to consensus.
+
+When fewer than 10 unique stories exist the real `count` and `shortfall_reason`
+explain why, and the list is never padded with duplicate filler. Provider
+agreement is provider corroboration, not independent editorial verification,
+because outlets frequently syndicate one newswire.
 
 Sentiment does **not** need the token, see [`market_sentiment`](#market_sentiment).
 
@@ -383,10 +429,14 @@ For a cross-checked *index* read, use `market_indices`.
 TradingView technical read + sentiment + news, with the underlying price cross-checked against
 Finviz's snapshot and Yahoo's chart API. One request, not one per leg.
 
-The price leg is genuinely multi-source; the analysis and sentiment legs remain single-source and are
-labelled per field in `fields` (their `source` is TRADINGVIEW). `sentiment_source` states whether
-the sentiment came from Marketaux or
-local scoring.
+The price leg is genuinely multi-source. `data.sentiment.provider`, `data.sentiment.scoring` and the top-level
+`sentiment_source` name the news-sentiment backend. `fields` does not currently carry separate
+analysis or sentiment descriptors.
+
+`data.news` uses the same merged latest-10 feed as `stock_news` instead of a
+Marketaux-only list. Consensus, matching and `duplicates_collapsed` behave the
+same way; the news block carries its own `data_provider` so a failed technical
+call cannot suppress it.
 
 ---
 
@@ -400,7 +450,7 @@ those legs are marked `NOT_ATTEMPTED`, which is **not** an error and is excluded
 | `stock_filings` | SEC filing history | Finviz's SEC feed |
 | `stock_ownership` | Insider + institutional ownership, short interest | Several datasets; a failing one is reported without losing the others |
 | `stock_peers` | Peer-group companies | No provider has a curated peer list |
-| `stock_why_moving` | Narrative explainer for a price move | Finviz editorial feed |
+| `stock_why_moving` | Finviz editorial explainer for a price move plus the same merged latest-10 news as `stock_news` in `data.news`. If the editorial feed fails `data` is null and the news moves to top-level `news` beside the error. | Finviz editorial |
 | `stock_chart` | Rendered PNG candlestick chart | TradingView produces text analysis, not images |
 | `stock_dilution` | Dilution risk model (share count, float, cash runway) | Finviz only models dilution-prone companies; others return `NONE` with that reason |
 | `stock_screener_filters` | Finviz screener filter catalogue | Finviz's proprietary filter vocabulary |
@@ -427,7 +477,7 @@ Two backends, selected at runtime, same payload shape:
 | --- | --- | --- |
 | `MARKETAUX_API_TOKEN` set and usable | Marketaux entity sentiment (licensed) | `TRADINGVIEW` |
 | no token, or Marketaux rejected/quota/outage | Finviz headlines scored locally (VADER) | `FINVIZ` |
-| neither available | labelled empty payload, `sentiment_score: null` | `NONE` |
+| neither available | `sentiment_score: null`, `sentiment_label: Unavailable` | `NONE` for sentiment only; `data.news` retains independent coverage |
 
 Both paths are single-source by nature: there is nothing to cross-check a sentiment score against,
 so the label names whichever feed supplied the headlines.
@@ -528,8 +578,8 @@ as a snapshot, not a live tape.
 | Many stocks' prices | `stock_prices` | Per row |
 | A market scan | `stock_screener` | On price, per row |
 | Index levels | `market_indices` | Yes |
-| Headlines | `stock_news` | Overlap only |
-| How the market feels | `market_sentiment` | No (single-source by nature) |
+| Headlines | `stock_news` | Merged stories, with per-story provider corroboration |
+| How the market feels | `market_sentiment` | Single-source score; merged news has its own label |
 | Options positioning | `stock_options_chain` | On volume/OI |
 | Filings, ownership, peers | `stock_filings`, `stock_ownership`, `stock_peers` | No |
 | Government bond yields | `bloomberg_markets` | No, Bloomberg-only |

@@ -9,7 +9,6 @@ from tapebasis.merge_helpers import (
     fv_news_fields,
     fv_options_fields,
     fv_quote_fields,
-    news_overlap,
     option_overlap,
     _option_contract_key,
     tv_indices_fields,
@@ -69,16 +68,7 @@ def test_finviz_news_fields_use_real_key_names():
     item = fields["items"][0]
     assert item["title"] == "Apple AI tools come to China"
     assert item["reaction_day_percent"] == 1.2
-    assert item["titles_key"] == "apple ai tools come to china"
-
-
-def test_news_overlap_counts_shared_headlines():
-    overlap = news_overlap(
-        [{"titles_key": "alpha"}, {"titles_key": "beta"}],
-        [{"titles_key": "beta"}, {"titles_key": "gamma"}],
-    )
-    assert overlap["shared"] == 1
-    assert overlap["overlap_pct"] == 50.0
+    assert "titles_key" not in item
 
 
 def test_finviz_options_split_by_type():

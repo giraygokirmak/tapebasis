@@ -25,16 +25,13 @@ from .health import MONITOR
 from .merge_helpers import (
     fv_earnings_fields,
     fv_indices_fields,
-    fv_news_fields,
     fv_options_fields,
     fv_quote_fields,
-    news_overlap,
     option_overlap,
     tv_indices_fields,
-    tv_news_fields,
     tv_options_fields,
-    yahoo_news_fields,
 )
+from .news import NEWS_LIMIT
 from .providers_state import (
     PROVIDER_ORDER,
     DataProvider,
@@ -477,6 +474,16 @@ def _quote_specs(*, spot_fx: bool = False) -> tuple[FieldSpec, ...]:
             bb_get=lambda p: p.get("week_52_low"),
             tolerance_pct=0.5,
         ),
+        # Both quote routes publish the same arithmetic mean with different
+        # precision. Their analyst counts deliberately do not join this spec:
+        # TradingView separates forecast and rating populations, and Finviz's
+        # figure counts distinct firms from a shorter visible row set.
+        FieldSpec(
+            "price_target_average",
+            lambda p: p.get("price_target_average"),
+            lambda p: p.get("price_target_average"),
+            tolerance_pct=0.1,
+        ),
         FieldSpec(
             "pe_ratio",
             lambda p: p.get("pe_ratio"),
@@ -557,6 +564,65 @@ def _quote_specs(*, spot_fx: bool = False) -> tuple[FieldSpec, ...]:
     )
 
 
+def _analyst_target_blocks(
+    pair: Pair, tv_forecast: dict[str, Any] | None
+) -> dict[str, dict[str, Any]]:
+    """Return provider-labelled analyst data without equating count populations.
+
+    TradingView's forecast page supplies both the number of analysts offering a
+    one-year target and the number giving ratings in the past three months. The
+    scanner's rating total is retained when the supplementary page is missing,
+    but it never becomes a forecast count. Finviz exposes its shorter list's
+    distinct visible rating firms, not either of those TradingView counts.
+
+    The blocks live outside ``data``: ``data`` has one selected value and one
+    origin per compared field, while each analyst block belongs wholly to its
+    named provider. Counts are not compared or used as editorial corroboration.
+    """
+    blocks: dict[str, dict[str, Any]] = {}
+    if pair.tv.payload is not None:
+        quote = pair.tv.payload
+        forecast = tv_forecast or {}
+        blocks[TRADINGVIEW] = {
+            "currency": quote.get("currency"),
+            "price_target_average": forecast.get("price_target_average")
+            if forecast.get("price_target_average") is not None
+            else quote.get("price_target_average"),
+            "price_target_estimate_count": forecast.get("price_target_estimates_num"),
+            "price_target_period": "1 year",
+            "rating_analyst_count": forecast.get("recommendation_total")
+            if forecast.get("recommendation_total") is not None
+            else quote.get("recommendation_total"),
+            "rating_period": "past 3 months",
+            "mean_recommendation": forecast.get("recommendation_mark")
+            if forecast.get("recommendation_mark") is not None
+            else quote.get("recommendation_mark"),
+            "source": forecast.get("source"),
+        }
+    if pair.fv.payload is not None:
+        quote = pair.fv.payload
+        targets = quote.get("analyst_targets") or {}
+        numeric = quote.get("snapshot_numeric") or {}
+        blocks[FINVIZ] = {
+            "currency": None,
+            "price_target_average": targets.get("price_target_average")
+            if targets.get("price_target_average") is not None
+            else numeric.get("Target Price"),
+            "price_target_period": None,
+            "rating_firm_count": targets.get("rating_firms"),
+            "rating_action_count": targets.get("ratings_included"),
+            "includes_previous_ratings": targets.get("includes_previous_ratings"),
+            "rating_firm_method": targets.get("field"),
+            "mean_recommendation": targets.get("mean_recommendation")
+            if targets.get("mean_recommendation") is not None
+            else numeric.get("Recom"),
+            "as_of": targets.get("as_of"),
+            "source": quote.get("source"),
+            "ratings": targets.get("ratings") or [],
+        }
+    return blocks
+
+
 # ── Quote ────────────────────────────────────────────────────────────────────
 
 
@@ -567,8 +633,9 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
     Finviz's quote page, Yahoo's chart API, StockAnalysis's quote API and
     Bloomberg's quote page, in parallel. Nothing proxies another, so the
     cross-check is real. Price, change, previous close, the session's own
-    open/high/low, the 52-week range, P/E, RSI and volume are compared field by
-    field; Finviz's deeper fundamentals, the 84-field snapshot, the
+    open/high/low, the 52-week range, P/E, RSI, volume and the average analyst
+    target are compared field by field; Finviz's deeper fundamentals, the
+    84-field snapshot, the
     revenue/segment breakdown, company profile, peers and after-hours print,
     ride along, each labelled with the provider that supplied it. A field that
     cannot be shown to describe the same observation is reported as
@@ -602,10 +669,15 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
 
     Returns:
         Envelope whose ``data_provider`` is ``ALL`` when every provider asked
-        answered, a provider name when only one did (the notice then states the
-        data is single-source), or ``NONE`` when none did. ``resolutions``
-        records how each provider's ticker was derived. ``session`` names the
-        window the served ``price`` printed in (``pre_market``, ``regular``,
+        answered, ``PARTIAL`` when multiple providers answered but another
+        asked provider failed, one provider name when only that provider
+        answered, or ``NONE`` when no provider did. ``resolutions``
+        records how each provider's ticker was derived. ``analyst_targets``
+        retains each provider's own target, analyst-count scope and, for Finviz,
+        the visible rating actions used to derive its distinct firm count. A
+        failed forecast page adds a capability-tagged error without changing the
+        primary quote's coverage. ``session`` names the window the served
+        ``price`` printed in (``pre_market``, ``regular``,
         ``post_market`` or ``overnight``), and it is taken from the winning
         provider's own print rather than from another leg's label, so a delayed
         feed cannot describe a print it did not supply.
@@ -667,10 +739,32 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             ) from exc
         return data
 
-    # The last two legs are named rather than positional: both are optional in
-    # ``ask`` and swapping them would mislabel every reading in the response.
-    pair = await ask(
-        tv_call, fv_call, yh_call, bb_fn=bb_call, sa_fn=sa_call
+    async def forecast_call() -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Read forecast counts without turning a supplement into quote coverage.
+
+        Returns the TradingView forecast payload and any typed, capability-tagged
+        failure. An unresolvable instrument has no forecast page to ask for and
+        needs no error. Other providers' analyst figures never substitute for a
+        failed TradingView page.
+        """
+        if not tv_res.found:
+            return None, None
+        try:
+            return await tv_access.analyst_forecasts(tv_res.symbol), None
+        except Exception as exc:  # noqa: BLE001 - the primary quote remains useful
+            error = _error_dict(TRADINGVIEW, exc)
+            error["detail"] = {
+                **(error.get("detail") or {}),
+                "capability": "analyst_forecasts",
+            }
+            return None, error
+
+    # The last two quote legs are named rather than positional: both are optional
+    # in ``ask`` and swapping them would mislabel every reading in the response.
+    # Forecast data has its own error channel and does not change pair coverage.
+    pair, (tv_forecast, forecast_error) = await asyncio.gather(
+        ask(tv_call, fv_call, yh_call, bb_fn=bb_call, sa_fn=sa_call),
+        forecast_call(),
     )
 
     def tv_norm(payload: dict[str, Any]) -> dict[str, Any]:
@@ -694,6 +788,7 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             "industry": payload.get("industry"),
             "dividend_yield": payload.get("dividends_yield_current"),
             "eps_ttm": payload.get("earnings_per_share_basic_ttm"),
+            "price_target_average": payload.get("price_target_average"),
             # The scanner returns the session's own open/high/low on every
             # quote request. They were requested and then dropped, so the day
             # range had to be inferred from another provider or lost.
@@ -874,7 +969,9 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         extra={
             "symbol": ticker,
             "resolutions": resolved["resolutions"],
+            "analyst_targets": _analyst_target_blocks(pair, tv_forecast),
         },
+        additional_errors=[forecast_error] if forecast_error else [],
         **_health({"providers": providers_in(pair) or ALL_PROVIDERS}),
     )
     # The session of the print that was actually served, mirrored at the
@@ -2058,78 +2155,48 @@ async def market_indices() -> dict[str, Any]:
 # ── News ─────────────────────────────────────────────────────────────────────
 
 
-async def stock_news(symbol: str, limit: int = 20, include_reactions: bool = True) -> dict[str, Any]:
-    """Headlines for one ticker from every provider that publishes them.
+async def stock_news(symbol: str, limit: int = NEWS_LIMIT, include_reactions: bool = True) -> dict[str, Any]:
+    """Latest 10 stories for one ticker, merged across every news provider.
 
-    Finviz supplies headlines with the price reaction around each item (the
-    day-of move and, when the story broke after the close, the next session's
-    move). TradingView's side is the provider's licensed news feed, Yahoo adds
-    its search feed. Headline titles are matched across feeds to report overlap.
+    Finviz supplies price reactions around an item, Yahoo supplies its search
+    feed and TradingView supplies its licensed Marketaux feed. The feeds are
+    deduplicated and ordered by publication time, so Finviz no longer hides
+    Yahoo's more recent headlines. Each story names its providers, their exact
+    alternate headlines and ``consensus``: true when multiple providers carry
+    it, false for a single-provider item. Matching uses the article URL or a
+    supported headline similarity, never just the company name.
 
     Args:
         symbol: Ticker.
-        limit: Maximum headlines per provider.
+        limit: Maximum unique stories returned, default 10 and capped at 50.
         include_reactions: Ask Finviz for price-reaction columns.
 
     Returns:
-        Envelope with ``data.items`` (Finviz ordering, which carries reactions)
-        and ``data.overlap`` describing how many TradingView headlines were also
-        present on Finviz.
+        Envelope whose ``data.items`` is the newest-first merged feed. The real
+        ``count`` may be below ``limit`` when upstreams supply fewer stories.
+        Coverage reflects providers with valid headlines, while ``provider_calls``
+        preserves the raw call outcomes. ``by_provider`` audits each feed and
+        ``pairwise`` compares every pair. Provider similarity is not a claim of
+        independent editorial verification.
     """
-    ticker = strip_exchange(symbol).upper()
-    resolved = await _symbols_for(symbol)
+    from . import news as symbol_news
 
-    async def tv_call() -> dict[str, Any]:
-        # Headlines are not a price feed, so the licensed news leg is the honest
-        # source here; without MARKETAUX_API_TOKEN it has nothing to return.
-        return await tv_access.news(resolved["TRADINGVIEW"].symbol or ticker)
-
-    async def fv_call() -> dict[str, Any]:
-        if not resolved["FINVIZ"].found:
-            raise NotApplicable(FINVIZ, resolved["FINVIZ"].note or "Finviz has no page")
-        return await fv_access.news(
-            resolved["FINVIZ"].symbol, limit=limit, include_reactions=include_reactions
-        )
-
-    async def yh_call() -> dict[str, Any]:
-        if not resolved["YAHOO"].found:
-            raise NotApplicable(YAHOO, resolved["YAHOO"].note or "no Yahoo symbol")
-        return await yh_access.news(resolved["YAHOO"].symbol, limit=limit)
-
-    pair = await ask(tv_call, fv_call, yh_call)
-    tv_norm = tv_news_fields(pair.tv.payload) if pair.tv.payload else None
-    fv_norm = fv_news_fields(pair.fv.payload) if pair.fv.payload else None
-    yh_norm = yahoo_news_fields(pair.yh.payload) if pair.yh.payload else None
-
-    tv_items = (tv_norm or {}).get("items") or []
-    fv_items = (fv_norm or {}).get("items") or []
-    yh_items = (yh_norm or {}).get("items") or []
-    overlap = None
-    if tv_items and fv_items:
-        overlap = news_overlap(tv_items, fv_items)
-    yahoo_overlap = None
-    if yh_items and fv_items:
-        yahoo_overlap = news_overlap(yh_items, fv_items)
-
-    items = fv_items or yh_items or tv_items
-    data = {
-        "ticker": ticker,
-        "items": items,
-        "tradingview_items": tv_items,
-        "yahoo_items": yh_items,
-        "overlap": overlap,
-        "yahoo_overlap": yahoo_overlap,
-        "count": len(items),
-    }
+    result = await symbol_news.fetch_news(
+        symbol, limit=limit, include_reactions=include_reactions
+    )
+    pair = result["pair"]
+    data = {"ticker": result["ticker"], **result["block"]}
     return finalize(
         pair,
         specs=(),
-        sources={
-            TRADINGVIEW: "Marketaux news feed (via TradingView provider)",
-            FINVIZ: f"https://finviz.com/api/news/quote/{resolved['FINVIZ'].symbol or ticker}",
-            YAHOO: "query1.finance.yahoo.com/v1/finance/search",
-        },
-        extra={"news": data, "resolutions": resolved["resolutions"]},
+        provider=DataProvider(data["data_provider"]),
+        answered=data["providers_answered"],
+        sources=result["block"]["endpoints"],
+        warnings=[
+            "News returned fewer stories than requested: "
+            + data["shortfall_reason"] + "."
+        ] if data["shortfall_reason"] else [],
+        extra={"news": data, "resolutions": result["resolutions"]},
         data=data,
         health_warn=MONITOR.warnings_for(providers_in(pair) or ALL_PROVIDERS),
         degraded=any(

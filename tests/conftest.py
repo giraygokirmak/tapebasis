@@ -102,6 +102,23 @@ def _no_stockanalysis_network(monkeypatch):
     yield real_fetch
 
 
+@pytest.fixture(autouse=True)
+def _isolate_analyst_forecast_upstreams(monkeypatch):
+    """Stub the supplementary forecast page and return the real access function."""
+    from tapebasis import tv_access
+
+    real_forecasts = tv_access.analyst_forecasts
+
+    async def no_forecasts(_ticker):
+        # Existing quote tests exercise primary provider coverage, not this
+        # auxiliary page. No payload and no network departure is the neutral
+        # fake; forecast errors have their own focused integration tests.
+        return None
+
+    monkeypatch.setattr(tv_access, "analyst_forecasts", no_forecasts)
+    return real_forecasts
+
+
 @pytest.fixture
 def tv_quote():
     """A TradingView scanner row, as ``native.scan`` returns it."""
@@ -135,6 +152,9 @@ def tv_quote():
         "ATR": 7.44,
         "earnings_release_next_date": 1801742400,
         "earnings_release_date": 1793655000,
+        "price_target_average": 348.519916,
+        "recommendation_total": 50,
+        "recommendation_mark": 1.61,
         "premarket_close": 332.47,
         "premarket_change": 0.17,
         "premarket_volume": 67876,
@@ -240,6 +260,18 @@ def fv_quote():
             "52W High": 351.73,
             "52W Low": 243.42,
             "ATR (14)": 7.44,
+            "Recom": 2.22,
+            "Target Price": 348.52,
+        },
+        "analyst_targets": {
+            "price_target_average": 348.52,
+            "mean_recommendation": 2.22,
+            "rating_firms": 16,
+            "ratings_included": 20,
+            "includes_previous_ratings": True,
+            "as_of": "2026-11-17",
+            "ratings": [{"date": "2026-11-11", "firm": "China Renaissance"}],
+            "field": "AnalystRatings.ratings distinct firm",
         },
         "profile": "Apple Inc. designs and sells consumer electronics.",
         "peers": [{"ticker": "MSFT", "company": "Microsoft Corp"}],

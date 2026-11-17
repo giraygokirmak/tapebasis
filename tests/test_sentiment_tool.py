@@ -9,7 +9,31 @@ from __future__ import annotations
 
 import pytest
 
-from tapebasis import tools_tradingview
+from tapebasis import news, tools_tradingview
+
+
+@pytest.fixture(autouse=True)
+def fake_aggregated_news(monkeypatch):
+    """Return one hermetic, multi-provider story for every news-bearing test."""
+    async def fake_fetch(symbol, **kwargs):
+        item = {
+            "title": "Apple raises quarterly revenue guidance",
+            "published": "2026-11-17T12:00:00Z",
+            "published_at": "2026-11-17T12:00:00+00:00",
+            "url": "https://news.test/apple",
+            "providers": ["TRADINGVIEW", "FINVIZ"],
+            "provider_count": 2,
+            "consensus": True,
+        }
+        return {"block": {
+            "items": [item], "count": 1, "limit": 10, "unique_stories": 1,
+            "data_provider": "PARTIAL", "providers_answered": ["TRADINGVIEW", "FINVIZ"],
+            "endpoints": {"TRADINGVIEW": "Marketaux news", "YAHOO": "Yahoo news"},
+            "errors": [{"provider": "YAHOO", "code": "NO_DATA", "message": "fixture"}],
+            "shortfall_reason": "available feeds supplied 1 unique valid story; no filler",
+        }}
+
+    monkeypatch.setattr(news, "fetch_news", fake_fetch)
 
 
 @pytest.fixture
@@ -65,8 +89,12 @@ async def test_local_path_is_attributed_to_finviz_not_tradingview(no_token, fake
     result = await tools_tradingview.market_sentiment("AAPL")
     assert result["data_provider"] == "FINVIZ"
     assert result["verification"] == "SINGLE_SOURCE"
-    assert "FINVIZ" in result["sources"]
-    assert "TRADINGVIEW" not in result["sources"]
+    assert result["fields"]["sentiment_score"]["source"] == "FINVIZ"
+    assert result["fields"]["news"]["source"] is None
+    assert result["fields"]["news"]["coverage"] == "PARTIAL"
+    assert result["fields"]["news"]["supplied"] == ["TRADINGVIEW", "FINVIZ"]
+    assert result["data"]["news"]["providers_answered"] == ["TRADINGVIEW", "FINVIZ"]
+    assert result["data"]["news"]["items"][0]["consensus"] is True
 
 
 @pytest.mark.asyncio

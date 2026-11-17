@@ -30,6 +30,7 @@ Finviz page would fail for reasons unrelated to the code.
 | --- | --- |
 | `test_reconcile.py` | Fan-out, multi-provider comparison, tolerances, precedence, notice text |
 | `test_tools_merge.py` | End-to-end tool contract with faked providers (`ALL` vs single-source, `not_comparable`), plus the live print replacing the stale regular field and a row's price, change and previous close describing one session |
+| `test_analyst_targets.py` | Finviz and TradingView analyst parsers, provider-specific count populations, rate limiting and absent forecast coverage |
 | `test_upstream_contract.py` | Regression tests for every upstream behaviour found by live probing (see below) |
 | `test_shapers.py` | Pure payload shapers |
 | `test_symbols.py` | BRK-B ↔ BRK.B, the instrument registry (completeness, no colliding spellings), index aliasing, RUT/IWM separation, NDX row boundaries, `WTI=F` futures aliases, snapshot-list exclusion, per-provider `none` resolutions |
@@ -38,7 +39,8 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_tools_merge.py` | also: the live print replaces the stale regular field, and a row's price, change and previous close describe one session |
 | `test_health.py` | Probe verdicts, fingerprints, drift detection, `rate_limits` block |
 | `test_sentiment.py` | Local scoring: direction, neutrality, determinism, aggregation |
-| `test_sentiment_tool.py` | Token-free path, backend switching, no fabricated scores |
+| `test_sentiment_tool.py` | Token-free path, backend switching, no fabricated scores, separate news provenance |
+| `test_symbol_news.py` | News matching and consensus, Finviz clocks, newest-first limits and all news-bearing tool integrations |
 | `test_bloomberg.py` | Symbol mapping, `print_time` from the intraday series, sentinel rejection, the tie-break, declared-delay comparability, single-source envelope |
 | `test_stockanalysis.py` | Quote shaping (epoch-ms conversion, `cl` vs `pd`, extended block), mechanical plus not-carried resolution, transport status mapping |
 | `test_finviz_breakdown.py` | The `income-breakdown` island (statement scale, bank row sets, `converted` axes, absent/ETF cases) and the classification-chip markup |
@@ -48,10 +50,10 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_quote_socket.py` | TradingView `qsd` delta merging, deadline and receive error behavior, empty-result caching, and rate-limit conversion |
 | `test_server.py` | Tool registration, MCP surface |
 | `test_dockerfile.py` | The deployment contract: `tini` as PID 1, the entrypoint argv, `init: true` in compose, MCP image label |
-| `test_packaging.py` | Real wheel/sdist build and isolated installation, MCP stdio smoke, uvx and npm tarball checks |
+| `test_packaging.py` | Real wheel/sdist build and isolated installation, MCP stdio smoke, uvx and npm tarball checks. The npm test prepares cold dependencies through the packed launcher before measuring MCP startup |
 | `test_release_metadata.py` | Version, tag, registry, lockfile, launcher and previous-ref validation |
 | `smoke_test.py` | Installed-package initialize and tools-list exchange through a real MCP stdio client |
-| `test_quality_gate.py` | The gate's own documentation checks, against a temporary repository |
+| `test_quality_gate.py` | The gate's own documentation checks, isolated from an outer Git hook's `GIT_*` environment, plus isolated wiki publishing |
 | `test_git_context.py` | A real pre-push hook and wiki child push in a linked worktree, with parent Git bindings and two local remotes |
 
 Tests that create temporary git repositories give those fixtures an empty `core.hooksPath`, an
@@ -104,6 +106,7 @@ src/tapebasis/
 ├── sessions.py           session classification + which print is the live one
 ├── ratelimit.py          per-provider pacing, shared cooldown, TTL cache
 ├── merge_helpers.py      pure payload shapers
+├── news.py              symbol news merging, per-story consensus and duplicate collapsing
 ├── sentiment.py          token-free headline scoring
 ├── symbols.py            dynamic per-provider symbol resolution
 ├── health.py             upstream probes, fingerprints, drift state
@@ -231,7 +234,9 @@ when none of them can. Set `TAPEBASIS_PYTHON` when the environment lives
 elsewhere.
 
 A push also mirrors `docs/wiki/` into the wiki repository, so the published pages
-cannot lag behind the repository. The mirror is skipped while `docs/wiki/` is
+cannot lag behind the repository. Publishing clears the outer hook's repository locator variables
+before writing to the temporary wiki clone, so a source push cannot accidentally commit wiki
+to the source branch. The mirror is skipped while `docs/wiki/` is
 identical to the last synced tree, which is recorded as `tapebasis-wiki-sync` under the directory
 returned by `git rev-parse --git-dir`. Its contents are the `HEAD:docs/wiki` object name. Resolving the
 actual Git directory keeps this working in both a regular checkout and a linked worktree.
