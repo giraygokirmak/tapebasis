@@ -39,8 +39,11 @@ Registry availability is recorded separately where a tag was published only part
   rejected `1.1.0` and partial `1.1.1` publication states without implying unavailable package releases.
 - Added explicit HTTP-status GHCR lookups and tests for fatal authorization, transport and conflict cases.
 - Bound the approved `v1.1.1` GHCR `1` and `latest` alias advancement to its tested source image and
-  the verified predecessor digest for `1.0.0`. Other tag conflicts remain fatal; no ordinary release
-  or recovery path receives that exception.
+  the verified predecessor digest for `1.0.0`. Added a separate `1.1.2`-only exception for `1.1`, `1`
+  and `latest`, requiring each alias to match the verified `1.1.1` digest immediately before its copy.
+  Both options reject every other version. Exact-version or unrelated conflicts, wrong predecessors,
+  authorization failures and transport failures cannot advance the affected alias. Other release and
+  MCP-only recovery paths receive neither exception, and matching registry content is not uploaded again.
 - Added per-file PyPI continuation so an existing verified wheel or sdist is never re-uploaded.
 
 - Reviewed changelog sections become idempotently updated GitHub Release notes for source tags.

@@ -150,20 +150,66 @@ def test_package_continuation_is_distinct_and_source_bound():
     assert "uv publish" in runs
     assert "verify_ghcr.sh \"$VERSION\" publish-missing" in text
     assert "--advance-major-latest-from \"$PREVIOUS_RELEASE_DIGEST\"" in " ".join(text.split())
-    continuation = workflow()["jobs"]["resume-publication"]["steps"]
-    alias = next(step for step in continuation if "reviewed predecessor" in step.get("name", ""))
+    continuation = publish["steps"]
+    special = [step for step in continuation if "reviewed predecessor" in step.get("name", "")]
+    assert len(special) == 2
+    alias = next(step for step in special if "for 1 and latest" in step["name"])
     assert alias["if"] == "steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag == 'v1.1.1'"
     assert alias["run"].strip().endswith('--advance-major-latest-from "$PREVIOUS_RELEASE_DIGEST"')
     assert alias["env"]["PREVIOUS_RELEASE_DIGEST"] == "sha256:4ff12fdcdc79e7c5cd065a3ffb685dcbe6daee518442b7751e0479e0da1e3167"
+    bounded = next(step for step in special if "for 1.1, 1 and latest" in step["name"])
+    assert bounded["if"] == "steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag == 'v1.1.2'"
+    assert bounded["run"].strip().endswith('--advance-minor-major-latest-from "$PREVIOUS_RELEASE_DIGEST"')
+    assert bounded["env"]["PREVIOUS_RELEASE_DIGEST"] == "sha256:18a54e02f28d195030cd02ee1f45088eeb05a34792d532197f143f6a73a209d7"
     ordinary = next(step for step in continuation if "other GHCR releases" in step.get("name", ""))
-    assert ordinary["if"] == "steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag != 'v1.1.1'"
+    assert ordinary["if"] == "steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag != 'v1.1.1' && inputs.resume_tag != 'v1.1.2'"
     assert "--advance-major-latest-from" not in ordinary["run"]
+    assert "--advance-minor-major-latest-from" not in ordinary["run"]
+    ghcr_steps = [step for step in continuation if "GHCR" in step.get("name", "")]
+    for tag, selected in (
+        ("v1.1.1", "1 and latest"),
+        ("v1.1.2", "1.1, 1 and latest"),
+        ("v1.0.0", "other GHCR"),
+        ("v1.2.0", "other GHCR"),
+    ):
+        enabled = [
+            step for step in ghcr_steps
+            if (f"inputs.resume_tag == '{tag}'" in step["if"])
+            or ("other GHCR" in step["name"] and selected == "other GHCR")
+        ]
+        assert len(enabled) == 1
+        assert selected in enabled[0]["name"]
     assert "publish source-server.json" in text
     assert "server.json --output \"$GITHUB_OUTPUT\"" not in text.replace("source-server.json --output \"$GITHUB_OUTPUT\"", "")
     assert text.count("--await-visible") == 2
     recovery = yaml.safe_dump(jobs["recover-mcp"])
     assert "uv publish" not in recovery and "npm publish" not in recovery
     assert "publish-missing" not in recovery and "--source-only" not in recovery
+
+
+def test_normal_tag_ghcr_steps_select_exactly_one_version_policy():
+    """The normal writer applies the bounded 1.1.2 exception to no other version."""
+    steps = workflow()["jobs"]["publish"]["steps"]
+    bounded = next(step for step in steps if "for 1.1, 1 and latest" in step.get("name", ""))
+    assert bounded["if"] == (
+        "steps.npm_stage.outputs.npm_staged != 'true' && "
+        "needs.build.outputs.version == '1.1.2'"
+    )
+    assert bounded["env"]["VERSION"] == "${{ needs.build.outputs.version }}"
+    assert bounded["env"]["PREVIOUS_RELEASE_DIGEST"] == (
+        "sha256:18a54e02f28d195030cd02ee1f45088eeb05a34792d532197f143f6a73a209d7"
+    )
+    assert bounded["run"].strip().endswith(
+        '--advance-minor-major-latest-from "$PREVIOUS_RELEASE_DIGEST"'
+    )
+    ordinary = next(step for step in steps if "other GHCR releases" in step.get("name", ""))
+    assert ordinary["if"] == (
+        "steps.npm_stage.outputs.npm_staged != 'true' && "
+        "needs.build.outputs.version != '1.1.2'"
+    )
+    assert "--advance" not in ordinary["run"]
+    recovery = yaml.safe_dump(workflow()["jobs"]["recover-mcp"])
+    assert "--advance" not in recovery and "publish-missing" not in recovery
 
 
 def test_dispatch_selects_only_one_complete_operation():

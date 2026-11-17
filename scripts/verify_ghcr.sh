@@ -1,16 +1,30 @@
 #!/usr/bin/env bash
 # Verify every GHCR release tag against the tested OCI root index digest.
 # Missing tags have one write. An explicit reviewed predecessor digest can
-# authorize only the major and latest aliases to advance under publication.
+# authorize only selected aliases to advance under publication. Exact-version
+# tags and all other conflicts remain fatal. The bounded 1.1.2 option hard-codes
+# its release identity; it does not create a general future minor-alias policy.
+# The full release identity is bound to the source artifacts by the protected
+# publish job before this helper runs.
 set -euo pipefail
 
 VERSION="${1:?release version is required}"
 MODE="${2:-verify}"
 ADVANCE_FROM=""
-if [ "$#" -eq 4 ] && [ "$MODE" = publish-missing ] && [ "$3" = --advance-major-latest-from ]; then
-    ADVANCE_FROM="$4"
+ADVANCE_ALIASES=""
+if [ "$#" -eq 4 ] && [ "$MODE" = publish-missing ]; then
+    if [ "$3" = --advance-major-latest-from ] && [ "$VERSION" = 1.1.1 ]; then
+        ADVANCE_FROM="$4"
+        ADVANCE_ALIASES="${VERSION%%.*}:latest"
+    elif [ "$3" = --advance-minor-major-latest-from ] && [ "$VERSION" = 1.1.2 ]; then
+        ADVANCE_FROM="$4"
+        ADVANCE_ALIASES="${VERSION%.*}:${VERSION%%.*}:latest"
+    else
+        printf '%s\n' 'Unknown advance option, or this exception is not reviewed for the release' >&2
+        exit 2
+    fi
 elif [ "$#" -ne 2 ]; then
-    printf 'Usage: verify_ghcr.sh VERSION [verify | publish-missing [--advance-major-latest-from DIGEST]]\n' >&2
+    printf '%s\n' 'Usage: verify_ghcr.sh VERSION [verify | publish-missing [--advance-major-latest-from DIGEST | --advance-minor-major-latest-from DIGEST]]' >&2
     exit 2
 fi
 if [ -n "$ADVANCE_FROM" ] && [[ ! "$ADVANCE_FROM" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -47,11 +61,12 @@ for tag in "$VERSION" "${VERSION%.*}" "${VERSION%%.*}" latest; do
         status=$?
     fi
     if [ "$status" -eq 1 ] && [ "$MODE" = publish-missing ] && [ -n "$ADVANCE_FROM" ]; then
-        # The approval permits only these two mutable aliases. A second lookup
-        # rejects every predecessor except the reviewed immutable image digest.
-        if [ "$tag" != "${VERSION%%.*}" ] && [ "$tag" != latest ]; then
-            exit 1
-        fi
+        # The caller's reviewed policy selects each mutable alias explicitly.
+        # A second lookup rejects every other predecessor or non-alias tag.
+        case ":$ADVANCE_ALIASES:" in
+            *":$tag:"*) ;;
+            *) exit 1 ;;
+        esac
         if python3 "${GHCR_LOOKUP:-scripts/ghcr_manifest.py}" \
             --repository "$GITHUB_REPOSITORY" --tag "$tag" --expected "$ADVANCE_FROM"; then
             status=2

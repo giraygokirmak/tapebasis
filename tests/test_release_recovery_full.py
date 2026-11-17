@@ -544,30 +544,57 @@ calls = Path(os.environ["CALLS"])
 with calls.open("a") as stream:
     stream.write(f"lookup {tag}\\n")
 status = os.environ.get("LOOKUP_STATUS", "match")
+if (
+    tag == os.environ.get("AUTH_FAIL_TAG")
+    and (
+        tag in os.environ.get("MATCH_TAGS", "").split(",")
+        or tag in os.environ.get("PREDECESSOR_TAGS", "").split(",")
+    )
+):
+    expected = args[args.index("--expected") + 1]
+    auth_before_advance = (
+        expected == os.environ.get("PREDECESSOR_DIGEST")
+        and os.environ.get("AUTH_FAIL_PREDECESSOR") == "1"
+    )
+    if (
+        os.environ.get("AUTH_FAIL_MODE") == "initial"
+        and os.environ.get("AUTH_FAIL_PREDECESSOR") != "1"
+    ) or auth_before_advance:
+        print("lookup failed: " + os.environ["AUTH_FAIL_ERROR"], file=sys.stderr)
+        sys.exit(3)
 if status in {"401", "403", "503", "network"}:
     print(f"lookup failed: {status}", file=sys.stderr)
     sys.exit(3)
 if status in {"present-before-publish", "exact-present"}:
     state = root / "last-publish"
     written = state.read_text().splitlines() if state.exists() else []
-    if status == "exact-present" and tag == "1.0.0":
+    if status == "exact-present" and tag == os.environ["SOURCE_VERSION"]:
         status = "match"
     else:
         status = "match" if f"ghcr.io/example/tapebasis:{tag}" in written else "absent"
-if status == "approved-alias":
+if status in {"approved-alias", "approved-alias-auth"}:
     state = root / "last-publish"
-    written = state.read_text().splitlines() if state.exists() else []
-    if tag in {"1", "latest"} and f"ghcr.io/example/tapebasis:{tag}" not in written:
-        expected = args[args.index("--expected") + 1]
-        if expected == "sha256:" + "a" * 64:
-            status = "conflict"
-        elif expected == os.environ.get("PREDECESSOR_DIGEST"):
-            print(expected)
-            sys.exit(0)
-        else:
-            sys.exit(1)
+    written = set(state.read_text().splitlines()) if state.exists() else set()
+    approved_tags = {
+        "1.1.1": {"1", "latest"},
+        "1.1.2": {"1.1", "1", "latest"},
+    }.get(os.environ["SOURCE_VERSION"], set())
+    matched = set(os.environ.get("MATCH_TAGS", "").split(","))
+    predecessors = set(os.environ.get("PREDECESSOR_TAGS", "").split(","))
+    conflicts = set(os.environ.get("CONFLICT_TAGS", "").split(","))
+    reference = "ghcr.io/example/tapebasis:" + tag
+    expected = args[args.index("--expected") + 1]
+    if tag in conflicts:
+        status = "conflict"
+    elif reference in written or tag in matched:
+        status = "match"
+    elif tag in predecessors and expected == os.environ.get("PREDECESSOR_DIGEST"):
+        print(expected)
+        sys.exit(0)
+    elif tag in matched | predecessors:
+        status = "conflict"
     else:
-        status = "match" if f"ghcr.io/example/tapebasis:{tag}" in written else "absent"
+        status = "absent"
 if status == "remain-absent":
     status = "absent"
 if status == "absent":
@@ -609,12 +636,17 @@ def ghcr_environment(fixture, status="match", python=None):
         "GHCR_RETRY_SECONDS": "0",
         "GHCR_LOOKUP": str(calls.parent / "lookup.py"),
         "LOOKUP_STATUS": status,
+        "SOURCE_VERSION": "1.0.0",
     }
 
 
 def run_ghcr(fixture, environment):
     """Execute the shell verifier with no actual GHCR or image credentials."""
-    command = ["bash", "scripts/verify_ghcr.sh", "1.0.0", environment.pop("MODE", "verify")]
+    command = [
+        "bash", "scripts/verify_ghcr.sh", environment.pop("VERSION", "1.0.0"),
+        environment.pop("MODE", "verify"),
+    ]
+    environment["SOURCE_VERSION"] = command[2]
     if environment.get("ADVANCE"):
         command.extend(environment.pop("ADVANCE").split("=", 1))
     return subprocess.run(command, cwd=fixture[0], env=environment, capture_output=True, text=True)
@@ -681,15 +713,17 @@ def test_ghcr_only_explicit_absence_can_publish(tmp_path):
     assert "VERSIONIMAGE" not in calls.read_text()
 
 
-def test_ghcr_advances_only_approved_major_and_latest_aliases(tmp_path):
-    """The explicit predecessor policy writes two aliases, then verifies the new image."""
+def test_ghcr_111_advances_only_approved_major_and_latest_aliases(tmp_path):
+    """The earlier exception remains limited to 1.1.1's major and latest aliases."""
     fixture = ghcr_workspace(tmp_path)
     predecessor = "sha256:" + "b" * 64
     environment = ghcr_environment(fixture, "approved-alias")
     environment.update(
+        VERSION="1.1.1",
         MODE="publish-missing",
         ADVANCE="--advance-major-latest-from=" + predecessor,
         PREDECESSOR_DIGEST=predecessor,
+        PREDECESSOR_TAGS="1,latest",
     )
     result = run_ghcr(fixture, environment)
     assert result.returncode == 0, result.stderr
@@ -698,12 +732,191 @@ def test_ghcr_advances_only_approved_major_and_latest_aliases(tmp_path):
     assert commands.count("lookup latest") == 3
     copies = [line for line in commands if line.startswith("image copy")]
     assert copies == [
-        "image copy ghcr.io/example/tapebasis:1.0.0 ghcr.io/example/tapebasis:1.0",
-        "image copy ghcr.io/example/tapebasis:1.0.0 ghcr.io/example/tapebasis:1",
-        "image copy ghcr.io/example/tapebasis:1.0.0 ghcr.io/example/tapebasis:latest",
+        "image copy ghcr.io/example/tapebasis:1.1.1 ghcr.io/example/tapebasis:1.1",
+        "image copy ghcr.io/example/tapebasis:1.1.1 ghcr.io/example/tapebasis:1",
+        "image copy ghcr.io/example/tapebasis:1.1.1 ghcr.io/example/tapebasis:latest",
     ]
     assert sum(line.startswith("registry login") for line in commands) == 1
-    assert fixture[1].read_text().count("image copy ghcr.io/example/tapebasis:1.0.0 ghcr.io/example/tapebasis:1\n") == 1
+    assert fixture[1].read_text().count("image copy ghcr.io/example/tapebasis:1.1.1 ghcr.io/example/tapebasis:1\n") == 1
+
+
+def test_ghcr_112_advances_only_its_three_reviewed_aliases(tmp_path):
+    """The 1.1.2 exception covers 1.1, 1 and latest after a second digest check."""
+    fixture = ghcr_workspace(tmp_path)
+    predecessor = "sha256:" + "b" * 64
+    environment = ghcr_environment(fixture, "approved-alias")
+    environment.update(
+        VERSION="1.1.2",
+        MODE="publish-missing",
+        ADVANCE="--advance-minor-major-latest-from=" + predecessor,
+        PREDECESSOR_DIGEST=predecessor,
+        PREDECESSOR_TAGS="1.1,1,latest",
+    )
+    result = run_ghcr(fixture, environment)
+    assert result.returncode == 0, result.stderr
+    commands = fixture[1].read_text().splitlines()
+    for tag in ("1.1", "1", "latest"):
+        assert commands.count("lookup " + tag) == 3
+    assert commands.count("image import ghcr.io/example/tapebasis:1.1.2 dist/tapebasis-image.tar") == 1
+    copies = [line for line in commands if line.startswith("image copy")]
+    assert copies == [
+        "image copy ghcr.io/example/tapebasis:1.1.2 ghcr.io/example/tapebasis:1.1",
+        "image copy ghcr.io/example/tapebasis:1.1.2 ghcr.io/example/tapebasis:1",
+        "image copy ghcr.io/example/tapebasis:1.1.2 ghcr.io/example/tapebasis:latest",
+    ]
+    resumed = run_ghcr(fixture, {
+        **ghcr_environment(fixture, "approved-alias"),
+        "VERSION": "1.1.2",
+        "MODE": "publish-missing",
+        "ADVANCE": "--advance-minor-major-latest-from=" + predecessor,
+        "PREDECESSOR_DIGEST": predecessor,
+    })
+    assert resumed.returncode == 0, resumed.stderr
+    after = fixture[1].read_text().splitlines()
+    assert sum(line.startswith("image") for line in after) == 4
+    assert after.count("lookup 1.1.2") == 3
+    for tag in ("1.1", "1", "latest"):
+        assert after.count("lookup " + tag) == 4
+
+
+@pytest.mark.parametrize("version", ["1.0.0", "1.1.3", "1.2.0"])
+def test_ghcr_bounded_112_option_is_rejected_for_other_versions(tmp_path, version):
+    """A future release cannot inherit this specifically reviewed exception."""
+    fixture = ghcr_workspace(tmp_path)
+    environment = ghcr_environment(fixture, "approved-alias")
+    environment["VERSION"] = version
+    environment["ADVANCE"] = "--advance-minor-major-latest-from=sha256:" + "b" * 64
+    result = run_ghcr(fixture, environment)
+    assert result.returncode == 2
+    assert fixture[1].read_text() == ""
+
+
+@pytest.mark.parametrize("version", ["1.0.0", "1.1.2", "1.2.0"])
+def test_ghcr_111_option_is_not_a_general_alias_exception(tmp_path, version):
+    """The existing exception is also frozen to its reviewed release identity."""
+    fixture = ghcr_workspace(tmp_path)
+    environment = ghcr_environment(fixture, "approved-alias")
+    environment.update(
+        VERSION=version,
+        ADVANCE="--advance-major-latest-from=sha256:" + "b" * 64,
+    )
+    result = run_ghcr(fixture, environment)
+    assert result.returncode == 2
+    assert fixture[1].read_text() == ""
+
+
+def test_ghcr_112_rejects_a_wrong_predecessor_without_alias_writes(tmp_path):
+    """An unreviewed predecessor cannot advance an existing manifest as an alias."""
+    fixture = ghcr_workspace(tmp_path)
+    reviewed = "sha256:" + "b" * 64
+    environment = ghcr_environment(fixture, "approved-alias")
+    environment.update(
+        VERSION="1.1.2",
+        MODE="publish-missing",
+        ADVANCE="--advance-minor-major-latest-from=" + reviewed,
+        PREDECESSOR_DIGEST="sha256:" + "c" * 64,
+        MATCH_TAGS="1.1.2",
+        PREDECESSOR_TAGS="1.1,1,latest",
+    )
+    result = run_ghcr(fixture, environment)
+    assert result.returncode != 0
+    commands = fixture[1].read_text().splitlines()
+    assert not any(line.startswith("image copy") for line in commands)
+    assert not any(line.startswith("image import") for line in commands)
+
+
+@pytest.mark.parametrize("version", ["1.1.2", "1.1.1"])
+@pytest.mark.parametrize("lookup_read", ["initial", "predecessor"])
+@pytest.mark.parametrize("lookup_error", ["403", "network"])
+def test_ghcr_lookup_errors_never_authorize_affected_writes(
+    tmp_path, version, lookup_read, lookup_error
+):
+    """Authorization and transport errors stop before the affected tag's write."""
+    predecessor = "sha256:" + "b" * 64
+    option = (
+        "--advance-minor-major-latest-from"
+        if version == "1.1.2"
+        else "--advance-major-latest-from"
+    )
+    approved_tags = ("1", "latest") if version == "1.1.1" else ("1.1", "1", "latest")
+    tags = (version, "1.1", "1", "latest") if lookup_read == "initial" else approved_tags
+    for tag in tags:
+        fixture = ghcr_workspace(tmp_path / tag)
+        environment = ghcr_environment(fixture, "approved-alias-auth")
+        environment.update(
+            VERSION=version,
+            MODE="publish-missing",
+            MATCH_TAGS=f"{version},1.1" if lookup_read == "initial" else "",
+            PREDECESSOR_TAGS=",".join(approved_tags),
+            ADVANCE=option + "=" + predecessor,
+            PREDECESSOR_DIGEST=predecessor,
+            AUTH_FAIL_TAG=tag,
+            AUTH_FAIL_MODE=lookup_read,
+            AUTH_FAIL_PREDECESSOR="1" if lookup_read == "predecessor" else "0",
+            AUTH_FAIL_ERROR=lookup_error,
+        )
+        result = run_ghcr(fixture, environment)
+        assert result.returncode != 0
+        assert f"lookup failed: {lookup_error}" in result.stderr
+        commands = fixture[1].read_text().splitlines()
+        written_aliases = {
+            line.rsplit(":", 1)[-1]
+            for line in commands
+            if line.startswith("image copy")
+        }
+        assert tag not in written_aliases
+        if lookup_read == "initial" and tag in (version, "1.1"):
+            assert not any(line.startswith("image") for line in commands)
+
+
+def test_ghcr_112_verify_mode_never_uses_advancement_option(tmp_path):
+    """An approved publication predecessor grants no authority in verify mode."""
+    fixture = ghcr_workspace(tmp_path)
+    predecessor = "sha256:" + "b" * 64
+    environment = ghcr_environment(fixture, "approved-alias")
+    environment.update(
+        VERSION="1.1.2",
+        ADVANCE="--advance-minor-major-latest-from=" + predecessor,
+        PREDECESSOR_DIGEST=predecessor,
+    )
+    result = run_ghcr(fixture, environment)
+    assert result.returncode == 2
+    assert fixture[1].read_text() == ""
+
+
+def test_ghcr_111_option_rejects_a_minor_alias_conflict(tmp_path):
+    """The old exception cannot advance a minor alias even with its predecessor."""
+    fixture = ghcr_workspace(tmp_path)
+    predecessor = "sha256:" + "b" * 64
+    environment = ghcr_environment(fixture, "approved-alias")
+    environment.update(
+        VERSION="1.1.1",
+        MODE="publish-missing",
+        ADVANCE="--advance-major-latest-from=" + predecessor,
+        PREDECESSOR_DIGEST=predecessor,
+        MATCH_TAGS="1.1.1",
+        PREDECESSOR_TAGS="1.1",
+    )
+    result = run_ghcr(fixture, environment)
+    assert result.returncode != 0
+    commands = fixture[1].read_text().splitlines()
+    assert not any(line.startswith("image") for line in commands)
+
+
+def test_ghcr_approved_aliases_never_authorize_exact_version_replacement(tmp_path):
+    """A conflicting immutable exact tag stops before any alias can be written."""
+    fixture = ghcr_workspace(tmp_path)
+    environment = ghcr_environment(fixture, "conflict")
+    environment.update(
+        VERSION="1.1.2",
+        MODE="publish-missing",
+        ADVANCE="--advance-minor-major-latest-from=sha256:" + "b" * 64,
+        PREDECESSOR_DIGEST="sha256:" + "b" * 64,
+    )
+    result = run_ghcr(fixture, environment)
+    assert result.returncode != 0
+    assert "image import" not in fixture[1].read_text()
+    assert "image copy" not in fixture[1].read_text()
 
 
 def test_ghcr_rejects_unapproved_aliases_and_never_advances_in_other_modes(tmp_path):

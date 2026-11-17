@@ -359,8 +359,18 @@ jobs:
           chmod +x regctl
           ./mcp-publisher login github-oidc
 
-      - name: Complete and verify GHCR without replacing matching tags
-        if: steps.npm_stage.outputs.npm_staged != 'true'
+      - name: Complete 1.1.2 GHCR with a reviewed predecessor for 1.1, 1 and latest
+        if: steps.npm_stage.outputs.npm_staged != 'true' && needs.build.outputs.version == '1.1.2'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+          PREVIOUS_RELEASE_DIGEST: sha256:18a54e02f28d195030cd02ee1f45088eeb05a34792d532197f143f6a73a209d7
+        run: >-
+          bash ./scripts/verify_ghcr.sh "$VERSION" publish-missing
+          --advance-minor-major-latest-from "$PREVIOUS_RELEASE_DIGEST"
+
+      - name: Complete other GHCR releases without replacing matching tags
+        if: steps.npm_stage.outputs.npm_staged != 'true' && needs.build.outputs.version != '1.1.2'
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.build.outputs.version }}
@@ -627,10 +637,19 @@ jobs:
           --advance-major-latest-from "$PREVIOUS_RELEASE_DIGEST"
 
       - name: Complete other GHCR releases from source OCI archives without replacing matches
-        if: steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag != 'v1.1.1'
+        if: steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag != 'v1.1.1' && inputs.resume_tag != 'v1.1.2'
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash ./scripts/verify_ghcr.sh "$VERSION" publish-missing
+
+      - name: Complete 1.1.2 GHCR with a reviewed predecessor for 1.1, 1 and latest
+        if: steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag == 'v1.1.2'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIOUS_RELEASE_DIGEST: sha256:18a54e02f28d195030cd02ee1f45088eeb05a34792d532197f143f6a73a209d7
+        run: >-
+          bash ./scripts/verify_ghcr.sh "$VERSION" publish-missing
+          --advance-minor-major-latest-from "$PREVIOUS_RELEASE_DIGEST"
 
       - name: Compare source MCP Registry metadata
         id: mcp

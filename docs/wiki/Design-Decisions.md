@@ -1385,11 +1385,18 @@ source commit. The old immutable tag remains the source of its version and commi
 the Release must match. Release writes omit `target_commitish` after verifying a live immutable tag, so GitHub does
 not demand separate workflow-modification authority for an old source commit. This needs only `contents: write`, never
 a persistent personal access token or tag movement. No such helper automatically grants the required environment approval.
-The `v1.1.1` continuation alone has a reviewed alias exception: a second lookup must show `1` or
-`latest` at the tested `1.0.0` digest before it can copy that alias to the tested `1.1.1` digest. The
-normal tag writer, other continuations and MCP-only recovery omit this predecessor argument. An exact
-or minor-version conflict, unknown predecessor and every lookup error remain fatal. Each operation
+Two bounded release identities have independently reviewed alias exceptions. The `v1.1.1`
+continuation can advance only `1` and `latest`, after a second lookup shows that alias at the tested
+`1.0.0` digest. The `1.1.2` normal tag writer and its package continuation can advance only `1.1`, `1`
+and `latest`, after each alias independently matches the tested `1.1.1` digest
+`sha256:18a54e02f28d195030cd02ee1f45088eeb05a34792d532197f143f6a73a209d7` immediately before its
+copy. The old option is accepted only for `1.1.1`, and the new option only for `1.1.2`; neither is a
+future-release policy. Other normal writers, other continuations and MCP-only recovery omit both
+predecessor arguments. An exact-version conflict, unrelated conflict, wrong predecessor, wrong
+version, authorization failure or transport failure never advances the affected alias. Each operation
 still performs at most one write per tag, followed by read-only verification of the new target.
+An exact tag imported before a later failure and any earlier approved alias remain verified content,
+not content to upload again.
 Because Release creation deliberately omits `target_commitish`, GitHub can display `main` there without
 changing the verified immutable tag. Later status documentation must not move the tag, patch that display
 field to claim the old commit, or alter an existing reviewed Release body merely to record later registry

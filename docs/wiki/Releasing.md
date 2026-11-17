@@ -81,14 +81,21 @@ publishable registry content absent. Do not move the tag or rebuild replacement 
    staged for your npm approval, which ends that run before GHCR, MCP or Release notes; no other
    registry treats the stage as a live package. Any conflict, transport
    failure or non-404 lookup stops publication unless an explicit predecessor digest was reviewed for
-   that continuation. The `v1.1.1` continuation alone advances `1` and `latest`, and only when a second
+   that operation. The `v1.1.1` continuation advances `1` and `latest`, and only when a second
    manifest lookup matches the tested `1.0.0` root digest
    `sha256:4ff12fdcdc79e7c5cd065a3ffb685dcbe6daee518442b7751e0479e0da1e3167`. It copies those
    aliases to the tested `1.1.1` root digest
    `sha256:18a54e02f28d195030cd02ee1f45088eeb05a34792d532197f143f6a73a209d7`. An exact-version or
    minor-version conflict, wrong predecessor, other tag, authorization failure or other mismatch remains
-   fatal. Ordinary tag publication and every other continuation keep missing-only image writes.
-   Review that predecessor before dispatching or approving any comparable future exception.
+   fatal. Independently reviewed `1.1.2` normal tag publication and its package continuation may
+   advance `1.1`, `1` and `latest` from that same reviewed `1.1.1` digest by supplying
+   `--advance-minor-major-latest-from`. Each alias requires its own second manifest match immediately
+   before one copy to the tested new image. The options are valid only for their hard-coded version.
+   An exact-version conflict, unrelated conflict, wrong predecessor, wrong version, authorization
+   failure or transport failure cannot advance the affected alias. A successfully imported exact tag
+   or an earlier approved alias is not retried unnecessarily. Other ordinary tag publications, other
+   continuations keep missing-only image writes. MCP-only recovery never writes images. Review a new
+   predecessor before dispatching or approving any comparable future exception.
 5. Only after all registry checks does it write the source tag's Reviewed GitHub Release notes from the
    dispatched main commit's `CHANGELOG.md`. Use the notes-only operation when a publication step should
    not run at all.
@@ -145,7 +152,8 @@ publication jobs use non-cancelling concurrency within their class, so two packa
   results for a finite interval and require eventual verified content. GHCR distinguishes HTTP 404
   absence through its registry API and compares `Docker-Content-Digest` with the tested OCI archive.
   Unrelated error text, authorization failures and conflicting digests never authorize a write. The
-  sole reviewed alias exception for `v1.1.1` is stated above and does not apply automatically elsewhere.
+  release-bound reviewed alias exceptions for `v1.1.1` and `1.1.2` are stated above and do not apply
+  automatically elsewhere.
 - Publication is sequential within the approval-gated publish job: PyPI, then npm, then GHCR. Each
   step must succeed before the next one starts. Only after those package versions resolve does the
   job publish `server.json` to the MCP Registry. A registry has no transaction that can retract an
