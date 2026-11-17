@@ -287,13 +287,45 @@ jobs:
           NPM_BOOTSTRAPPED: ${{ vars.TAPEBASIS_NPM_BOOTSTRAPPED }}
         run: test "$NPM_BOOTSTRAPPED" = 1
 
-      - name: Publish an absent npm version through GitHub OIDC
+      - name: Stage an absent npm version for maintainer approval
+        id: npm_stage
         if: steps.npm.outputs.npm_status == 'missing'
         env:
           VERSION: ${{ needs.build.outputs.version }}
-        run: npm publish "./dist/tapebasis-${VERSION}.tgz" --access public --loglevel verbose
+          NPM_STAGE_TOKEN: ${{ secrets.TAPEBASIS_NPM_STAGE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$NPM_STAGE_TOKEN"
+          umask 077
+          npmrc="$RUNNER_TEMP/npm-stage.npmrc"
+          printf '//registry.npmjs.org/:_authToken=${NPM_STAGE_TOKEN}\n' > "$npmrc"
+          trap 'rm -f "$npmrc"' EXIT
+          NPM_CONFIG_USERCONFIG="$npmrc" \
+            npm stage publish "./dist/tapebasis-${VERSION}.tgz" --loglevel verbose
+          echo "npm_staged=true" >> "$GITHUB_OUTPUT"
 
-      - name: Verify npm after conditional publication
+      - name: Report the staged npm version that needs maintainer approval
+        if: steps.npm_stage.outputs.npm_staged == 'true'
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          {
+            echo "## npm ${VERSION} is staged, not published"
+            echo
+            echo "npm rejects this repository's OIDC token exchange with package not found,"
+            echo "so CI staged the tested tarball instead of publishing it."
+            echo
+            echo "1. Open https://www.npmjs.com/package/tapebasis and review the staged version."
+            echo "2. Approve it with two-factor authentication."
+            echo "3. Dispatch release.yml on main with resume_source_run=$GITHUB_RUN_ID"
+            echo "   and resume_tag=$GITHUB_REF_NAME to finish GHCR, MCP and the GitHub Release."
+            echo
+            echo "GHCR, the MCP Registry and the GitHub Release were intentionally not touched."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::npm ${VERSION} was staged and needs maintainer approval before the remaining registries are completed."
+
+      - name: Verify npm after maintainer approval
+        if: steps.npm_stage.outputs.npm_staged != 'true'
         env:
           VERSION: ${{ needs.build.outputs.version }}
         run: >-
@@ -301,9 +333,11 @@ jobs:
           --dist dist --require-existing --await-visible
 
       - name: Install cosign
+        if: steps.npm_stage.outputs.npm_staged != 'true'
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
 
       - name: Download and verify mcp-publisher and regctl
+        if: steps.npm_stage.outputs.npm_staged != 'true'
         run: |
           set -euo pipefail
           base="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
@@ -326,6 +360,7 @@ jobs:
           ./mcp-publisher login github-oidc
 
       - name: Complete and verify GHCR without replacing matching tags
+        if: steps.npm_stage.outputs.npm_staged != 'true'
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.build.outputs.version }}
@@ -333,6 +368,7 @@ jobs:
 
       - name: Check MCP Registry metadata before publishing
         id: mcp
+        if: steps.npm_stage.outputs.npm_staged != 'true'
         env:
           VERSION: ${{ needs.build.outputs.version }}
         run: >-
@@ -340,10 +376,11 @@ jobs:
           --server server.json --output "$GITHUB_OUTPUT"
 
       - name: Publish the server to the MCP Registry only when absent
-        if: steps.mcp.outputs.mcp_status == 'missing'
+        if: steps.npm_stage.outputs.npm_staged != 'true' && steps.mcp.outputs.mcp_status == 'missing'
         run: ./mcp-publisher publish server.json
 
       - name: Recheck the published MCP Registry metadata
+        if: steps.npm_stage.outputs.npm_staged != 'true'
         env:
           VERSION: ${{ needs.build.outputs.version }}
         run: >-
@@ -351,6 +388,7 @@ jobs:
           --server server.json
 
       - name: Create or update the source tag's reviewed GitHub Release notes
+        if: steps.npm_stage.outputs.npm_staged != 'true'
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           VERSION: ${{ needs.build.outputs.version }}
@@ -518,16 +556,48 @@ jobs:
         if: steps.npm.outputs.npm_status == 'verified'
         run: test "$NPM_BOOTSTRAPPED" = 1
 
-      - name: Publish only the missing source npm version through GitHub OIDC
+      - name: Stage the missing source npm version for maintainer approval
+        id: npm_stage
         if: steps.npm.outputs.npm_status == 'missing'
-        run: npm publish "./dist/tapebasis-${VERSION}.tgz" --access public --loglevel verbose
+        env:
+          NPM_STAGE_TOKEN: ${{ secrets.TAPEBASIS_NPM_STAGE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$NPM_STAGE_TOKEN"
+          umask 077
+          npmrc="$RUNNER_TEMP/npm-stage.npmrc"
+          printf '//registry.npmjs.org/:_authToken=${NPM_STAGE_TOKEN}\n' > "$npmrc"
+          trap 'rm -f "$npmrc"' EXIT
+          NPM_CONFIG_USERCONFIG="$npmrc" \
+            npm stage publish "./dist/tapebasis-${VERSION}.tgz" --loglevel verbose
+          echo "npm_staged=true" >> "$GITHUB_OUTPUT"
+
+      - name: Report the staged source npm version that needs maintainer approval
+        if: steps.npm_stage.outputs.npm_staged == 'true'
+        run: |
+          {
+            echo "## npm ${VERSION} is staged, not published"
+            echo
+            echo "npm rejects this repository's OIDC token exchange with package not found,"
+            echo "so CI staged the tested tarball instead of publishing it."
+            echo
+            echo "1. Open https://www.npmjs.com/package/tapebasis and review the staged version."
+            echo "2. Approve it with two-factor authentication."
+            echo "3. Re-dispatch this workflow with the same inputs to finish GHCR, MCP and the GitHub Release."
+            echo
+            echo "GHCR, the MCP Registry and the GitHub Release were intentionally not touched."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::npm ${VERSION} was staged and needs maintainer approval before the remaining registries are completed."
 
       - name: Verify source npm integrity with bounded visibility waiting
+        if: steps.npm_stage.outputs.npm_staged != 'true'
         run: python3 scripts/release_registry.py npm --version "$VERSION" --dist dist --require-existing --await-visible
 
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - if: steps.npm_stage.outputs.npm_staged != 'true'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Download and verify the cosigned publisher and regctl
+        if: steps.npm_stage.outputs.npm_staged != 'true'
         run: |
           set -euo pipefail
           base="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
@@ -548,7 +618,7 @@ jobs:
           ./mcp-publisher login github-oidc
 
       - name: Complete GHCR with a specifically reviewed predecessor for 1 and latest
-        if: inputs.resume_tag == 'v1.1.1'
+        if: steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag == 'v1.1.1'
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PREVIOUS_RELEASE_DIGEST: sha256:4ff12fdcdc79e7c5cd065a3ffb685dcbe6daee518442b7751e0479e0da1e3167
@@ -557,23 +627,26 @@ jobs:
           --advance-major-latest-from "$PREVIOUS_RELEASE_DIGEST"
 
       - name: Complete other GHCR releases from source OCI archives without replacing matches
-        if: inputs.resume_tag != 'v1.1.1'
+        if: steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag != 'v1.1.1'
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash ./scripts/verify_ghcr.sh "$VERSION" publish-missing
 
       - name: Compare source MCP Registry metadata
         id: mcp
+        if: steps.npm_stage.outputs.npm_staged != 'true'
         run: python3 scripts/release_registry.py mcp --version "$VERSION" --server source-server.json --output "$GITHUB_OUTPUT"
 
       - name: Publish only missing source MCP Registry metadata
-        if: steps.mcp.outputs.mcp_status == 'missing'
+        if: steps.npm_stage.outputs.npm_staged != 'true' && steps.mcp.outputs.mcp_status == 'missing'
         run: ./mcp-publisher publish source-server.json
 
       - name: Verify the exact source MCP Registry metadata
+        if: steps.npm_stage.outputs.npm_staged != 'true'
         run: python3 scripts/release_registry.py mcp --version "$VERSION" --server source-server.json
 
       - name: Publish the source tag's reviewed GitHub Release notes
+        if: steps.npm_stage.outputs.npm_staged != 'true'
         env:
           RESUME_TAG: ${{ inputs.resume_tag }}
           SOURCE_COMMIT: ${{ needs.resume-source.outputs.tag_commit }}

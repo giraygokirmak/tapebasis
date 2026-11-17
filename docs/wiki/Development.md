@@ -300,12 +300,12 @@ Three GitHub Actions workflows:
 | Workflow | Purpose |
 | --- | --- |
 | `test.yml` | Install on Python 3.10–3.13, run the suite, build and install Python artifacts, run MCP and npm package checks, and check release metadata and documentation. No uploads |
-| `release.yml` | Validate on main and `v*` tags, build reusable release artifacts, then publish tag artifacts to PyPI, npm, GHCR and the MCP Registry after approval. Main-only `workflow_dispatch` pairs separately complete missing MCP metadata, resume approved old-tag packages or write only reviewed Release notes |
+| `release.yml` | Validate on main and `v*` tags, build reusable release artifacts, then publish tag artifacts to PyPI, GHCR and the MCP Registry after approval. npm is staged for a maintainer's 2FA approval before the remaining registries are completed. Main-only `workflow_dispatch` pairs separately complete missing MCP metadata, resume approved old-tag packages or write only reviewed Release notes |
 | `publish-image.yml` | Reuse `test.yml` for main and pull requests. The old main-image publisher has been removed; it makes no registry uploads |
 
 The tag publish job runs on GitHub-hosted Ubuntu with the pinned npm CLI bundled by Node.js 24. That
-runtime satisfies npm trusted publishing's minimum requirements without installing a floating CLI
-version during publication.
+runtime satisfies npm trusted publishing and staged publishing's minimum requirements without
+installing a floating CLI version during publication.
 
 The npm package is a dependency-free launcher for `uvx tapebasis`, not a separate TypeScript server.
 `npm test` exercises its argument forwarding, exit status, executable selection and signals. The pinned

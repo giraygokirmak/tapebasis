@@ -1259,34 +1259,52 @@ deliberately, generally with a new version rather than different bytes carrying 
 
 ---
 
-## 60. Publishing identity is short-lived; npm bootstraps once
+## 60. Publishing identity is short-lived; npm needs maintainer approval
 
-**Decision:** PyPI, npm and the MCP Registry use GitHub OIDC in the protected `release` publish job.
-No persistent PyPI, npm or MCP Registry token is configured in CI. The PyPI pending publisher can
-create the first project. npm cannot be configured as a trusted publisher before its package exists,
-so its first public upload is an explicit maintainer operation with interactive two-factor
-authentication before the release tag. A set release-environment variable then lets the tag job verify
-that exact existing version instead of uploading it twice. Registry version and SHA-512 integrity must
-match the tested artifact; the marker alone never skips or replaces a package. Subsequent npm releases
-use `release.yml`, the `release` environment and Node.js 24 with its bundled npm CLI, which satisfies
-npm's minimum CLI requirement for trusted publishing.
+**Decision:** PyPI and the MCP Registry use GitHub OIDC in the protected `release` publish job. No
+persistent PyPI or MCP Registry token is configured in CI. The PyPI pending publisher can create the
+first project. npm cannot be configured as a trusted publisher before its package exists, so its first
+public upload was an explicit maintainer operation with interactive two-factor authentication before
+the release tag. A set release-environment variable then lets the tag job verify that exact existing
+version instead of uploading it twice. Registry version and SHA-512 integrity must match the tested
+artifact; the marker alone never skips or replaces a package.
+npm's trusted publishing is configured, but it cannot authenticate this repository yet. GitHub emits
+immutable OIDC subject claims for repositories created after the cutoff, and npm's exchange endpoint
+answers with `package not found` before it evaluates the configured publisher. This is upstream
+[npm/cli#9969](https://github.com/npm/cli/issues/9969), not a workflow or registry spelling mistake, and
+the claim format cannot be switched off here.
+Until npm fixes that, the workflow never calls `npm publish`. It calls `npm stage publish` using a
+granular access token restricted to **stage only** on the single `tapebasis` package, with no
+organization access, no **Bypass 2FA**, the shortest practical expiration and revocation after use. The
+secret exists only as the `release` environment secret `TAPEBASIS_NPM_STAGE_TOKEN`. CI therefore cannot
+put a new version live on its own: a maintainer approves the staged version with two-factor
+authentication on npm, and a later approved run verifies the live version and SHA-512 integrity before
+GHCR, the MCP Registry and the Release notes run.
 
 **Why:** a persistent CI token is unnecessary ongoing account exposure. The pending-publisher difference
 between registries matters: assuming they both support pre-creation OIDC would guarantee a failed first
-npm release, or tempt a permanent token fallback merely to bypass account provisioning. The MCP Registry
+npm release, or tempt a permanent token fallback merely to bypass account provisioning. A stage-only
+token keeps your approval decisive even if the token leaks. Direct token publication is deprecated and
+will be removed in January 2027, so staging is also npm's supported automation direction. The MCP Registry
 namespace needs no separate registry account: its `github-oidc` login proves the workflow's repository
 identity and permits the matching `io.github.giraygokirmak/tapebasis` namespace.
 
 **Consequence:** registry availability and account provisioning are release prerequisites, not CI
-successes claimed in advance. Npm publication supplies the tested archive with an explicit `./dist/`
-path. Without `./`, npm parses the argument as a GitHub repository shortcut and may fail over SSH
-before trusted publishing starts. The CLI version, repository binding and OIDC identity remain
-unchanged when correcting this argument parsing. The source `publishConfig.registry` already selects the
-official registry. Newer npm examples use `registry-url`, but pinned `setup-node` v4 also injects a
-`NODE_AUTH_TOKEN` placeholder and a dummy credential. Adding that input would obscure the tokenless
-failure, so it remains unset. The command uses `--loglevel verbose`, because npm otherwise hides a token-exchange rejection behind a
-generic `ENEEDAUTH`. Diagnostic review uses only non-secret error messages, never token values. There is
-no fallback to `NPM_TOKEN`, `NODE_AUTH_TOKEN` or a persistent npm credential. `server.json`, the npm
+successes claimed in advance, and a release can require two runs. The first stages npm and explicitly
+skips images, MCP metadata and Release notes; the second verifies npm and completes the rest. The
+staging command's success message is not evidence, because npm can report a staged result while nothing
+is live. Only the version and SHA-512 comparison counts. A stage-only token can still move dist-tags and
+deprecate versions, so it is not a complete security boundary, and a token-based staged publication has
+no trusted-publishing provenance attestation.
+Npm stages the tested archive with an explicit `./dist/` path. Without `./`, npm parses the argument as
+a GitHub repository shortcut and may fail over SSH before authentication starts. The CLI version,
+repository binding and OIDC identity remain unchanged when correcting this argument parsing. The source
+`publishConfig.registry` already selects the official registry. Newer npm examples use `registry-url`,
+but pinned `setup-node` v4 also injects a `NODE_AUTH_TOKEN` placeholder and a dummy credential, which
+would obscure the exchange failure, so it remains unset. The command uses `--loglevel verbose`, because
+npm otherwise hides a token-exchange rejection behind a generic `ENEEDAUTH`. Diagnostic review uses only
+non-secret error messages, never token values, and there is no direct-publication fallback to
+`NPM_TOKEN` or `NODE_AUTH_TOKEN`. `server.json`, the npm
 and PyPI ownership markers
 and the OCI ownership label support verified MCP Registry publication after package uploads. `uvx tapebasis` always runs the
 Python server; npm supplies only its launcher, not a separate implementation.

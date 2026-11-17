@@ -41,29 +41,48 @@ def test_workflows_parse_and_actions_are_pinned():
                 assert version and version.startswith("v"), owner
 
 
-def test_npm_publication_addresses_a_local_tarball_not_a_github_shortcut():
-    """Every publish command prevents npm from treating dist/name as a GitHub repository."""
-    for job_name in ("publish", "resume-publication"):
-        text = yaml.safe_dump(workflow()["jobs"][job_name])
-        assert text.count("npm publish \"./dist/tapebasis-${VERSION}.tgz\"") == 1
-        assert "npm publish \"dist/tapebasis-${VERSION}.tgz\"" not in text
+def test_npm_staging_addresses_a_local_tarball_not_a_github_shortcut():
+    """Every staging command prevents npm from treating dist/name as a GitHub repository."""
+    document = (ROOT / ".github/workflows/release.yml").read_text()
+    assert document.count('npm stage publish "./dist/tapebasis-${VERSION}.tgz"') == 2
+    assert 'npm stage publish "dist/tapebasis-${VERSION}.tgz"' not in document
 
 
-def test_npm_oidc_keeps_tokenless_node_setup_and_enables_diagnostics():
-    """Publish jobs expose token-exchange errors without introducing stored tokens."""
+def test_npm_staging_is_stage_only_and_requires_maintainer_approval():
+    """Both npm paths stage the tested tarball and stop before any other registry."""
     for job_name in ("publish", "resume-publication"):
         job = workflow()["jobs"][job_name]
         setup = next(step for step in job["steps"]
                      if step.get("uses", "").startswith("actions/setup-node@"))
         assert setup["with"] == {"node-version": "24"}
-        publishes = [step for step in job["steps"] if "npm publish " in step.get("run", "")]
-        assert len(publishes) == 1
-        assert publishes[0]["run"] == (
-            'npm publish "./dist/tapebasis-${VERSION}.tgz" --access public --loglevel verbose'
-        )
+        stages = [step for step in job["steps"] if "npm stage publish" in step.get("run", "")]
+        assert len(stages) == 1
+        stage = stages[0]
+        assert stage["id"] == "npm_stage"
+        assert stage["if"] == "steps.npm.outputs.npm_status == 'missing'"
+        assert stage["env"]["NPM_STAGE_TOKEN"] == "${{ secrets.TAPEBASIS_NPM_STAGE_TOKEN }}"
+        assert "npm stage publish \"./dist/tapebasis-${VERSION}.tgz\"" in " ".join(stage["run"].split())
+        assert "--loglevel verbose" in stage["run"]
+        assert "npm_staged=true" in stage["run"]
+        assert "$RUNNER_TEMP" in stage["run"]
+        assert "trap 'rm -f \"$npmrc\"' EXIT" in stage["run"]
+        assert "TAPEBASIS_NPM_STAGE_TOKEN" not in stage["run"]
+        comparison = next(step for step in job["steps"] if step.get("id") == "npm")
+        assert comparison["run"].find("release_registry.py npm") >= 0
+        marker = next(step for step in job["steps"] if "NPM_BOOTSTRAPPED" in step.get("run", ""))
+        assert marker["if"] == "steps.npm.outputs.npm_status == 'verified'"
+        steps = job["steps"]
+        for later in steps[steps.index(stage) + 1:]:
+            if later.get("name", "").startswith("Report the staged"):
+                assert later["if"] == "steps.npm_stage.outputs.npm_staged == 'true'"
+                continue
+            assert "steps.npm_stage.outputs.npm_staged != 'true'" in later["if"]
+    document = (ROOT / ".github/workflows/release.yml").read_text()
+    assert "npm publish " not in document
+    assert document.count("secrets.TAPEBASIS_NPM_STAGE_TOKEN") == 2
     recovery = yaml.safe_dump(workflow()["jobs"]["recover-mcp"])
-    assert "npm publish" not in recovery and "--loglevel verbose" not in recovery
-    assert "registry-url:" not in (ROOT / ".github/workflows/release.yml").read_text()
+    assert "npm stage publish" not in recovery and "NPM_STAGE_TOKEN" not in recovery
+    assert "registry-url:" not in document
 
 
 def test_only_tag_publishes_packages_and_recovery_is_main_only():
@@ -120,22 +139,24 @@ def test_package_continuation_is_distinct_and_source_bound():
     assert publish["needs"] == "resume-source"
     assert source["permissions"] == {"contents": "read", "actions": "read"}
     assert "id-token: write" not in yaml.safe_dump(source)
-    text = yaml.safe_dump(publish)
+    text = " ".join(yaml.safe_dump(publish).split())
     assert "release_artifact_source.py --source-only" in text
     assert "sha256sum --check --strict SHA256SUMS" in text
     assert "check_oci_image.py dist/tapebasis-image.tar" in text
     assert "check_release.py" not in text and "load_metadata" not in text
     assert "dist/tapebasis-${VERSION}.tgz" in text
-    assert "npm publish \"./dist/tapebasis-${VERSION}.tgz\"" in text and "uv publish" in text
+    runs = " ".join(" ".join(step.get("run", "").split()) for step in publish["steps"])
+    assert 'npm stage publish "./dist/tapebasis-${VERSION}.tgz"' in runs
+    assert "uv publish" in runs
     assert "verify_ghcr.sh \"$VERSION\" publish-missing" in text
     assert "--advance-major-latest-from \"$PREVIOUS_RELEASE_DIGEST\"" in " ".join(text.split())
     continuation = workflow()["jobs"]["resume-publication"]["steps"]
     alias = next(step for step in continuation if "reviewed predecessor" in step.get("name", ""))
-    assert alias["if"] == "inputs.resume_tag == 'v1.1.1'"
+    assert alias["if"] == "steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag == 'v1.1.1'"
     assert alias["run"].strip().endswith('--advance-major-latest-from "$PREVIOUS_RELEASE_DIGEST"')
     assert alias["env"]["PREVIOUS_RELEASE_DIGEST"] == "sha256:4ff12fdcdc79e7c5cd065a3ffb685dcbe6daee518442b7751e0479e0da1e3167"
     ordinary = next(step for step in continuation if "other GHCR releases" in step.get("name", ""))
-    assert ordinary["if"] == "inputs.resume_tag != 'v1.1.1'"
+    assert ordinary["if"] == "steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag != 'v1.1.1'"
     assert "--advance-major-latest-from" not in ordinary["run"]
     assert "publish source-server.json" in text
     assert "server.json --output \"$GITHUB_OUTPUT\"" not in text.replace("source-server.json --output \"$GITHUB_OUTPUT\"", "")
@@ -187,7 +208,7 @@ def jobs_have_no_error_bypass():
 
 def test_normal_publish_verifies_artifacts_and_never_reuploads_matches():
     """Existing PyPI, npm and GHCR content is compared before conditional publication."""
-    text = yaml.safe_dump(workflow()["jobs"]["publish"])
+    text = " ".join(yaml.safe_dump(workflow()["jobs"]["publish"]).split())
     assert "actions/download-artifact@" in text
     assert "sha256sum --check --strict SHA256SUMS" in text
     assert "check_oci_image.py dist/tapebasis-image.tar" in text
@@ -205,7 +226,9 @@ def test_normal_publish_verifies_artifacts_and_never_reuploads_matches():
     assert "release_registry.py npm" in text
     assert "scripts/verify_ghcr.sh \"$VERSION\" publish-missing" in text
     assert "mcp-publisher publish server.json" in text
-    assert "steps.mcp.outputs.mcp_status == 'missing'" in text
+    mcp_publish = next(step for step in workflow()["jobs"]["publish"]["steps"]
+                       if step.get("name") == "Publish the server to the MCP Registry only when absent")
+    assert "steps.mcp.outputs.mcp_status == 'missing'" in mcp_publish["if"]
     assert text.count("--await-visible") == 2
     assert "cosign verify-blob" in text
     helper = (ROOT / "scripts/verify_ghcr.sh").read_text()

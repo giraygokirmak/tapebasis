@@ -14,8 +14,12 @@ Registry availability is recorded separately where a tag was published only part
 - Associated reviewed Release notes with an existing verified tag without resubmitting a workflow-changing
   `target_commitish` that the built-in token cannot modify.
 - Passed npm publication an explicit `./` local-tarball path instead of an accidental GitHub repository shortcut.
-- Exposed verbose, non-secret npm OIDC token-exchange diagnostics without a persistent token or claiming
-  publisher repair. Retained tokenless `setup-node` because v4's `registry-url` injects a dummy credential.
+- Replaced direct npm publication with staged publication, so a maintainer approves each version with
+  two-factor authentication on npm before GHCR, the MCP Registry and the Release notes are completed.
+- Diagnosed npm's token-exchange rejection as this repository's immutable OIDC subject claims, reported
+  upstream as [npm/cli#9969](https://github.com/npm/cli/issues/9969), rather than a trusted-publisher
+  mismatch. Kept verbose non-secret diagnostics.
+- Retained tokenless `setup-node` because pinned v4's `registry-url` injects a placeholder credential.
 
 ### Release process
 
@@ -41,9 +45,12 @@ Registry availability is recorded separately where a tag was published only part
 ### Publication status
 
 - PyPI wheel and sdist match the original tested tag artifacts byte-for-byte.
-- Continuation run `44089890432` failed its missing npm publish with `ENEEDAUTH`. npm remains absent,
+- Continuation runs `44089890432` and `44092787410` failed before any npm upload. npm rejects this
+  repository's OIDC token exchange with `package not found`; the second run identified the immutable
+  OIDC subject claims behind that response rather than a trusted-publisher mismatch. npm remains absent,
   GHCR, MCP and GitHub Release steps were skipped, and the `1` and `latest` aliases remain on `1.0.0`.
-  A later separately approved continuation remains necessary; the failed run must not be retried.
+  Neither run may be retried. The next continuation stages the tarball for maintainer approval on npm,
+  after which a later dispatch completes the remaining registries.
 
 ## [1.1.0] - 2026-11-17
 

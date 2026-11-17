@@ -4,13 +4,18 @@ The `v1.0.0` wheel, sdist and npm launcher are published and match the original 
 GHCR serves `1.0.0`, `1.0`, `1` and `latest` for `linux/amd64` and `linux/arm64`, all with the tested
 root digest `sha256:4ff12fdcdc79e7c5cd065a3ffb685dcbe6daee518442b7751e0479e0da1e3167`.
 The protected recovery independently verified these package bytes and image tags, and MCP Registry
-metadata is published for `1.0.0`. The npm trusted publisher configuration has not yet completed a real
-OIDC publish, so package availability does not prove that configuration works.
-For `v1.1.1`, continuation run `44089890432` verified the original tested PyPI files without re-upload
-but failed its missing npm publish with `ENEEDAUTH`. The npm `1.1.1` version remains absent. GHCR,
+metadata is published for `1.0.0`. npm's trusted publisher has not completed a real OIDC publish:
+this repository uses immutable OIDC subject claims, and npm answers that token exchange with
+`package not found` before it evaluates the trusted publisher, as reported upstream in
+[npm/cli#9969](https://github.com/npm/cli/issues/9969). Package availability therefore does not prove
+that configuration works, and the repository cannot switch the claim format off.
+For `v1.1.1`, continuation runs `44089890432` and `44092787410` verified the original tested PyPI files
+without re-upload but failed before any npm upload. The npm `1.1.1` version remains absent. GHCR,
 MCP and GitHub Release steps were skipped: GHCR `1.1.1` and `1.1` remain absent, `1` and `latest`
 remain on the tested `1.0.0` image, MCP metadata remains at `1.0.0`, and only `v1.0.0` has an ordinary
-GitHub Release. No retry of that run is permitted. The in-development `1.1.2` release is not published.
+GitHub Release. No retry of either run is permitted. Direct npm publication is replaced by staged
+publication, which needs your approval on npm before the remaining registries are completed. The
+in-development `1.1.2` release is not published.
 The rejected `v1.1.0` run
 `44060097251` has no tested release artifacts: its Python 3.10 validation failed before the build or
 protected publication started. No package, image, MCP entry or ordinary GitHub Release is published for
@@ -62,12 +67,15 @@ publishable registry content absent. Do not move the tag or rebuild replacement 
    supplied together, with the other input pairs empty. The package continuation requires the original
    protected publish job to have started, unlike the notes-only route below. It validates all source
    release identities, the live tag target and GitHub's immutable artifact ZIP digest, then independently
-   downloads the same artifacts after approval.
+   downloads the same artifacts after approval. If an earlier tag or continuation run left npm merely
+   staged, approve that staged version first and give this continuation the same source run and tag.
 4. Existing matching packages and image tags are verified, not uploaded again. On PyPI this comparison
    is per distribution file: a release with a verified wheel but absent sdist, or the reverse, uploads
    only that absent file. Any unexpected, duplicate or conflicting file remains fatal. Other absent
    PyPI files,
-   npm content, GHCR tags or MCP metadata enter their corresponding write step. Any conflict, transport
+   npm content, GHCR tags or MCP metadata enter their corresponding write step. Absent npm content is
+   staged for your npm approval, which ends that run before GHCR, MCP or Release notes; no other
+   registry treats the stage as a live package. Any conflict, transport
    failure or non-404 lookup stops publication unless an explicit predecessor digest was reviewed for
    that continuation. The `v1.1.1` continuation alone advances `1` and `latest`, and only when a second
    manifest lookup matches the tested `1.0.0` root digest
@@ -183,42 +191,57 @@ OIDC publisher. This is a bootstrap limitation, not a permanent token requiremen
 3. With the npm account that will own the package, run `npm login` interactively. Then publish the
    already tested tarball with `npm publish ./tapebasis-1.0.0.tgz --access public --otp=<current-code>`.
    Complete interactive two-factor authentication as prompted. This is an explicit maintainer action,
-   not a workflow invocation. Never put a persistent npm token in a GitHub environment or log it.
-   Do this bootstrap before the `v1.0.0` tag so PyPI does not upload first and then stop at an
-   unprovisioned npm account. After bootstrap, set `TAPEBASIS_NPM_BOOTSTRAPPED=1` as a **release
+   not a workflow invocation. The only credential CI ever stores is the short-lived stage-only token
+   described below, never a token able to publish directly. Do this bootstrap before the `v1.0.0` tag so
+   PyPI does not upload first and then stop at an unprovisioned npm account. After bootstrap, set
+   `TAPEBASIS_NPM_BOOTSTRAPPED=1` as a **release
    environment variable** on GitHub. This does not publish anything itself; it records that the manual
-   step completed. Keep the variable unset on forks and before bootstrap. The tag job must not call
-   `npm publish` for this already published version.
-4. In the npm package settings, choose **Trusted publishing**, then GitHub Actions, with organization
-   or user `giraygokirmak`, repository `tapebasis`, workflow filename `release.yml`, and environment
-   `release`. Allow direct `npm publish` for this workflow. The case and filename must match exactly.
-   npm requires Node.js 22.14.0 or newer and npm 11.5.1 or newer. A new trusted publisher configuration
-   must complete its first successful publish within 2 days, or it expires and must be recreated.
-5. The workflow uses GitHub-hosted Node.js 24 and its bundled npm CLI. It exchanges GitHub's OIDC
-   identity for a short-lived publish credential; no `NPM_TOKEN`, `NODE_AUTH_TOKEN`, or persistent
-   automation token is used. The pinned `setup-node` v4 deliberately has no `registry-url`: although
-   newer npm examples include it, v4 also injects a `NODE_AUTH_TOKEN` placeholder and dummy credential.
-   The tested tarball's `publishConfig.registry` already selects `https://registry.npmjs.org`. Keep this
-   setup tokenless rather than following that example blindly. On a public repository publishing a
-   public package, trusted publishing creates provenance automatically. The publish command passes the
-   tested tarball as `npm publish "./dist/tapebasis-${VERSION}.tgz" --access public --loglevel verbose`.
-   The leading `./` is required for a relative local path: without it npm interprets
-   `dist/tapebasis-1.1.1.tgz` as a GitHub repository shortcut and attempts an unrelated SSH `ls-remote`,
-   failing before any npm publication or OIDC authentication. Do not confuse that argument-parsing error
-   with a trusted publisher rejection. Verbose logging exposes the otherwise hidden token-exchange body
-   message when publication ends in generic `ENEEDAUTH`. Read only that non-secret message and never
-   copy or expose token values. An account mismatch, including repository, workflow, environment or
-   direct-publish permission, still requires maintainer correction on npm; the diagnostic is not itself
-   a publisher repair. Any next publication uses a fresh dispatch and separate `release` approval.
-6. Prefer restricting ordinary token publishing in npm after the trusted publisher is working. Remove
-   the bootstrap credential from the local machine as usual with `npm logout`.
+   step completed, and later also covers a staged version you approved on npm. Keep the variable unset
+   on forks and before bootstrap. The tag job must not upload an already published version again.
+4. In the npm package settings, keep **Trusted publishing** configured for GitHub Actions, with
+   organization or user `giraygokirmak`, repository `tapebasis`, workflow filename `release.yml`, and
+   environment `release`. npm requires Node.js 22.14.0 or newer and npm 11.5.1 or newer. This
+   configuration cannot currently authenticate this repository: GitHub emits immutable OIDC subject
+   claims, npm answers the token exchange with `package not found`, and the later `ENEEDAUTH` is only a
+   secondary error. [npm/cli#9969](https://github.com/npm/cli/issues/9969) tracks the registry fix. The
+   claim format cannot be switched off here, so repeating runs does not help.
+5. Until that registry fix lands, create a **granular access token** whose package permission is
+   **Read and write (stage only)** and whose only selected package is `tapebasis`. Give it no
+   organization access, choose the shortest practical expiration, and leave **Bypass 2FA** off. Store it
+   only as the `release` environment secret `TAPEBASIS_NPM_STAGE_TOKEN`, and revoke it after the
+   release. A stage-only token cannot publish directly: `npm publish` fails with `E_STAGE_REQUIRED`. It
+   can still move dist-tags and deprecate versions, so it is not a complete security boundary. Direct
+   token publication is also deprecated and will be removed in January 2027, which makes staging the
+   supported automation shape rather than a workaround invented here.
+6. The publish jobs run `npm stage publish` through a temporary npmrc in `$RUNNER_TEMP`, created with a
+   `077` umask and removed by an `EXIT` trap. The secret is read from the environment, never put on the
+   command line or printed. Staging needs npm CLI 11.15.0 or newer and Node.js 22.14.0 or newer, which
+   the GitHub-hosted Node.js 24 toolchain satisfies. The pinned `setup-node` v4 deliberately has no
+   `registry-url`, because v4 also injects a `NODE_AUTH_TOKEN` placeholder and dummy credential. The
+   tested tarball's `publishConfig.registry` already selects `https://registry.npmjs.org`. The command
+   passes the explicit local path `./dist/tapebasis-${VERSION}.tgz`; without the leading `./` npm would
+   treat the argument as a GitHub repository shortcut and fail over SSH before authentication.
+   `--loglevel verbose` keeps the non-secret registry rejection visible. Never copy token values out of
+   a log.
+7. A run that stages a version stops there deliberately. Its summary says the version is staged, not
+   published, and GHCR, the MCP Registry and the GitHub Release steps are skipped. Review the staged
+   version in npm's **Staged Packages** tab and approve it with two-factor authentication, or run
+   `npm stage approve <stage-id> --otp <code>`. The staging command can report success even when nothing
+   is live, so its exit status is never the evidence. After your approval, run a second approved path:
+   from a tag run, dispatch `resume_source_run=<that-run-id>` and `resume_tag=<that-tag>`; from a
+   continuation, dispatch the same `resume_source_run` and `resume_tag` values again. The npm comparison
+   then requires the live version and its SHA-512
+   integrity to equal the tested tarball before GHCR, MCP and the Release notes run, and a staged-only
+   result fails that verification. A token-based staged publication carries no trusted-publishing
+   provenance attestation.
+8. Remove the bootstrap credential from the local machine with `npm logout` when it is no longer needed.
 
-The npm step deliberately fails rather than falling back to a stored token. Bootstrap npm once as
-above, then subsequent tags use trusted publishing. If the version already exists without the release
-marker, the job stops. With the marker, it requires the registry's version and SHA-512 integrity to
-match the tested tarball instead of uploading an existing version again. Any other version is published
-through OIDC; a mismatch stops GHCR and MCP Registry publication. Do not regard a partial release as
-completed or retry it without reviewing each registry.
+The npm step never publishes directly and never overwrites registry content. Bootstrap npm once as
+above, then approve each staged version. If the version already exists without the release marker, the
+job stops. With the marker, it requires the registry's version and SHA-512 integrity to match the tested
+tarball instead of uploading an existing version again. GHCR, the MCP Registry and the Release notes
+wait for that verification. Do not regard a staged version or any other partial release as completed,
+and do not retry a failed run without reviewing each registry.
 
 ## GHCR setup
 

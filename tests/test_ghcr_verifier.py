@@ -25,7 +25,7 @@ def test_recovery_cannot_write_packages_and_requires_cosigned_publisher():
 
 def test_normal_tag_job_verifies_exact_registry_bytes_before_mcp():
     """Normal publication checks existing files, publishes only missing versions and rechecks each registry."""
-    content = yaml.safe_dump(yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())["jobs"]["publish"])
+    content = " ".join(yaml.safe_dump(yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())["jobs"]["publish"]).split())
     for required in ("release_registry.py pypi", "release_registry.py npm", "release_registry.py mcp", "steps.pypi.outputs.pypi_status == 'missing'", "steps.npm.outputs.npm_status == 'missing'", "steps.mcp.outputs.mcp_status == 'missing'", "verify_ghcr.sh", "cosign verify-blob"):
         assert required in content
     assert "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" not in content
