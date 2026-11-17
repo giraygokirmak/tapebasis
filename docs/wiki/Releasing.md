@@ -84,6 +84,10 @@ available and intact. The writer reads the section for the old tag's version fro
 `CHANGELOG.md`, verifies the live tag still targets the tested source commit, and creates or patches only
 that release's title and body. A read-back must match before the step succeeds. It does not claim that a
 source tag was committed at the dispatched main revision, and it does not auto-generate a commit list.
+After this verification, the Release request deliberately omits `target_commitish`. GitHub otherwise subjects that
+field to its workflow-modification authorization when the old commit changed workflow files. The built-in
+`GITHUB_TOKEN` cannot receive that separate authority even with `contents: write`; no personal access token or tag
+movement is used. An existing immutable tag is always verified before the Release is created or patched.
 
 All three dispatch pairs are mutually exclusive. Blank, incomplete or mixed input dispatches perform no
 registry or Release write. Blank dispatches still run ordinary validation without publication. All

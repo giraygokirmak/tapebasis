@@ -11,6 +11,8 @@ Registry availability is recorded separately where a tag was published only part
 - Added a separately approved continuation using the original tested tag artifacts for an older immutable tag.
 - Preserved MCP-only recovery as a read-only package and image path.
 - Prevented GHCR authorization or transport errors from triggering image writes.
+- Associated reviewed Release notes with an existing verified tag without resubmitting a workflow-changing
+  `target_commitish` that the built-in token cannot modify.
 
 ### Release process
 

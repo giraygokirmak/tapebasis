@@ -129,7 +129,10 @@ def publish(repository: str, token: str, tag: str, version: str, body: str,
     base = f"https://api.github.com/repos/{repository}/releases"
     current = request(f"{base}/tags/{tag}", token, missing_ok=True)
     title = f"Tapebasis {version}"
-    values = {"tag_name": tag, "target_commitish": expected_commit, "name": title, "body": body}
+    # This tag already exists and verify_tag bound it to expected_commit. Sending
+    # target_commitish anyway makes GitHub require separate workflow-modification
+    # authority when that old commit changed workflows, which GITHUB_TOKEN cannot have.
+    values = {"tag_name": tag, "name": title, "body": body}
     if current:
         if current.get("tag_name") != tag or current.get("draft") or current.get("prerelease"):
             raise NotesError("existing GitHub Release identity or release kind differs")

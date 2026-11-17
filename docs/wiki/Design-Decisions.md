@@ -1352,7 +1352,9 @@ must match existing content, and authorization, transport and malformed-response
 Each missing tag gets at most one write followed by bounded reads. Release bodies use the reviewed
 section from current main's `CHANGELOG.md`, not an automatic commit list or a claim that main is the old
 source commit. The old immutable tag remains the source of its version and commit binding; read-back of
-the Release must match. No such helper automatically grants the required environment approval.
+the Release must match. Release writes omit `target_commitish` after verifying a live immutable tag, so GitHub does
+not demand separate workflow-modification authority for an old source commit. This needs only `contents: write`, never
+a persistent personal access token or tag movement. No such helper automatically grants the required environment approval.
 
 ---
 

@@ -48,7 +48,7 @@ def test_release_identity_requires_a_source_bound_live_tag(monkeypatch):
 
 
 def test_release_is_created_or_updated_and_read_back(monkeypatch):
-    """Idempotent PATCH and initial POST both carry the source commit and reviewed note."""
+    """Both writes bind the verified source tag without resubmitting its target commit."""
     module = load("release_notes")
     reference = {"object": {"sha": COMMIT, "type": "commit"}}
     calls = []
@@ -74,7 +74,7 @@ def test_release_is_created_or_updated_and_read_back(monkeypatch):
     values = [call for call in calls if call[1] in {"POST", "PATCH"}]
     assert [call[1] for call in values] == ["POST", "PATCH"]
     for _, _, payload in values:
-        assert payload["target_commitish"] == COMMIT
+        assert "target_commitish" not in payload
         assert payload["name"] == "Tapebasis 1.1.1"
         assert payload["body"] == "Summary\n"
     assert calls[-1][1] == "GET"
