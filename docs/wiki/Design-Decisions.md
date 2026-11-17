@@ -1331,6 +1331,31 @@ so a failed primary leg does not suppress or rebrand the aggregated news.
 
 ---
 
+## 63. Continuation, notes and MCP recovery have separate powers
+
+**Decision:** the source-bound `resume_source_run` and `resume_tag` pair may complete missing packages
+from an older immutable tag's tested artifacts. The `notes_source_run` and `notes_tag` pair can only
+write that tag's GitHub Release notes through a `release-notes` environment. MCP-only recovery remains
+restricted to `recover_source_run` and `recover_tag` and can never become a package or image publisher.
+Only the notes route accepts a validated tag run whose publication job never started. Blank, incomplete
+or mixed dispatch inputs select no writing job.
+
+**Why:** registry content can be partially uploaded while the source artifacts remain correct. Fixing
+that requires the original digest-bound artifacts and a fresh reviewed main workflow, not retrying the
+old workflow, moving a tag, or rebuilding different bytes. Notes need a narrower permission set than
+package publication, and a valid source tag can have useful notes even without a started publisher.
+
+**Boundary:** dispatch inputs enter shell commands through environment variables, never interpolation.
+Credential-bearing HTTP helpers strip `Authorization` before following a cross-origin redirect. Only
+direct registry HTTP 404 responses establish GHCR absence. Exact bytes or root digest
+must match existing content, and authorization, transport and malformed-response failures are fatal.
+Each missing tag gets at most one write followed by bounded reads. Release bodies use the reviewed
+section from current main's `CHANGELOG.md`, not an automatic commit list or a claim that main is the old
+source commit. The old immutable tag remains the source of its version and commit binding; read-back of
+the Release must match. No such helper automatically grants the required environment approval.
+
+---
+
 ## 62. Analyst counts retain their provider and population
 
 **Decision:** `stock_quote` exposes provider-specific `analyst_targets` outside `data`, and compares

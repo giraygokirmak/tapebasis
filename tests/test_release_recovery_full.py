@@ -56,6 +56,46 @@ def test_pypi_compares_actual_files_and_only_404_means_missing(tmp_path, monkeyp
     assert module.main(["pypi", "--version", "1.0.0", "--dist", str(tmp_path), "--require-existing"]) == 1
 
 
+@pytest.mark.parametrize("filename", [
+    "tapebasis-1.0.0-py3-none-any.whl",
+    "tapebasis-1.0.0.tar.gz",
+])
+def test_pypi_partial_release_only_requests_the_absent_file(tmp_path, monkeypatch, filename):
+    """A verified wheel or sdist stays untouched while the other file is uploadable."""
+    module = load("release_registry")
+    other = "tapebasis-1.0.0.tar.gz" if filename.endswith(".whl") else "tapebasis-1.0.0-py3-none-any.whl"
+    body = b"tested-artifact"
+    for name in (filename, other):
+        (tmp_path / name).write_bytes(body)
+    entries = [{"filename": filename, "digests": {"sha256": hashlib.sha256(body).hexdigest()},
+                "url": f"https://files.test/{filename}"}]
+    downloads = []
+    def get(url, missing_ok=False):
+        """Return an isolated one-file PyPI release and record byte comparisons."""
+        if url.endswith("/json"):
+            return Response({"urls": entries}).body
+        downloads.append(url)
+        return body
+    monkeypatch.setattr(module, "_get", get)
+    assert module.check_pypi("tapebasis", "1.0.0", tmp_path) == "partial"
+    assert module.inspect_pypi("tapebasis", "1.0.0", tmp_path) == ("partial", [other])
+    output = tmp_path / "output"
+    assert module.main(["pypi", "--version", "1.0.0", "--dist", str(tmp_path), "--output", str(output)]) == 0
+    values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert values["pypi_status"] == "partial"
+    assert values["pypi_missing_wheel"] == str(other.endswith(".whl")).lower()
+    assert values["pypi_missing_sdist"] == str(other.endswith(".tar.gz")).lower()
+    assert module.main(["pypi", "--version", "1.0.0", "--dist", str(tmp_path), "--require-existing"]) == 1
+    assert downloads
+    for malformed in (
+        [], [{"filename": filename}, {"filename": filename}],
+        [{"filename": "unexpected.whl"}],
+    ):
+        monkeypatch.setattr(module, "_json", lambda *_args, _entries=malformed, **_kwargs: {"urls": _entries})
+        with pytest.raises(module.RegistryError):
+            module.inspect_pypi("tapebasis", "1.0.0", tmp_path)
+
+
 def test_npm_and_mcp_accept_only_verified_content(tmp_path, monkeypatch):
     """Mismatched npm integrity and MCP metadata stop rather than being overwritten."""
     tarball = b"known tarball"
@@ -86,7 +126,7 @@ def test_registry_cli_accepts_workflow_status_output_after_every_subcommand(tmp_
     (tmp_path / "tapebasis-1.0.0-py3-none-any.whl").write_bytes(b"wheel")
     (tmp_path / "tapebasis-1.0.0.tar.gz").write_bytes(b"sdist")
     module = load("release_registry")
-    monkeypatch.setattr(module, "check_pypi", lambda *_args: "verified")
+    monkeypatch.setattr(module, "inspect_pypi", lambda *_args: ("verified", []))
     monkeypatch.setattr(module, "check_npm", lambda *_args: "verified")
     monkeypatch.setattr(module, "check_mcp", lambda *_args: "missing")
     for registry in ("pypi", "npm", "mcp"):
@@ -99,7 +139,96 @@ def test_registry_cli_accepts_workflow_status_output_after_every_subcommand(tmp_
         arguments += ["--output", str(output)]
         assert module.main(arguments) == 0
         expected = "missing" if registry == "mcp" else "verified"
-        assert output.read_text() == f"{registry}_status={expected}\n"
+        values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        assert values[f"{registry}_status"] == expected
+        if registry == "pypi":
+            assert values["pypi_missing_wheel"] == values["pypi_missing_sdist"] == "false"
+
+
+def test_await_package_retries_only_missing_until_verified(monkeypatch):
+    """A transient absence becomes verified without sleeping after the successful read."""
+    module = load("release_registry")
+    statuses = iter(("missing", "missing", "verified"))
+    delays = []
+    clock = iter((0.0, 0.0, 2.0, 2.0, 4.0))
+    monkeypatch.setenv("REGISTRY_PUBLISH_TIMEOUT_SECONDS", "10")
+    monkeypatch.setenv("REGISTRY_PUBLISH_RETRY_SECONDS", "2")
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(module.time, "sleep", delays.append)
+
+    def check(package, version):
+        """Return a fixture result while checking the requested package identity."""
+        assert (package, version) == ("tapebasis", "1.1.1")
+        return next(statuses)
+
+    assert module.await_package(check, "tapebasis", "1.1.1") == "verified"
+    assert delays == [2.0, 2.0]
+
+
+def test_await_package_bounds_persistent_absence(monkeypatch):
+    """Persistent absence cannot turn a post-upload check into an endless retry loop."""
+    module = load("release_registry")
+    attempts = []
+    delays = []
+    clock = iter((0.0, 0.0, 1.0, 2.0))
+    monkeypatch.setenv("REGISTRY_PUBLISH_TIMEOUT_SECONDS", "2")
+    monkeypatch.setenv("REGISTRY_PUBLISH_RETRY_SECONDS", "1")
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(module.time, "sleep", delays.append)
+    with pytest.raises(module.RegistryError, match="remains missing after 2 seconds"):
+        module.await_package(lambda *_args: attempts.append(1) or "missing", "tapebasis", "1.1.1")
+    assert len(attempts) == 3
+    assert delays == [1.0, 1.0]
+
+
+def test_await_package_does_not_retry_conflicts_or_non_404_errors(monkeypatch):
+    """Conflicts and non-404 failures escape without a sleep or a second lookup."""
+    module = load("release_registry")
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: pytest.fail("must not retry"))
+    for result in (module.RegistryError("HTTP 403"), module.RegistryError("invalid JSON"), ValueError("conflicting bytes")):
+        def fail(*_args, error=result):
+            """Raise the injected terminal registry failure."""
+            raise error
+        with pytest.raises(type(result)):
+            module.await_package(fail, "tapebasis", "1.1.1")
+    calls = []
+    assert module.await_package(lambda *_args: calls.append(1) or "verified", "tapebasis", "1.1.1") == "verified"
+    assert calls == [1]
+
+
+def test_await_package_waits_for_partial_but_never_accepts_it(monkeypatch):
+    """A partial PyPI upload is readable again but is not final verification."""
+    module = load("release_registry")
+    statuses = iter(("partial", "verified"))
+    monkeypatch.setenv("REGISTRY_PUBLISH_TIMEOUT_SECONDS", "10")
+    monkeypatch.setenv("REGISTRY_PUBLISH_RETRY_SECONDS", "1")
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    assert module.await_package(lambda *_args: next(statuses), "tapebasis", "1.1.1") == "verified"
+    monkeypatch.setenv("REGISTRY_PUBLISH_TIMEOUT_SECONDS", "0")
+    with pytest.raises(module.RegistryError, match="remains partial"):
+        module.await_package(lambda *_args: "partial", "tapebasis", "1.1.1")
+    with pytest.raises(module.RegistryError, match="not verified"):
+        module.await_package(lambda *_args: "unexpected", "tapebasis", "1.1.1")
+
+
+def test_await_package_rejects_invalid_bounds(monkeypatch):
+    """Malformed, infinite and nonpositive wait settings are explicit failures."""
+    module = load("release_registry")
+    for timeout, interval in (("nan", "1"), ("-1", "1"), ("no", "1"), ("10", "0"), ("10", "inf")):
+        monkeypatch.setenv("REGISTRY_PUBLISH_TIMEOUT_SECONDS", timeout)
+        monkeypatch.setenv("REGISTRY_PUBLISH_RETRY_SECONDS", interval)
+        with pytest.raises(module.RegistryError, match="wait"):
+            module.await_package(lambda *_args: "missing", "tapebasis", "1.1.1")
+
+
+def test_await_visible_cli_uses_post_upload_wait(tmp_path, monkeypatch):
+    """The workflow flag waits for package visibility, rather than permitting an upload."""
+    module = load("release_registry")
+    calls = []
+    monkeypatch.setattr(module, "await_package", lambda check, package, version: calls.append((package, version)) or check(package, version))
+    monkeypatch.setattr(module, "check_pypi", lambda *_args: "verified")
+    assert module.main(["pypi", "--version", "1.1.1", "--dist", str(tmp_path), "--require-existing", "--await-visible"]) == 0
+    assert calls == [("tapebasis", "1.1.1")]
 
 
 def test_registry_errors_and_malformed_metadata_stop(monkeypatch):
@@ -166,6 +295,23 @@ def test_source_requires_original_tag_build_and_started_approval():
     for publisher in ({**jobs[-1], "conclusion": "skipped"}, {**jobs[-1], "started_at": None}, {**jobs[-1], "status": "in_progress"}):
         with pytest.raises(module.SourceError):
             module.validate_source(run, jobs[:-1] + [publisher], artifact, "1.0.0", "c" * 40)
+
+
+def test_notes_source_accepts_no_started_publisher_but_not_missing_validation():
+    """Older validated tags can receive notes without a prior publication job."""
+    module = load("release_artifact_source")
+    run, jobs, artifact = source_fixture()
+    assert module.validate_source(run, jobs[:-1], artifact, "1.0.0", "c" * 40,
+                                 notes_only=True) is None
+    with pytest.raises(module.SourceError, match="source publish job"):
+        module.validate_source(run, jobs[:-1], artifact, "1.0.0", "c" * 40)
+    for insufficient in (jobs[1:-1], jobs[:-2], [{**jobs[0], "conclusion": "failure"}, jobs[1]]):
+        with pytest.raises(module.SourceError):
+            module.validate_source(run, insufficient, artifact, "1.0.0", "c" * 40,
+                                   notes_only=True)
+    with pytest.raises(module.SourceError, match="ambiguous"):
+        module.validate_source(run, [*jobs, jobs[-1]], artifact, "1.0.0", "c" * 40,
+                               notes_only=True)
 
 
 def test_github_json_file_accepts_only_wrapped_base64_objects():
@@ -244,6 +390,66 @@ def test_source_main_accepts_wrapped_contents_base64_before_download(tmp_path, m
     assert "artifact_digest=" + artifact["digest"] in output.read_text()
 
 
+def test_source_only_binds_old_tag_metadata_instead_of_main_version(tmp_path, monkeypatch):
+    """Package continuation accepts an older source identity without weakening its binding."""
+    module = load("release_artifact_source")
+    run, jobs, artifact = source_fixture()
+    server = {"name": "io.github.giraygokirmak/tapebasis", "version": "1.0.0", "packages": [
+        {"registryType": "npm", "identifier": "tapebasis", "version": "1.0.0"},
+        {"registryType": "pypi", "identifier": "tapebasis", "version": "1.0.0"},
+    ]}
+    run = {**run, "repository": {"full_name": "giraygokirmak/tapebasis"}}
+    documents = {
+        "pyproject.toml": b'[project]\nname = "tapebasis"\nversion = "1.0.0"\n',
+        "package.json": json.dumps({"name": "tapebasis", "version": "1.0.0"}).encode(),
+        "src/tapebasis/__init__.py": b'__version__ = "1.0.0"\n',
+        "package-lock.json": json.dumps({"version": "1.0.0", "packages": {"": {"version": "1.0.0"}}}).encode(),
+        "server.json": json.dumps(server).encode(),
+    }
+    responses = {
+        "/actions/runs/43435266134": run,
+        "/actions/runs/43435266134/jobs?per_page=100": {"total_count": len(jobs), "jobs": jobs},
+        "/actions/runs/43435266134/artifacts": {"total_count": 1, "artifacts": [artifact]},
+        "/git/ref/tags/v1.0.0": {"object": {"sha": run["head_sha"], "type": "commit"}},
+    }
+    for name, body in documents.items():
+        encoded = base64.b64encode(body).decode()
+        responses[f"/contents/{name}?ref={run['head_sha']}"] = {"encoding": "base64", "content": encoded}
+    fetched = []
+    monkeypatch.setattr(module, "_api", lambda url, _headers: fetched.append(url) or responses[url.split("/repos/giraygokirmak/tapebasis", 1)[1]])
+    monkeypatch.setattr(module, "download", lambda *_args: None)
+    monkeypatch.setattr(module, "extract", lambda *_args: None)
+    output = tmp_path / "output"
+    monkeypatch.setenv("GITHUB_REPOSITORY", "giraygokirmak/tapebasis")
+    monkeypatch.setenv("GITHUB_SHA", "c" * 40)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setenv("REQUIRED_TAG", "v1.0.0")
+    server_path = tmp_path / "server.json"
+    assert module.main(["--run-id", "43435266134", "--token", "test-token", "--source-only", "--zip", str(tmp_path / "source.zip"), "--dist", str(tmp_path / "dist"), "--server", str(server_path)]) == 0
+    assert json.loads(server_path.read_text()) == server
+    assert output.read_text().startswith("version=1.0.0\n")
+    for name in documents:
+        assert f"/contents/{name}?ref={run['head_sha']}" in [url.split("/repos/giraygokirmak/tapebasis", 1)[1] for url in fetched]
+    monkeypatch.setenv("REQUIRED_TAG", "v1.0.1")
+    assert module.main(["--run-id", "43435266134", "--token", "test-token", "--source-only", "--zip", str(tmp_path / "different.zip"), "--dist", str(tmp_path / "different-dist"), "--server", str(server_path)]) == 1
+
+
+def test_source_metadata_rejects_mismatched_registry_identity():
+    """Continuation cannot pair valid version strings with a different package manifest."""
+    module = load("release_artifact_source")
+    package = {"name": "tapebasis", "version": "1.0.0"}
+    server = {"version": "1.0.0", "packages": [
+        {"registryType": "npm", "identifier": "other", "version": "1.0.0"},
+        {"registryType": "pypi", "identifier": "tapebasis", "version": "1.0.0"},
+    ]}
+    lock = {"version": "1.0.0", "packages": {"": {"version": "1.0.0"}}}
+    with pytest.raises(module.SourceError, match="npm package"):
+        module.check_metadata(
+            '[project]\nname="tapebasis"\nversion="1.0.0"\n', package, server, lock,
+            '__version__ = "1.0.0"\n',
+        )
+
+
 def test_download_checks_size_digest_and_redirect_credential_scope(tmp_path, monkeypatch):
     """Damaged or partial ZIPs are removed and Authorization is stripped cross-host."""
     module = load("release_artifact_source")
@@ -298,42 +504,175 @@ def test_extract_accepts_regular_and_unspecified_unix_file_types(tmp_path):
         assert (tmp_path / "normal-dist" / name).read_bytes() == body
 
 
+def test_source_metadata_rejects_a_disagreeing_init_version():
+    """The source tag's imported package version is part of its immutable identity."""
+    module = load("release_artifact_source")
+    package = {"name": "tapebasis", "version": "1.0.0"}
+    server = {"version": "1.0.0", "packages": [
+        {"registryType": "npm", "identifier": "tapebasis", "version": "1.0.0"},
+        {"registryType": "pypi", "identifier": "tapebasis", "version": "1.0.0"},
+    ]}
+    lock = {"version": "1.0.0", "packages": {"": {"version": "1.0.0"}}}
+    with pytest.raises(module.SourceError, match="__init__.py"):
+        module.check_metadata(
+            '[project]\nname="tapebasis"\nversion="1.0.0"\n', package, server, lock,
+            '__version__ = "0.9.0"\n',
+        )
+
+
 def ghcr_workspace(tmp_path):
-    """Prepare a fake regctl and a no-delay sleep for deterministic GHCR tests."""
+    """Prepare a fake HTTP classifier, registry writer and no-delay sleep."""
     workspace = tmp_path / "workspace"
     (workspace / "scripts").mkdir(parents=True)
     (workspace / "dist").mkdir()
     (workspace / "scripts/check_oci_image.py").write_text('print("sha256:" + "a" * 64)\n')
-    (workspace / "scripts/verify_ghcr.sh").write_bytes((ROOT / "scripts/verify_ghcr.sh").read_bytes())
+    for name in ("verify_ghcr.sh", "ghcr_manifest.py"):
+        (workspace / "scripts" / name).write_bytes((ROOT / "scripts" / name).read_bytes())
     binary = tmp_path / "bin"
     binary.mkdir()
     calls = tmp_path / "calls"
-    (binary / "regctl").write_text("""#!/usr/bin/env bash
+    calls.write_text("")
+    lookup = tmp_path / "lookup.py"
+    lookup.write_text('''import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+tag = args[args.index("--tag") + 1]
+root = Path(os.environ["GHCR_STATE"])
+calls = Path(os.environ["CALLS"])
+with calls.open("a") as stream:
+    stream.write(f"lookup {tag}\\n")
+status = os.environ.get("LOOKUP_STATUS", "match")
+if status in {"401", "403", "503", "network"}:
+    print(f"lookup failed: {status}", file=sys.stderr)
+    sys.exit(3)
+if status in {"present-before-publish", "exact-present"}:
+    state = root / "last-publish"
+    written = state.read_text().splitlines() if state.exists() else []
+    if status == "exact-present" and tag == "1.0.0":
+        status = "match"
+    else:
+        status = "match" if f"ghcr.io/example/tapebasis:{tag}" in written else "absent"
+if status == "remain-absent":
+    status = "absent"
+if status == "absent":
+    print("manifest absent (HTTP 404)", file=sys.stderr)
+    sys.exit(2)
+if status == "conflict":
+    print("has a different digest", file=sys.stderr)
+    sys.exit(1)
+print("sha256:" + "a" * 64)
+''')
+    (binary / "regctl").write_text('''#!/usr/bin/env bash
 printf "%s\\n" "$*" >> "$CALLS"
-if [ "$1" = manifest ]; then
-  if [ "$FAIL" = 1 ]; then exit 1; fi
-  printf '%s' "$DIGEST"
+if [ "$1" = image ]; then
+  if [ -n "${PUBLISH_FAIL:-}" ]; then exit 1; fi
+  target="$3"
+  [ "$2" != copy ] || target="$4"
+  printf '%s\\n' "$target" >> "$GHCR_STATE/last-publish"
 fi
-""")
+''')
     (binary / "regctl").chmod(stat.S_IRWXU)
     (binary / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n")
     (binary / "sleep").chmod(stat.S_IRWXU)
+    (tmp_path / "ghcr-state").mkdir()
     return workspace, calls, binary
 
 
-def test_ghcr_all_tags_retries_mismatch_and_never_imports_in_verify_mode(tmp_path):
-    """Every published tag must be the tested digest, with network-only retries."""
-    workspace, calls, binary = ghcr_workspace(tmp_path)
-    environment = {"GITHUB_REPOSITORY": "example/tapebasis", "PATH": str(binary) + ":/usr/bin:/bin", "REGCTL": str(binary / "regctl"), "CALLS": str(calls), "GHCR_RETRY_SECONDS": "0", "FAIL": "0", "DIGEST": "sha256:" + "a" * 64}
-    result = subprocess.run(["bash", "scripts/verify_ghcr.sh", "1.0.0"], cwd=workspace, env=environment, capture_output=True, text=True)
+def ghcr_environment(fixture, status="match", python=None):
+    """Return hermetic shell inputs for the fake read-only manifest helper."""
+    workspace, calls, binary = fixture
+    return {
+        "GITHUB_REPOSITORY": "example/tapebasis",
+        "GITHUB_REPOSITORY_OWNER": "example",
+        "GHCR_TOKEN": "token",
+        "PATH": str(binary) + ":/usr/bin:/bin",
+        "PYTHON": str(python) if python else "",
+        "REGCTL": str(binary / "regctl"),
+        "CALLS": str(calls),
+        "GHCR_STATE": str(calls.parent / "ghcr-state"),
+        "GHCR_RETRY_SECONDS": "0",
+        "GHCR_LOOKUP": str(calls.parent / "lookup.py"),
+        "LOOKUP_STATUS": status,
+    }
+
+
+def run_ghcr(fixture, environment):
+    """Execute the shell verifier with no actual GHCR or image credentials."""
+    return subprocess.run(
+        ["bash", "scripts/verify_ghcr.sh", "1.0.0", environment.pop("MODE", "verify")],
+        cwd=fixture[0], env=environment, capture_output=True, text=True,
+    )
+
+
+def test_ghcr_all_tags_retries_absence_and_never_imports_in_verify_mode(tmp_path):
+    """Every published tag matches the tested digest and verification never writes."""
+    fixture = ghcr_workspace(tmp_path)
+    calls = fixture[1]
+    result = run_ghcr(fixture, ghcr_environment(fixture))
     assert result.returncode == 0, result.stderr
-    assert calls.read_text().count("manifest get") == 4
+    assert calls.read_text().count("effectively lookup") == 0
+    assert calls.read_text().count("lookup") == 4
     assert "image import" not in calls.read_text() and "registry login" not in calls.read_text()
     calls.write_text("")
-    result = subprocess.run(["bash", "scripts/verify_ghcr.sh", "1.0.0"], cwd=workspace, env={**environment, "DIGEST": "sha256:" + "b" * 64}, capture_output=True, text=True)
-    assert result.returncode != 0 and "has digest" in result.stderr
+    environment = ghcr_environment(fixture, "conflict")
+    result = run_ghcr(fixture, environment)
+    assert result.returncode != 0 and "digest" in result.stderr
     assert "image copy" not in calls.read_text()
     calls.write_text("")
-    result = subprocess.run(["bash", "scripts/verify_ghcr.sh", "1.0.0"], cwd=workspace, env={**environment, "FAIL": "1"}, capture_output=True, text=True)
-    assert result.returncode != 0 and "not readable" in result.stderr
-    assert calls.read_text().count("manifest get") == 5
+    result = run_ghcr(fixture, ghcr_environment(fixture, "403"))
+    assert result.returncode != 0 and "lookup failed" in result.stderr
+    assert calls.read_text().count("lookup") == 1
+    for status in ("401", "503", "network"):
+        calls.write_text("")
+        result = run_ghcr(fixture, ghcr_environment(fixture, status))
+        assert result.returncode != 0
+        assert "image import" not in calls.read_text() and "image copy" not in calls.read_text()
+    calls.write_text("")
+    result = run_ghcr(fixture, ghcr_environment(fixture, "remain-absent"))
+    assert result.returncode != 0 and "remains absent" in result.stderr
+    assert calls.read_text().count("lookup") == 6
+    assert "image import" not in calls.read_text() and "image copy" not in calls.read_text()
+
+
+def test_ghcr_completes_missing_aliases_when_exact_image_already_exists(tmp_path):
+    """An existing exact image permits one login and one copy per absent alias."""
+    fixture = ghcr_workspace(tmp_path)
+    environment = ghcr_environment(fixture, "exact-present")
+    environment["MODE"] = "publish-missing"
+    result = run_ghcr(fixture, environment)
+    assert result.returncode == 0, result.stderr
+    commands = fixture[1].read_text().splitlines()
+    assert sum(line.startswith("lookup") for line in commands) == 7
+    assert sum(line.startswith("registry login") for line in commands) == 1
+    assert not any(line.startswith("image import") for line in commands)
+    assert sum(line.startswith("image copy") for line in commands) == 3
+
+
+def test_ghcr_only_explicit_absence_can_publish(tmp_path):
+    """An absent exact tag is imported once, then each absent alias is copied once."""
+    fixture = ghcr_workspace(tmp_path)
+    calls = fixture[1]
+    environment = ghcr_environment(fixture, "present-before-publish")
+    environment["MODE"] = "publish-missing"
+    result = run_ghcr(fixture, environment)
+    assert result.returncode == 0, result.stderr
+    commands = calls.read_text().splitlines()
+    assert sum(line.startswith("lookup") for line in commands) == 8
+    assert sum(line.startswith("registry login") for line in commands) == 1
+    assert sum(line.startswith("image import") for line in commands) == 1
+    assert sum(line.startswith("image copy") for line in commands) == 3
+    assert "image copy ghcr.io/example/tapebasis:1.0.0 ghcr.io/example/tapebasis:1.0" in commands
+    assert "VERSIONIMAGE" not in calls.read_text()
+
+
+def test_ghcr_failed_publish_is_not_misreported_as_verified(tmp_path):
+    """A write failure remains a failure and cannot be bypassed by a later read."""
+    fixture = ghcr_workspace(tmp_path)
+    environment = ghcr_environment(fixture, "present-before-publish")
+    environment.update(MODE="publish-missing", PUBLISH_FAIL="1")
+    result = run_ghcr(fixture, environment)
+    assert result.returncode != 0
+    assert fixture[1].read_text().count("image import") == 1
+    assert "image copy" not in fixture[1].read_text()

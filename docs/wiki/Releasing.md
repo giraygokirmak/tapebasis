@@ -7,6 +7,8 @@ The protected recovery independently verified these package bytes and image tags
 MCP lookup failed because of a command-line parser bug. The MCP Registry entry remains incomplete
 until the corrected protected recovery succeeds. The npm trusted publisher configuration has not yet
 completed a real OIDC publish, so package availability does not prove that configuration works.
+The in-development `1.1.2` release is not published. Older partial releases require registry-specific
+inspection and protected continuation; their Git tags alone do not establish registry completeness.
 
 ## Partial release recovery
 
@@ -39,6 +41,54 @@ and can attempt duplicate uploads. Instead, use the main-only `release-recovery`
 5. After completion, verify each registry independently: PyPI files, npm integrity, GHCR tags, and
    MCP Registry metadata.
 
+## Protected package continuation
+
+Use this only when the original tested artifacts exist and an approved tag publish job started but left
+publishable registry content absent. Do not move the tag or rebuild replacement artifacts.
+
+1. Restrict the `release` environment to both `v*` tags and `main`, with required reviewer approval.
+   The tag-only restriction is sufficient for new releases, but not for a main-dispatched continuation.
+2. Inspect every registry and identify the source tag and its completed original run ID. Confirm which
+   artifacts are already visible and which are explicitly absent. A differing artifact is never replaced.
+3. Dispatch `release.yml` on `main` with `resume_source_run` and `resume_tag`. These two inputs must be
+   supplied together, with the other input pairs empty. The package continuation requires the original
+   protected publish job to have started, unlike the notes-only route below. It validates all source
+   release identities, the live tag target and GitHub's immutable artifact ZIP digest, then independently
+   downloads the same artifacts after approval.
+4. Existing matching packages and image tags are verified, not uploaded again. On PyPI this comparison
+   is per distribution file: a release with a verified wheel but absent sdist, or the reverse, uploads
+   only that absent file. Any unexpected, duplicate or conflicting file remains fatal. Other absent
+   PyPI files,
+   npm content, GHCR tags or MCP metadata enter their corresponding write step. Any conflict, transport
+   failure or non-404 lookup stops publication. An approved older release can consequently update its
+   short GHCR aliases and `latest`; review that before proceeding.
+5. Only after all registry checks does it write the source tag's Reviewed GitHub Release notes from the
+   dispatched main commit's `CHANGELOG.md`. Use the notes-only operation when a publication step should
+   not run at all.
+
+Every dispatch run ID is passed through an environment variable, never inserted into a shell command.
+The protected writer checks out the dispatched main revision for its helpers and notes, not the old tag's
+workflow. Tag binding still requires the old immutable commit and its tested artifact.
+
+## Reviewed GitHub Release notes
+
+Create a `release-notes` environment restricted to `main`, with required reviewer approval. It has only
+`contents: write` and `actions: read`, no package permission or OIDC identity. It cannot upload packages,
+import or copy images, or publish MCP metadata. The normal and resumed package paths also create or update
+Release notes after their registry checks, using their package identity and tested source commit.
+
+To fill only missing or stale notes, including for a validated source tag whose publish job never started:
+dispatch on `main` with `notes_source_run` and `notes_tag`. Supply both values and no other operation pair.
+The original tag validation and build must both have passed, and its immutable artifact must still be
+available and intact. The writer reads the section for the old tag's version from the dispatched main
+`CHANGELOG.md`, verifies the live tag still targets the tested source commit, and creates or patches only
+that release's title and body. A read-back must match before the step succeeds. It does not claim that a
+source tag was committed at the dispatched main revision, and it does not auto-generate a commit list.
+
+All three dispatch pairs are mutually exclusive. Blank, incomplete or mixed input dispatches perform no
+registry or Release write. Blank dispatches still run ordinary validation without publication. All
+publication jobs use non-cancelling concurrency within their class, so two package writers cannot race.
+
 ## Distribution contract
 
 - `test.yml` runs on main and pull requests, with no publishing credentials. It tests the checkout,
@@ -54,6 +104,16 @@ and can attempt duplicate uploads. Instead, use the main-only `release-recovery`
   are required on the user's machine.
 - A tag build produces the wheel, sdist, npm tarball and OCI image once. The publish job downloads
   those tested artifacts and verifies their SHA-256 checksums instead of silently rebuilding them.
+- Reviewed changelog summaries for the declared version are mandatory. Each GitHub Release uses that
+   section rather than an auto-generated commit list. PyPI's file-level status is `verified`, `missing`
+   or `partial`; separate wheel and sdist outputs ensure attestations and uploads cover only absent
+    files. Post-upload reads wait for either incomplete status and accept only an eventual `verified`. GHCR publication authenticates once before any
+   import or alias copy, including when the exact image already exists. PyPI and npm visibility checks
+   after successful
+   uploads retry only explicit `missing` or `partial` package results for a finite interval and require
+   eventual verified content. GHCR distinguishes HTTP 404
+   absence through its registry API and compares `Docker-Content-Digest` with the tested OCI archive;
+   unrelated error text, authorization failures and conflicting digests never authorize a write.
 - Publication is sequential within the approval-gated publish job: PyPI, then npm, then GHCR. Each
   step must succeed before the next one starts. Only after those package versions resolve does the
   job publish `server.json` to the MCP Registry. A registry has no transaction that can retract an
@@ -64,8 +124,9 @@ and can attempt duplicate uploads. Instead, use the main-only `release-recovery`
 
 ## GitHub release approval
 
-Create one protected environment named `release`. Restrict its deployments to `v*` tags and require
-maintainer review before deployment. Gate all registry uploads through this one approval. Do not
+Create one protected environment named `release`. Restrict its deployments to `v*` tags for ordinary
+releases, and also `main` when an older immutable tag needs an explicit package continuation. Require
+maintainer review in either case. Gate all registry uploads through this one approval. Do not
 create or rely on separate `pypi`, `npm`, `ghcr` or MCP environments; those names would not match the
 workflow. No registry publication secrets need to be stored in the environment.
 
@@ -163,7 +224,8 @@ endpoints are readable.
    installed. On Python 3.10 the project installs `tomli`, so `check_release.py` parses TOML with the
    same implementation used by Python 3.11 and later rather than accepting malformed metadata.
    Source-artifact metadata validation uses the same `tomli` fallback and validates the original
-   version, package lockfiles and source server manifest as one identity. Add
+   version, package lockfiles, `__version__` and source server manifest as one identity. Add the reviewed
+   `CHANGELOG.md` section for this version in the same commit. Add
    `npm test`, `npm run check`, and `npm pack --dry-run` for launcher changes. The full test gate
    already performs the real build, installation and MCP smoke tests.
 4. Land the tested commit on main. Do not tag an uncommitted working tree, and do not tag merely to make

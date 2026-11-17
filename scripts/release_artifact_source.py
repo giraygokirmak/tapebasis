@@ -49,31 +49,88 @@ class SameHostRedirects(urllib.request.HTTPRedirectHandler):
 OPENER = urllib.request.build_opener(SameHostRedirects())
 
 
-def load_metadata(root: pathlib.Path) -> tuple[str, dict]:
-    """Return the common project version and source MCP server manifest."""
+def parse_toml(document: str) -> dict:
+    """Parse TOML using the declared compatibility dependency before Python 3.11."""
     try:
         import tomllib  # type: ignore[import-not-found]
     except ModuleNotFoundError:
         import tomli as tomllib  # type: ignore[import-not-found,no-redef]
+    return tomllib.loads(document)
 
+
+def check_metadata(pyproject: str, package: dict, server: dict, lock: dict,
+                   init: str) -> tuple[str, dict]:
+    """Return one version and MCP manifest after checking every package identity."""
     try:
-        version = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-        package = json.loads((root / "package.json").read_text(encoding="utf-8"))
-        server = json.loads((root / "server.json").read_text(encoding="utf-8"))
-        lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError, KeyError, TypeError) as error:
+        project = parse_toml(pyproject)["project"]
+        version = project["version"]
+        pypi_name = project["name"]
+    except (ValueError, KeyError, TypeError) as error:
         raise SourceError(f"cannot read release metadata: {error}") from error
+    if not isinstance(package, dict) or not isinstance(server, dict) or not isinstance(lock, dict) or not isinstance(pypi_name, str):
+        raise SourceError("release package metadata must be objects")
     if not isinstance(version, str) or not VERSION.fullmatch(version):
         raise SourceError("release version is unsupported")
+    declared = re.search(r'^__version__\s*=\s*"([^"]+)"', init, re.MULTILINE)
+    if not declared or declared[1] != version:
+        raise SourceError("source __init__.py version differs")
     if package.get("version") != version or server.get("version") != version:
         raise SourceError("release metadata versions differ")
     if lock.get("version") != version or lock.get("packages", {}).get("", {}).get("version") != version:
         raise SourceError("npm lock versions differ")
+    expected_packages = {"npm", "pypi"}
+    registry_packages = server.get("packages")
+    if not isinstance(registry_packages, list):
+        raise SourceError("source MCP metadata has no package list")
+    if {entry.get("registryType") for entry in registry_packages if isinstance(entry, dict)} != expected_packages or len(registry_packages) != 2:
+        raise SourceError("source MCP metadata must have exactly one npm and one PyPI package")
+    for entry in registry_packages:
+        if not isinstance(entry, dict) or not isinstance(entry.get("identifier"), str):
+            raise SourceError("source MCP package entry is malformed")
+        if entry.get("version") != version:
+            raise SourceError("source MCP package version differs")
+        if entry.get("registryType") == "npm" and entry.get("identifier") != package.get("name"):
+            raise SourceError("source MCP npm package differs from package.json")
+        if entry.get("registryType") == "pypi" and entry.get("identifier") != parse_toml(pyproject).get("project", {}).get("name"):
+            raise SourceError("source MCP PyPI package differs from pyproject.toml")
     return version, server
 
 
-def validate_source(run: dict, jobs: list[dict], artifact: dict, version: str, sha: str) -> None:
-    """Require a completed approved tag-publish job and a live bound artifact."""
+def load_metadata(root: pathlib.Path) -> tuple[str, dict]:
+    """Return checked release metadata from one source checkout."""
+    try:
+        return check_metadata(
+            (root / "pyproject.toml").read_text(encoding="utf-8"),
+            json.loads((root / "package.json").read_text(encoding="utf-8")),
+            json.loads((root / "server.json").read_text(encoding="utf-8")),
+            json.loads((root / "package-lock.json").read_text(encoding="utf-8")),
+            (root / "src/tapebasis/__init__.py").read_text(encoding="utf-8"),
+        )
+    except OSError as error:
+        raise SourceError(f"cannot read release metadata: {error}") from error
+
+
+def load_source_metadata(base: str, commit: str, headers: dict) -> tuple[str, dict]:
+    """Read and validate all release identities from one immutable tag commit."""
+    documents = {}
+    for name in ("pyproject.toml", "package.json", "server.json", "package-lock.json", "src/tapebasis/__init__.py"):
+        response = _api(f"{base}/contents/{name}?ref={commit}", headers)
+        if response.get("encoding") != "base64" or not isinstance(response.get("content"), str):
+            raise SourceError(f"source {name} is not base64-encoded content")
+        try:
+            body = base64.b64decode("".join(response["content"].splitlines()), validate=True).decode("utf-8")
+        except (ValueError, TypeError, UnicodeDecodeError) as error:
+            raise SourceError(f"source {name} content is invalid: {error}") from error
+        documents[name] = body if name.endswith((".toml", ".py")) else json.loads(body)
+    return check_metadata(
+        documents["pyproject.toml"], documents["package.json"], documents["server.json"],
+        documents["package-lock.json"], documents["src/tapebasis/__init__.py"],
+    )
+
+
+def validate_source(run: dict, jobs: list[dict], artifact: dict, version: str, sha: str,
+                    notes_only: bool = False) -> None:
+    """Require validated tag artifacts, optionally without a prior protected upload job."""
     if run.get("event") != "push" or run.get("name") != "Release" or run.get("head_branch") != f"v{version}":
         raise SourceError("source must be a Release push for the entered version tag")
     if not COMMIT.fullmatch(run.get("head_sha", "")) or run["head_sha"] == sha:
@@ -97,10 +154,14 @@ def validate_source(run: dict, jobs: list[dict], artifact: dict, version: str, s
     if not any(job.get("name") == "Build release artifacts" and job.get("conclusion") == "success" for job in jobs):
         raise SourceError("source tag build did not pass")
     publisher = [job for job in jobs if job.get("name") == f"Publish {version}"]
-    if len(publisher) != 1 or publisher[0].get("conclusion") not in {"success", "failure", "cancelled"}:
-        raise SourceError("source publish job was skipped or cancelled before starting")
-    if not publisher[0].get("started_at") or not publisher[0].get("completed_at"):
-        raise SourceError("source publish job did not start after its protected approval")
+    if notes_only:
+        if len(publisher) > 1:
+            raise SourceError("notes source has an ambiguous publish job")
+    else:
+        if len(publisher) != 1 or publisher[0].get("conclusion") not in {"success", "failure", "cancelled"}:
+            raise SourceError("source publish job was skipped or cancelled before starting")
+        if not publisher[0].get("started_at") or not publisher[0].get("completed_at"):
+            raise SourceError("source publish job did not start after its protected approval")
 
 
 def _api(url: str, headers: dict) -> dict:
@@ -195,6 +256,16 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--zip", type=pathlib.Path, default=pathlib.Path("source-artifacts.zip"))
     parser.add_argument("--dist", type=pathlib.Path, default=pathlib.Path("dist"))
     parser.add_argument("--server", type=pathlib.Path, default=pathlib.Path("recovered-server.json"))
+    parser.add_argument(
+        "--source-only",
+        action="store_true",
+        help="bind source metadata to the old tag instead of the current main checkout",
+    )
+    parser.add_argument(
+        "--notes-only",
+        action="store_true",
+        help="validate Release-note provenance without requiring an earlier publish job",
+    )
     args = parser.parse_args(argv)
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     current = os.environ.get("GITHUB_SHA", "")
@@ -206,9 +277,17 @@ def main(argv: list[str]) -> int:
     headers = {"Authorization": f"Bearer {args.token}", "Accept": "application/vnd.github+json", "User-Agent": "tapebasis-recovery"}
     try:
         root = pathlib.Path(__file__).resolve().parents[1]
-        version, local_server = load_metadata(root)
-        if requested_tag != f"v{version}":
-            raise SourceError(f"requested tag must be v{version}, not {requested_tag!r}")
+        if args.notes_only and not args.source_only:
+            raise SourceError("--notes-only requires --source-only")
+        if args.source_only:
+            version = requested_tag.removeprefix("v")
+            if requested_tag != f"v{version}" or not VERSION.fullmatch(version):
+                raise SourceError("requested source tag must contain one supported semantic version")
+            local_server = None
+        else:
+            version, local_server = load_metadata(root)
+            if requested_tag != f"v{version}":
+                raise SourceError(f"requested tag must be v{version}, not {requested_tag!r}")
         base = f"{API}/repos/{repository}"
         run = _api(f"{base}/actions/runs/{args.run_id}", headers)
         jobs = _api(f"{base}/actions/runs/{args.run_id}/jobs?per_page=100", headers)
@@ -219,7 +298,7 @@ def main(argv: list[str]) -> int:
         if len(artifacts) != 1:
             raise SourceError("source must have exactly one release-artifacts entry")
         artifact = artifacts[0]
-        validate_source(run, jobs.get("jobs", []), artifact, version, current)
+        validate_source(run, jobs.get("jobs", []), artifact, version, current, args.notes_only)
         if run.get("repository", {}).get("full_name") != repository:
             raise SourceError("source repository differs")
         reference = _api(f"{base}/git/ref/tags/v{version}", headers)
@@ -230,15 +309,20 @@ def main(argv: list[str]) -> int:
             target = _api(f"{base}/git/tags/{target}", headers).get("object", {}).get("sha")
         if target != run["head_sha"]:
             raise SourceError("the immutable tag no longer points to the source commit")
-        source_page = _api(f"{base}/contents/server.json?ref={run['head_sha']}", headers)
-        source_server = parse_github_json_file(source_page)
-        if source_server != local_server:
-            raise SourceError("source MCP metadata differs from this recovery checkout")
+        if args.source_only:
+            source_version, source_server = load_source_metadata(base, run["head_sha"], headers)
+            if source_version != version:
+                raise SourceError("source metadata version differs from the requested tag")
+        else:
+            source_page = _api(f"{base}/contents/server.json?ref={run['head_sha']}", headers)
+            source_server = parse_github_json_file(source_page)
+            if source_server != local_server:
+                raise SourceError("source MCP metadata differs from this recovery checkout")
         download(artifact, args.token, args.zip)
         extract(args.zip, args.dist, version)
         args.server.write_text(json.dumps(source_server, indent=2) + "\n", encoding="utf-8")
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
-            stream.write(f"version={version}\nartifact_digest={artifact['digest']}\n")
+            stream.write(f"version={version}\nartifact_digest={artifact['digest']}\ntag_commit={run['head_sha']}\n")
     except (SourceError, OSError, ValueError, KeyError, TypeError, urllib.error.URLError, zipfile.BadZipFile) as error:
         print(f"source artifact rejected: {error}", file=sys.stderr)
         return 1

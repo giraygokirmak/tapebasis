@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FILES = {
     "pyproject": "pyproject.toml",
@@ -27,6 +28,7 @@ FILES = {
     "package": "package.json",
     "lock": "package-lock.json",
     "server": "server.json",
+    "changelog": "CHANGELOG.md",
 }
 VERSION = re.compile(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?")
 PROJECT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -93,6 +95,23 @@ def _load_json(relative: str, errors: list[str]) -> object | None:
         return None
 
 
+def _release_note(version: str) -> str | None:
+    """Return a reviewable finding if the declared release has no unique summary."""
+    try:
+        document = (ROOT / FILES["changelog"]).read_text(encoding="utf-8")
+    except OSError as error:
+        return f"CHANGELOG.md: cannot read reviewed release summary: {error}"
+    matches = list(re.finditer(rf"^## \[{re.escape(version)}\][^\n]*$", document, re.MULTILINE))
+    if len(matches) != 1:
+        return f"CHANGELOG.md: expected exactly one [{version}] release summary"
+    remaining = document[matches[0].end():]
+    next_version = re.search(r"^## ", remaining, re.MULTILINE)
+    summary = remaining[:next_version.start()] if next_version else remaining
+    if not summary.strip():
+        return f"CHANGELOG.md: [{version}] release summary is empty"
+    return None
+
+
 def _matching_packages(packages: object, package: dict, pypi_name: str, version: str) -> bool:
     """Return whether registry entries name this npm and PyPI package at ``version``."""
     if not isinstance(packages, list):
@@ -137,6 +156,8 @@ def collect(tag: str | None, against: str | None) -> list[str]:
         version = "<invalid>"
     elif not VERSION.fullmatch(version):
         errors.append(f"{FILES['pyproject']}: unsupported release version {version!r}")
+    elif note_error := _release_note(version):
+        errors.append(note_error)
 
     try:
         init = _read(FILES["init"])

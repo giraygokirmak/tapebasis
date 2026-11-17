@@ -10,8 +10,11 @@ import argparse
 import base64
 import hashlib
 import json
+import math
+import os
 import pathlib
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -62,18 +65,27 @@ def _local(directory: pathlib.Path, filename: str) -> bytes:
         raise RegistryError(f"cannot read release artifact {filename}: {error}") from error
 
 
-def check_pypi(package: str, version: str, directory: pathlib.Path) -> str:
-    """Return missing or verify both existing PyPI distributions byte-for-byte."""
+def pypi_artifacts(package: str, version: str) -> tuple[str, str]:
+    """Return the wheel and sdist filenames that form one complete PyPI release."""
+    return f"{package}-{version}-py3-none-any.whl", f"{package}-{version}.tar.gz"
+
+
+def inspect_pypi(package: str, version: str, directory: pathlib.Path) -> tuple[str, list[str]]:
+    """Verify each existing file and return the release status and truly absent names."""
     endpoint = f"https://pypi.org/pypi/{urllib.parse.quote(package, safe='')}/{urllib.parse.quote(version, safe='')}/json"
     document = _json(endpoint, missing_ok=True)
+    expected = pypi_artifacts(package, version)
     if document is None:
-        return "missing"
-    expected = {f"{package}-{version}-py3-none-any.whl", f"{package}-{version}.tar.gz"}
+        return "missing", list(expected)
     entries = document.get("urls")
     if not isinstance(entries, list):
         raise RegistryError("PyPI response has no distribution list")
-    names = {entry.get("filename") for entry in entries if isinstance(entry, dict)}
-    if len(entries) != len(expected) or names != expected:
+    if not entries:
+        raise RegistryError("PyPI release returned no distribution files")
+    if any(not isinstance(entry, dict) for entry in entries):
+        raise RegistryError("PyPI returned a malformed distribution entry")
+    names = [entry.get("filename") for entry in entries]
+    if len(set(names)) != len(names) or any(name not in expected for name in names):
         raise RegistryError("PyPI distribution names differ from the tested release")
     for entry in entries:
         filename = entry["filename"]
@@ -85,7 +97,15 @@ def check_pypi(package: str, version: str, directory: pathlib.Path) -> str:
             raise RegistryError("PyPI distribution URL is not HTTPS")
         if _get(url) != local:
             raise RegistryError(f"PyPI bytes differ from tested {filename}")
-    return "verified"
+    missing = [name for name in expected if name not in names]
+    if not missing:
+        return "verified", []
+    return "partial", missing
+
+
+def check_pypi(package: str, version: str, directory: pathlib.Path) -> str:
+    """Return verified, missing or partial after comparing every existing PyPI file."""
+    return inspect_pypi(package, version, directory)[0]
 
 
 def check_npm(package: str, version: str, directory: pathlib.Path) -> str:
@@ -101,6 +121,35 @@ def check_npm(package: str, version: str, directory: pathlib.Path) -> str:
     if document.get("dist", {}).get("integrity") != integrity:
         raise RegistryError("npm integrity differs from the tested tarball")
     return "verified"
+
+
+def await_package(check, package: str, version: str) -> str:
+    """Allow a successful upload to become visible without retrying the upload.
+
+    Only ``missing`` or ``partial`` results are retried. A partial release still
+    fails after the bounded wait. Conflicts and other errors remain fatal.
+    The return value is the checker's successfully verified status.
+    """
+    try:
+        timeout = float(os.environ.get("REGISTRY_PUBLISH_TIMEOUT_SECONDS", "90"))
+        interval = float(os.environ.get("REGISTRY_PUBLISH_RETRY_SECONDS", "5"))
+    except ValueError as error:
+        raise RegistryError("registry publication wait values must be numbers") from error
+    if not math.isfinite(timeout) or not math.isfinite(interval) or timeout < 0 or interval <= 0:
+        raise RegistryError("registry publication wait needs a nonnegative timeout and positive interval")
+    deadline = time.monotonic() + timeout
+    while True:
+        status = check(package, version)
+        if status not in {"missing", "partial"}:
+            if status != "verified":
+                raise RegistryError(f"{package} {version} status {status!r} is not verified")
+            return status
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RegistryError(
+                f"{package} {version} remains {status} after {timeout:g} seconds"
+            )
+        time.sleep(min(interval, remaining))
 
 
 def check_mcp(server: dict, version: str) -> str:
@@ -139,6 +188,11 @@ def main(argv: list[str]) -> int:
         child.add_argument("--dist", required=True, type=pathlib.Path)
         child.add_argument("--package", default="tapebasis")
         child.add_argument("--require-existing", action="store_true")
+        child.add_argument(
+            "--await-visible",
+            action="store_true",
+            help="retry only missing results for a bounded period after an upload",
+        )
     mcp = subparsers.add_parser("mcp")
     mcp.add_argument("--version", required=True)
     mcp.add_argument("--server", required=True, type=pathlib.Path)
@@ -151,12 +205,26 @@ def main(argv: list[str]) -> int:
             status = check_mcp(server, args.version)
         else:
             checker = check_pypi if args.command == "pypi" else check_npm
-            status = checker(args.package, args.version, args.dist)
-            if status == "missing" and args.require_existing:
-                raise RegistryError(f"{args.command} release is absent; recovery cannot upload it")
+            missing = []
+            if args.command == "pypi" and not args.await_visible:
+                status, missing = inspect_pypi(args.package, args.version, args.dist)
+            elif args.await_visible:
+                status = await_package(
+                    lambda package, version: checker(package, version, args.dist),
+                    args.package,
+                    args.version,
+                )
+            else:
+                status = checker(args.package, args.version, args.dist)
+            if args.require_existing and status != "verified":
+                raise RegistryError(f"{args.command} release is not fully verified; recovery cannot upload it")
         if args.output is not None:
             with args.output.open("a", encoding="utf-8") as stream:
                 stream.write(f"{args.command}_status={status}\n")
+                if args.command == "pypi":
+                    wheel, sdist = pypi_artifacts(args.package, args.version)
+                    stream.write(f"pypi_missing_wheel={str(wheel in missing).lower()}\n")
+                    stream.write(f"pypi_missing_sdist={str(sdist in missing).lower()}\n")
     except (RegistryError, OSError, ValueError, TypeError) as error:
         print(f"release registry check failed: {error}", file=sys.stderr)
         return 1

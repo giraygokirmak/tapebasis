@@ -25,6 +25,11 @@ The launcher has no runtime dependencies of its own, forwards arguments and envi
 
 The `v1.0.0` wheel, sdist and npm launcher are published. `pip install tapebasis` and `uvx tapebasis` work directly. GHCR serves the `1.0.0` image for `linux/amd64` and `linux/arm64`. MCP Registry metadata is still being recovered from a partial release and will appear once the protected recovery workflow completes.
 
+Package names and Git tags do not prove that every registry carries the same release. Consult the
+reviewed [changelog](https://github.com/giraygokirmak/tapebasis/blob/main/CHANGELOG.md) for summaries
+and [Releasing](Releasing) for partial-publication recovery. In particular, `1.1.2` is in development
+and is not an available package or image yet.
+
 ### Checkout
 
 ```bash

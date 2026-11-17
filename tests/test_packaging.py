@@ -15,6 +15,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 
 import pytest
 
@@ -104,6 +105,13 @@ def test_built_distribution_initializes_and_lists_tools(distributions, tmp_path)
         )
 
 
+def test_sdist_includes_the_reviewed_changelog(distributions):
+    """The sdist retains the reviewed root changelog for source-package readers."""
+    archive = next(path for path in distributions if path.suffix == ".gz")
+    with tarfile.open(archive, "r:gz") as source:
+        assert any(member.name.endswith("/CHANGELOG.md") for member in source.getmembers())
+
+
 def test_uvx_local_wheel_needs_no_publish_credentials(distributions, tmp_path):
     """Prove uvx can serve the wheel without PyPI publication credentials."""
     env = {key: value for key, value in os.environ.items() if not key.startswith("UV_PUBLISH_")}
@@ -139,6 +147,7 @@ def test_package_manifest_excludes_test_and_checkout_sources(tmp_path):
     manifest = json.loads(result.stdout)[0]
     files = {entry["path"] for entry in manifest["files"]}
     assert "npm/bin/tapebasis.js" in files
+    assert "CHANGELOG.md" in files
     assert not any(path.startswith("src/") for path in files)
     assert not any(path.startswith("tests/") for path in files)
     assert not any(path.startswith("node_modules/") for path in files)

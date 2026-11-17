@@ -51,6 +51,9 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_server.py` | Tool registration, MCP surface |
 | `test_dockerfile.py` | The deployment contract: `tini` as PID 1, the entrypoint argv, `init: true` in compose, MCP image label |
 | `test_packaging.py` | Real wheel/sdist build and isolated installation, MCP stdio smoke, uvx and npm tarball checks. The npm test prepares cold dependencies through the packed launcher before measuring MCP startup |
+| `test_ghcr_manifest.py` | GHCR HTTP 404 absence, exact digest, fatal transport or authorization errors |
+| `test_release_notes.py` | Reviewed changelog selection, source-bound Release writes and read-back |
+| `test_workflows.py` | Exclusive dispatch pairs, separate package and notes permissions, no recovery uploads |
 | `test_release_metadata.py` | Version, tag, registry, lockfile, launcher and previous-ref validation |
 | `smoke_test.py` | Installed-package initialize and tools-list exchange through a real MCP stdio client |
 | `test_quality_gate.py` | The gate's own documentation checks, isolated from an outer Git hook's `GIT_*` environment, plus isolated wiki publishing |
@@ -297,7 +300,7 @@ Three GitHub Actions workflows:
 | Workflow | Purpose |
 | --- | --- |
 | `test.yml` | Install on Python 3.10–3.13, run the suite, build and install Python artifacts, run MCP and npm package checks, and check release metadata and documentation. No uploads |
-| `release.yml` | Validate on main and `v*` tags, build reusable release artifacts, then publish tag artifacts to PyPI, npm, GHCR and the MCP Registry after approval. Main-only `workflow_dispatch` recovery completes missing MCP metadata from a failed tag without touching packages |
+| `release.yml` | Validate on main and `v*` tags, build reusable release artifacts, then publish tag artifacts to PyPI, npm, GHCR and the MCP Registry after approval. Main-only `workflow_dispatch` pairs separately complete missing MCP metadata, resume approved old-tag packages or write only reviewed Release notes |
 | `publish-image.yml` | Reuse `test.yml` for main and pull requests. The old main-image publisher has been removed; it makes no registry uploads |
 
 The tag publish job runs on GitHub-hosted Ubuntu with the pinned npm CLI bundled by Node.js 24. That

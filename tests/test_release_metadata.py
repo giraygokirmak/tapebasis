@@ -65,7 +65,7 @@ def _git(root: Path, *arguments: str):
 @pytest.fixture()
 def checkout(tmp_path, monkeypatch):
     """Copy every release metadata input into a temporary checkout."""
-    for name in ("README.md", "pyproject.toml", "package.json", "package-lock.json", "server.json"):
+    for name in ("README.md", "CHANGELOG.md", "pyproject.toml", "package.json", "package-lock.json", "server.json"):
         (tmp_path / name).write_text((ROOT / name).read_text(encoding="utf-8"), encoding="utf-8")
     (tmp_path / "src/tapebasis").mkdir(parents=True)
     (tmp_path / "src/tapebasis/__init__.py").write_text(
@@ -83,13 +83,15 @@ def history(checkout):
     """Return a complete temporary checkout with an older tagged release."""
     root, checker = checkout
     _project_version(root, "0.9.0")
+    _project_version(root, "1.0.0")
+    _project_version(root, "0.9.9")
     # A repository-level OpenCode hook must not recurse into these fixture commits.
     _git(root, "init", "-q")
     _git(root, "config", "user.name", "Release Tests")
     _git(root, "config", "user.email", "release-tests@example.invalid")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "Previous release")
-    _git(root, "tag", "v0.9.0")
+    _git(root, "tag", "v0.9.9")
     return root, checker
 
 
@@ -111,6 +113,13 @@ def _project_version(root: Path, version: str | None) -> None:
             for key, value in _versioned_json(document, version):
                 value[key] = version
             path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    if version:
+        changelog = root / "CHANGELOG.md"
+        text = changelog.read_text(encoding="utf-8")
+        headings = re.findall(r"^## \[([^]]+)\]", text, re.MULTILINE)
+        if version not in headings:
+            fixture = f"## [{version}] - 2026-11-17\n\n### Changed\n\n- Fixture release summary.\n\n"
+            changelog.write_text(text + fixture, encoding="utf-8")
 
 
 def _versioned_json(value, version):
@@ -240,14 +249,14 @@ def test_historical_version_ignores_a_parent_repository_binding(
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.name")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "Parent repository")
-    assert checker.collect(tag=None, against="v0.9.0") == []
+    assert checker.collect(tag=None, against="v0.9.9") == []
 
 
 def test_previous_tag_must_be_older(history):
     """An older git tag is accepted, while the same or a newer version is stopped."""
     root, checker = history
     _project_version(root, "1.0.0")
-    assert checker.collect(tag=None, against="v0.9.0") == []
+    assert checker.collect(tag=None, against="v0.9.9") == []
     _git(root, "add", "pyproject.toml")
     _git(root, "commit", "-q", "-m", "Current release")
     assert any("unchanged" in error for error in checker.collect(tag=None, against="HEAD"))
@@ -261,7 +270,7 @@ def test_missing_or_invalid_git_version_never_silently_passes(history):
     root, checker = history
     _project_version(root, "1.0.0")
     assert any("cannot read" in error for error in checker.collect(tag=None, against="not-a-ref"))
-    _git(root, "tag", "invalid", "v0.9.0")
+    _git(root, "tag", "invalid", "v0.9.9")
     _project_version(root, None)
     _git(root, "add", "pyproject.toml")
     _git(root, "commit", "-q", "-m", "Malformed version")
@@ -280,7 +289,7 @@ def test_invalid_working_version_never_silently_passes(history):
     """A valid older ref cannot hide an invalid current release version."""
     root, checker = history
     _project_version(root, "1.0")
-    errors = checker.collect(tag=None, against="v0.9.0")
+    errors = checker.collect(tag=None, against="v0.9.9")
     assert any("unsupported release version" in error for error in errors)
 
 
