@@ -285,32 +285,39 @@ def test_source_requires_original_tag_build_and_started_approval():
     """Wrong tag, expired artifact, unapproved publish, or unrelated run cannot recover."""
     module = load("release_artifact_source")
     run, jobs, artifact = source_fixture()
-    module.validate_source(run, jobs, artifact, "1.0.0", "c" * 40)
-    for change in ({"head_branch": "main"}, {"head_sha": "c" * 40}, {"event": "workflow_dispatch"}):
+    module.validate_source(run, jobs, artifact, "1.0.0")
+    for change in ({"head_branch": "main"}, {"head_sha": "not-a-commit"}, {"event": "workflow_dispatch"}):
         with pytest.raises(module.SourceError):
-            module.validate_source({**run, **change}, jobs, artifact, "1.0.0", "c" * 40)
+            module.validate_source({**run, **change}, jobs, artifact, "1.0.0")
     for change in ({"expired": True}, {"size_in_bytes": 0}, {"digest": "sha256:invalid"}):
         with pytest.raises(module.SourceError):
-            module.validate_source(run, jobs, {**artifact, **change}, "1.0.0", "c" * 40)
+            module.validate_source(run, jobs, {**artifact, **change}, "1.0.0")
     for publisher in ({**jobs[-1], "conclusion": "skipped"}, {**jobs[-1], "started_at": None}, {**jobs[-1], "status": "in_progress"}):
         with pytest.raises(module.SourceError):
-            module.validate_source(run, jobs[:-1] + [publisher], artifact, "1.0.0", "c" * 40)
+            module.validate_source(run, jobs[:-1] + [publisher], artifact, "1.0.0")
+
+
+def test_source_allows_current_main_to_be_the_exact_tag_commit():
+    """An immutable tag pushed from current main is still a valid original source."""
+    module = load("release_artifact_source")
+    run, jobs, artifact = source_fixture()
+    assert module.validate_source(run, jobs, artifact, "1.0.0") is None
 
 
 def test_notes_source_accepts_no_started_publisher_but_not_missing_validation():
     """Older validated tags can receive notes without a prior publication job."""
     module = load("release_artifact_source")
     run, jobs, artifact = source_fixture()
-    assert module.validate_source(run, jobs[:-1], artifact, "1.0.0", "c" * 40,
+    assert module.validate_source(run, jobs[:-1], artifact, "1.0.0",
                                  notes_only=True) is None
     with pytest.raises(module.SourceError, match="source publish job"):
-        module.validate_source(run, jobs[:-1], artifact, "1.0.0", "c" * 40)
+        module.validate_source(run, jobs[:-1], artifact, "1.0.0")
     for insufficient in (jobs[1:-1], jobs[:-2], [{**jobs[0], "conclusion": "failure"}, jobs[1]]):
         with pytest.raises(module.SourceError):
-            module.validate_source(run, insufficient, artifact, "1.0.0", "c" * 40,
+            module.validate_source(run, insufficient, artifact, "1.0.0",
                                    notes_only=True)
     with pytest.raises(module.SourceError, match="ambiguous"):
-        module.validate_source(run, [*jobs, jobs[-1]], artifact, "1.0.0", "c" * 40,
+        module.validate_source(run, [*jobs, jobs[-1]], artifact, "1.0.0",
                                notes_only=True)
 
 
@@ -421,7 +428,7 @@ def test_source_only_binds_old_tag_metadata_instead_of_main_version(tmp_path, mo
     monkeypatch.setattr(module, "extract", lambda *_args: None)
     output = tmp_path / "output"
     monkeypatch.setenv("GITHUB_REPOSITORY", "giraygokirmak/tapebasis")
-    monkeypatch.setenv("GITHUB_SHA", "c" * 40)
+    monkeypatch.setenv("GITHUB_SHA", run["head_sha"])
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     monkeypatch.setenv("REQUIRED_TAG", "v1.0.0")
     server_path = tmp_path / "server.json"

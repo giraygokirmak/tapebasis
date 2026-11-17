@@ -128,13 +128,13 @@ def load_source_metadata(base: str, commit: str, headers: dict) -> tuple[str, di
     )
 
 
-def validate_source(run: dict, jobs: list[dict], artifact: dict, version: str, sha: str,
+def validate_source(run: dict, jobs: list[dict], artifact: dict, version: str,
                     notes_only: bool = False) -> None:
     """Require validated tag artifacts, optionally without a prior protected upload job."""
     if run.get("event") != "push" or run.get("name") != "Release" or run.get("head_branch") != f"v{version}":
         raise SourceError("source must be a Release push for the entered version tag")
-    if not COMMIT.fullmatch(run.get("head_sha", "")) or run["head_sha"] == sha:
-        raise SourceError("source commit is invalid or is the recovery commit itself")
+    if not COMMIT.fullmatch(run.get("head_sha", "")):
+        raise SourceError("source commit is invalid")
     if run.get("status") != "completed" or artifact.get("name") != "release-artifacts" or artifact.get("expired"):
         raise SourceError("source run or its artifact is unavailable")
     if artifact.get("workflow_run", {}).get("id") != run.get("id"):
@@ -298,7 +298,7 @@ def main(argv: list[str]) -> int:
         if len(artifacts) != 1:
             raise SourceError("source must have exactly one release-artifacts entry")
         artifact = artifacts[0]
-        validate_source(run, jobs.get("jobs", []), artifact, version, current, args.notes_only)
+        validate_source(run, jobs.get("jobs", []), artifact, version, args.notes_only)
         if run.get("repository", {}).get("full_name") != repository:
             raise SourceError("source repository differs")
         reference = _api(f"{base}/git/ref/tags/v{version}", headers)

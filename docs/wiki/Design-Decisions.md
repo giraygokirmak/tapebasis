@@ -1381,7 +1381,10 @@ direct registry HTTP 404 responses establish GHCR absence. Exact bytes or root d
 must match existing content, and authorization, transport and malformed-response failures are fatal.
 Each missing tag gets at most one write followed by bounded reads. Release bodies use the reviewed
 section from current main's `CHANGELOG.md`, not an automatic commit list or a claim that main is the old
-source commit. The old immutable tag remains the source of its version and commit binding; read-back of
+source commit. The dispatched main commit may equal the source commit when the immutable tag points
+there directly; source eligibility comes from the original Release push and immutable tag, not from an
+unnecessary inequality between those two revisions. A dispatch event still cannot be a source run.
+The old immutable tag remains the source of its version and commit binding; read-back of
 the Release must match. Release writes omit `target_commitish` after verifying a live immutable tag, so GitHub does
 not demand separate workflow-modification authority for an old source commit. This needs only `contents: write`, never
 a persistent personal access token or tag movement. No such helper automatically grants the required environment approval.

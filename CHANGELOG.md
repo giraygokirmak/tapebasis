@@ -18,6 +18,9 @@ Registry availability is recorded separately where a tag was published only part
 
 - Bounded PyPI and npm post-publication retries to explicit incomplete results, accepting only verified content.
 - Added a separately approved continuation using the original tested tag artifacts for an older immutable tag.
+- Allowed a protected continuation whose current main commit exactly equals the immutable source tag's
+  commit. The original Release push, tag target, metadata, successful build and artifact digest remain
+  mandatory; another dispatch run still cannot supply source artifacts.
 - Preserved MCP-only recovery as a read-only package and image path.
 - Prevented GHCR authorization or transport errors from triggering image writes.
 - Associated reviewed Release notes with an existing verified tag without resubmitting a workflow-changing

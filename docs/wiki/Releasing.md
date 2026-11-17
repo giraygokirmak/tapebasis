@@ -71,8 +71,12 @@ publishable registry content absent. Do not move the tag or rebuild replacement 
    supplied together, with the other input pairs empty. The package continuation requires the original
    protected publish job to have started, unlike the notes-only route below. It validates all source
    release identities, the live tag target and GitHub's immutable artifact ZIP digest, then independently
-   downloads the same artifacts after approval. If an earlier tag or continuation run left npm merely
-   staged, approve that staged version first and give this continuation the same source run and tag.
+   downloads the same artifacts after approval. The source must be the original Release push for the
+   immutable tag, never another dispatch run. Current main may be the exact tag commit; source tag,
+   metadata, job results and artifact digest still bind it independently. If an earlier tag or
+   continuation run left npm merely staged, approve that staged version first and give this
+   continuation the same source run and tag. A failed dispatch before the protected writer starts is
+   not retried; fix its source-binding or workflow cause on main and dispatch the same original pair again.
 4. Existing matching packages and image tags are verified, not uploaded again. On PyPI this comparison
    is per distribution file: a release with a verified wheel but absent sdist, or the reverse, uploads
    only that absent file. Any unexpected, duplicate or conflicting file remains fatal. Other absent
