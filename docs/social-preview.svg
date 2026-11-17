@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-labelledby="ogTitle ogDesc">
+  <title id="ogTitle">Tapebasis, cross-checked market data for AI agents</title>
+  <desc id="ogDesc">TradingView, Finviz, Yahoo Finance, StockAnalysis and Bloomberg served together, every overlapping figure cross-checked and labelled ALL, TRADINGVIEW, FINVIZ, YAHOO, SA, BLOOMBERG or NONE.</desc>
+
+  <defs>
+    <linearGradient id="ogBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#080d18"/>
+      <stop offset="0.5" stop-color="#0d1526"/>
+      <stop offset="1" stop-color="#111c33"/>
+    </linearGradient>
+
+    <linearGradient id="ogCool" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="ogWarm" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset="1" stop-color="#f97316"/>
+    </linearGradient>
+    <linearGradient id="ogAccent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="1" stop-color="#38bdf8"/>
+    </linearGradient>
+
+    <radialGradient id="ogGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#5eead4" stop-opacity="0.26"/>
+      <stop offset="0.6" stop-color="#22d3ee" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="ogBloom" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+
+    <path id="ogCoolCurve" d="M118 432 C 176 432, 214 392, 254 344 C 294 296, 332 256, 390 256"/>
+    <path id="ogWarmCurve" d="M118 256 C 176 256, 214 296, 254 344 C 294 392, 332 432, 390 432"/>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#ogBg)"/>
+
+  <!-- Mark, left -->
+  <g transform="translate(56 -24)">
+    <circle cx="254" cy="344" r="196" fill="url(#ogGlow)"/>
+    <path d="M96 344 H420" stroke="#5eead4" stroke-opacity="0.18"
+          stroke-width="2" stroke-dasharray="3 10" stroke-linecap="round"/>
+
+    <use href="#ogCoolCurve" fill="none" stroke="#02060d" stroke-opacity="0.6" stroke-width="29" stroke-linecap="round"/>
+    <use href="#ogWarmCurve" fill="none" stroke="#02060d" stroke-opacity="0.6" stroke-width="29" stroke-linecap="round"/>
+    <use href="#ogCoolCurve" fill="none" stroke="url(#ogCool)" stroke-width="19" stroke-linecap="round"/>
+    <use href="#ogWarmCurve" fill="none" stroke="url(#ogWarm)" stroke-width="19" stroke-linecap="round"/>
+
+    <g stroke-width="5.5" stroke-linecap="round">
+      <path d="M146 424 v-21" stroke="#2dd4bf" opacity="0.95"/>
+      <path d="M186 398 v-20" stroke="#2dd4bf" opacity="0.6"/>
+      <path d="M362 264 v20"  stroke="#3b82f6" opacity="0.95"/>
+      <path d="M322 290 v19"  stroke="#3b82f6" opacity="0.6"/>
+      <path d="M362 424 v-21" stroke="#f97316" opacity="0.95"/>
+      <path d="M322 398 v-20" stroke="#f97316" opacity="0.6"/>
+      <path d="M146 264 v20"  stroke="#fbbf24" opacity="0.95"/>
+      <path d="M186 290 v19"  stroke="#fbbf24" opacity="0.6"/>
+    </g>
+
+    <circle cx="254" cy="344" r="42" fill="#5eead4" opacity="0.24" filter="url(#ogBloom)"/>
+    <circle cx="254" cy="344" r="31" fill="#0a101c" stroke="#5eead4" stroke-width="8"/>
+    <circle cx="254" cy="344" r="11" fill="#5eead4"/>
+    <circle cx="254" cy="344" r="20" fill="none" stroke="#5eead4" stroke-opacity="0.3" stroke-width="2"/>
+  </g>
+
+  <!-- Wordmark and promise, right -->
+  <text x="600" y="258" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="92" font-weight="700" fill="#f1f5f9" letter-spacing="-2.5">tapebasis</text>
+
+  <text x="602" y="316" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="30" font-weight="500" fill="url(#ogAccent)" letter-spacing="0.2">multiple tapes, one basis</text>
+
+  <text x="602" y="386" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="23" fill="#94a3b8">TradingView + Finviz + Yahoo + StockAnalysis and</text>
+  <text x="602" y="420" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="23" fill="#94a3b8">Bloomberg, every overlapping figure cross-checked.</text>
+
+  <!-- The contract, as chips -->
+  <g font-family="'SFMono-Regular', Consolas, Menlo, monospace" font-size="17" font-weight="600">
+    <rect x="602" y="466" width="78" height="42" rx="21" fill="#0f2a26" stroke="#2dd4bf" stroke-opacity="0.55"/>
+    <text x="641" y="493" fill="#5eead4" text-anchor="middle">ALL</text>
+
+    <rect x="690" y="466" width="158" height="42" rx="21" fill="#0d1b30" stroke="#38bdf8" stroke-opacity="0.45"/>
+    <text x="769" y="493" fill="#7dd3fc" text-anchor="middle">TRADINGVIEW</text>
+
+    <rect x="858" y="466" width="118" height="42" rx="21" fill="#2a1e0c" stroke="#fbbf24" stroke-opacity="0.45"/>
+    <text x="917" y="493" fill="#fcd34d" text-anchor="middle">FINVIZ</text>
+
+    <rect x="986" y="466" width="108" height="42" rx="21" fill="#1b1730" stroke="#a78bfa" stroke-opacity="0.45"/>
+    <text x="1040" y="493" fill="#c4b5fd" text-anchor="middle">YAHOO</text>
+
+    <rect x="602" y="518" width="78" height="42" rx="21" fill="#0f2620" stroke="#34d399" stroke-opacity="0.45"/>
+    <text x="641" y="545" fill="#6ee7b7" text-anchor="middle">SA</text>
+
+    <rect x="690" y="518" width="158" height="42" rx="21" fill="#241a12" stroke="#fb923c" stroke-opacity="0.45"/>
+    <text x="769" y="545" fill="#fdba74" text-anchor="middle">BLOOMBERG</text>
+
+    <rect x="858" y="518" width="92" height="42" rx="21" fill="#1a1f2b" stroke="#64748b" stroke-opacity="0.5"/>
+    <text x="904" y="545" fill="#94a3b8" text-anchor="middle">NONE</text>
+  </g>
+
+  <text x="964" y="545" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="19" fill="#64748b">every one of them a real leg</text>
+
+  <text x="602" y="600" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="20" fill="#64748b">MCP server · MIT · no API key required</text>
+</svg>

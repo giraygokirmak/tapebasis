@@ -213,7 +213,9 @@ when none of them can. Set `TAPEBASIS_PYTHON` when the environment lives
 elsewhere.
 
 A push also mirrors `docs/wiki/` into the wiki repository, so the published pages
-cannot lag behind the repository. The mirror is skipped while `docs/wiki/` is
+cannot lag behind the repository. Publishing clears the outer hook's repository locator variables
+before writing to the temporary wiki clone, so a source push cannot accidentally commit wiki files
+to the source branch. The mirror is skipped while `docs/wiki/` is
 identical to the last synced tree, which is recorded in
 `.git/tapebasis-wiki-sync` under the `HEAD:docs/wiki` object name.
 

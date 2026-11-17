@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Git's own copy of the quality gate for a commit.
+#
+# The OpenCode plugin intercepts `git commit` in the shell tool, which is the
+# path an agent takes. This hook covers every other path: a human at the
+# terminal, an IDE, a script. It runs the same script, so neither copy drifts.
+#
+# Install once per clone:  git config core.hooksPath .githooks
+# The plugin sets it on setup, so a fresh clone is covered on first use.
+#
+# `git commit --no-verify` bypasses this hook but not the plugin, and the plugin
+# does not see a commit from outside OpenCode. The two are deliberately
+# independent, so each covers the other's blind spot.
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel)" || exit 1
+exec "$root/scripts/quality-gate.sh" --commit
