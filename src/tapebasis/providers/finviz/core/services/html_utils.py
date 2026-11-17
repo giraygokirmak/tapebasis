@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import html as html_lib
 import json
+import math
 import re
 from typing import Any, Optional
 
@@ -103,17 +104,182 @@ def extract_ssr_props(html: str, island_id: str) -> Optional[Any]:
         return None
 
 
-def parse_analyst_ratings(html: str) -> Optional[dict[str, Any]]:
-    """Return Finviz's analyst targets, distinct visible firms and rating rows.
+_RATING_ARROW_RE = re.compile(r"\s*(?:→|->|⇒|=>)\s*")
+_RATING_TRANSITION_RE = re.compile(
+    r"\s*(?:→|->|⇒|=>)\s*|\s+to\s+", re.IGNORECASE
+)
 
-    ``Analysts`` is not a snapshot metric or an integer in the island's JSON.
-    Its displayed value is the number of distinct firm names in the visible
+_RATING_BUY_LABELS = {
+    "buy",
+    "strong buy",
+    "outperform",
+    "overweight",
+    "accumulate",
+    "positive",
+    "add",
+    "top pick",
+    "above average",
+}
+_RATING_SELL_LABELS = {
+    "sell",
+    "strong sell",
+    "underperform",
+    "under perform",
+    "underweight",
+    "reduce",
+    "negative",
+    "below average",
+    "avoid",
+}
+_RATING_HOLD_LABELS = {
+    "hold",
+    "neutral",
+    "equal weight",
+    "equal-weight",
+    "equalweight",
+    "market perform",
+    "mkt perform",
+    "inline",
+    "in-line",
+    "sector weight",
+    "sector perform",
+    "peer perform",
+    "perform",
+}
+# Modifiers on known Finviz rating terms. A new family such as ``Speculative
+# Buy`` is not admitted just because it ends in a known token.
+_RATING_QUALIFIERS = {"high", "conviction", "long", "term"}
+
+
+def _normalized_rating_label(rating: Optional[str]) -> Optional[dict[str, str | None]]:
+    """Return a rating's category and conservative exact-phrase match rule.
+
+    ``category`` is ``None`` for unknown labels. ``match`` distinguishes a
+    fully recognized phrase from a recognized core with an audited qualifier,
+    such as ``High Conviction Outperform``. This prevents arbitrary new labels
+    ending in ``Buy`` from being silently treated as Buy.
+    """
+    if not rating:
+        return None
+    casefolded = _WS_RE.sub(" ", rating).strip().casefold()
+    if casefolded in {"not rated", "no rating"}:
+        return {"category": "No Rating", "match": "known_phrase"}
+    if casefolded in _RATING_BUY_LABELS:
+        return {"category": "Buy", "match": "known_phrase"}
+    if casefolded in _RATING_SELL_LABELS:
+        return {"category": "Sell", "match": "known_phrase"}
+    if casefolded in _RATING_HOLD_LABELS:
+        return {"category": "Hold", "match": "known_phrase"}
+    for labels, category in (
+        (_RATING_SELL_LABELS, "Sell"),
+        (_RATING_BUY_LABELS, "Buy"),
+        (_RATING_HOLD_LABELS, "Hold"),
+    ):
+        for core in labels:
+            suffix = " " + core
+            if casefolded.endswith(suffix):
+                prefix = casefolded.removesuffix(suffix)
+                if set(prefix.split()).issubset(_RATING_QUALIFIERS):
+                    return {"category": category, "match": "known_qualifier"}
+    return {"category": None, "match": "unclassified"}
+
+
+def _transition_values(
+    value: Any, *, text_transition: bool = False
+) -> tuple[Optional[str], Optional[str]]:
+    """Return a value's before-label and final label after an audited separator.
+
+    Finviz uses the Unicode arrow and, in older rating records, ``to``. Target
+    strings exclude the textual separator so ordinary words cannot split them.
+    """
+    if not isinstance(value, str):
+        return None, None
+    original = _WS_RE.sub(" ", value).strip()
+    if not original:
+        return None, None
+    separator = _RATING_TRANSITION_RE if text_transition else _RATING_ARROW_RE
+    parts = separator.split(original)
+    if len(parts) == 1:
+        return original, original
+    return parts[0].strip() or None, parts[-1].strip() or None
+
+
+def _target_value(value: Optional[str]) -> Optional[float]:
+    """Return a positive finite numeric target from a normalized final label."""
+    if not isinstance(value, str):
+        return None
+    try:
+        target = float(value.replace("$", "").replace(",", "").strip())
+    except ValueError:
+        return None
+    return target if math.isfinite(target) and target > 0 else None
+
+
+def _positive_finite_number(value: Any) -> Optional[float]:
+    """Return a positive finite SSR numeric value, rejecting booleans and text."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    return float(value) if math.isfinite(value) and value > 0 else None
+
+
+def _normalize_rating_row(row: dict[str, Any], last_close: Any) -> dict[str, Any]:
+    """Return an original Finviz row plus parsed rating and target transitions.
+
+    ``implied_upside`` is a decimal ratio using the newest supplied target and
+    only this SSR payload's ``lastClose``. It stays null without both positive
+    values, rather than borrowing a price from another provider. Non-finite
+    inputs and non-finite arithmetic results stay null as well.
+    """
+    normalized = dict(row)
+    rating_from, rating_to = _transition_values(
+        row.get("rating"), text_transition=True
+    )
+    rating_classification = _normalized_rating_label(rating_to) or {}
+    target_from, target_to = _transition_values(row.get("priceTarget"))
+    price_target_from = _target_value(target_from)
+    price_target_to = _target_value(target_to)
+    close = _positive_finite_number(last_close)
+    upside = None
+    if price_target_to is not None and close is not None:
+        try:
+            upside = price_target_to / close - 1
+        except (OverflowError, ZeroDivisionError):
+            upside = None
+        if upside is not None and not math.isfinite(upside):
+            upside = None
+    normalized.update(
+        {
+            "rating_from": rating_from,
+            "rating_to": rating_to,
+            "rating_category": rating_classification.get("category"),
+            "rating_category_match": rating_classification.get("match"),
+            "price_target_from": price_target_from,
+            "price_target_to": price_target_to,
+            "implied_upside": upside,
+        }
+    )
+    return normalized
+
+
+def parse_analyst_ratings(html: str) -> Optional[dict[str, Any]]:
+    """Return Finviz's analyst target and its distinct visible rating populations.
+
+    The source count is the number of distinct firm names in the SSR's visible
     ``ratings`` entries, including entries marked as previous ratings. Repeated
-    actions from one firm are therefore not additional firms. Both that count
-    and the source rows are returned so the derivation remains auditable.
+    actions from one firm are therefore not additional firms. The Buy, Hold,
+    Sell and No Rating distribution instead counts visible rows, after their
+    final rating labels are classified. ``unclassified`` counts labels absent
+    from the audited dictionaries. Neither distribution is a target-estimate
+    population or a count of all contributing analysts.
+
+    Each source row retains its original strings and gains parsed rating and
+    target transitions. ``price_target_to`` follows Finviz's frontend by using
+    the newest target in a change such as ``$425 → $255``. Its upside is
+    relative to the same SSR block's ``lastClose`` and is expressed as a decimal
+    ratio. ``implied_upside_reference_price`` exposes that same reference.
 
     Returns ``None`` when the island or its rating rows are absent. Malformed
-    individual rows are ignored rather than inventing a firm name.
+    individual rows are ignored rather than inventing a firm name or target.
     """
     props = extract_ssr_props(html, "ssr-island-analyst-ratings-0")
     if not isinstance(props, dict) or not isinstance(props.get("ratings"), list):
@@ -126,15 +292,23 @@ def parse_analyst_ratings(html: str) -> Optional[dict[str, Any]]:
         firm = _WS_RE.sub(" ", str(row.get("firm") or "")).strip()
         if not firm:
             continue
-        ratings.append(dict(row))
+        ratings.append(_normalize_rating_row(row, props.get("lastClose")))
         firm_names.add(firm.casefold())
     if not ratings:
         return None
+    distribution = {"buy": 0, "hold": 0, "sell": 0, "no_rating": 0, "unclassified": 0}
+    for row in ratings:
+        category = row["rating_category"]
+        distribution["unclassified" if category is None else category.lower().replace(" ", "_")] += 1
     return {
         "price_target_average": props.get("targetPrice"),
         "mean_recommendation": props.get("recom"),
         "rating_firms": len(firm_names),
         "ratings_included": len(ratings),
+        "rating_distribution": distribution,
+        "rating_distribution_method": "visible_rating_rows_final_labels",
+        "implied_upside_reference_price": _positive_finite_number(props.get("lastClose")),
+        "implied_upside_unit": "decimal_ratio",
         "includes_previous_ratings": True,
         "as_of": props.get("today"),
         "ratings": ratings,

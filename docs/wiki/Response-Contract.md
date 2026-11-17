@@ -46,14 +46,36 @@ fails, `stock_why_moving` keeps `data: null` and exposes its independent news on
 
 **Provider-specific analyst targets stay outside `data`.** `stock_quote` compares
 `price_target_average` between TradingView and Finviz at 0.1 % tolerance, accommodating Finviz's
-rounding. Its top-level `analyst_targets` block instead retains each provider's own figures: a
-TradingView one-year `price_target_estimate_count` is distinct from its past-three-month
-`rating_analyst_count`, and Finviz's `rating_firm_count` counts distinct firms in its shorter visible
-ratings table, not contributors to its average target. Finviz also exposes its `rating_action_count`,
-`includes_previous_ratings`, `as_of` and source `ratings`. Counts do not form agreement, consensus or
-independent editorial verification. TradingView's auxiliary forecast-page failure adds an error with
-`detail.capability: analyst_forecasts` but does not change primary quote coverage or `data_provider`;
-a missing forecast count remains null.
+rounding. Its top-level `analyst_targets` block instead retains each provider's own figures.
+
+TradingView's one-year `price_target_estimate_count` is distinct from its past-three-month
+`rating_analyst_count`. Scanner-supplied `price_target_low` / `price_target_high` and a five-key
+`rating_distribution` remain provider observations. Its bucket mapping is `strong_buy` =
+`recommendation_buy`, `buy` = `recommendation_over`, `hold` = `recommendation_hold`, `sell` =
+`recommendation_under`, `strong_sell` = `recommendation_sell`. `source` names the scanner and
+`forecast_source` names the supplementary forecast page, when it answered.
+
+Finviz's `rating_firm_count` counts distinct firms in its shorter visible ratings table, not
+contributors to its average target. `rating_action_count` counts those source rows, and
+`rating_distribution` classifies each row's final rating label as `buy`, `hold`, `sell` or
+`no_rating`, with unrecognized final labels in `unclassified`; it is not a distinct-firm or total
+analyst population. These derived row counts can differ from Finviz's displayed summary, which uses
+its first valid rating per distinct firm. Each source `ratings` row retains `rating` and `priceTarget`,
+and adds normalized `rating_from`, `rating_to`, `rating_category`, `rating_category_match`, numeric
+`price_target_from`, `price_target_to` and `implied_upside`. The match metadata is `known_phrase`,
+`known_qualifier` for an audited modifier such as High Conviction, `unclassified` for unfamiliar text,
+or null without rating text. The upside is an unrounded decimal ratio, for example 0.25 for 25 %,
+calculated from the newest target and only the same response's SSR `lastClose`.
+`implied_upside_reference_price` and
+`implied_upside_unit` make that explicit. Missing, nonpositive or non-finite target or reference values
+remain null, as does an upside that cannot be represented as a finite number. Another provider's price
+is never substituted. `includes_previous_ratings`, `as_of` and the
+source list expose the derivation.
+
+Counts and provider blocks do not form agreement, consensus or independent editorial verification.
+TradingView's auxiliary forecast-page failure adds an error with `detail.capability:
+analyst_forecasts` but does not change primary quote coverage or `data_provider`; a missing forecast
+count remains null while scanner fields stay available.
 
 News `providers_answered` means providers that supplied at least one valid headline, not merely a
 successful HTTP response. `provider_calls.answered` preserves the lower-level call result. Stories

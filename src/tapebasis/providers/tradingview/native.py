@@ -78,10 +78,20 @@ QUOTE_COLUMNS: tuple[str, ...] = (
     "earnings_release_date",
     # These are fundamental analyst fields, not the technical Recommend.All
     # oscillator. The forecast-page reader supplies the target estimate count
-    # that the scanner does not publish in this row.
+    # that the scanner does not publish in this row. The rating buckets use the
+    # forecast page's own field mapping: Strong Buy = recommendation_buy,
+    # Buy = recommendation_over, Sell = recommendation_under and
+    # Strong Sell = recommendation_sell.
     "price_target_average",
+    "price_target_low",
+    "price_target_high",
     "recommendation_total",
     "recommendation_mark",
+    "recommendation_buy",
+    "recommendation_over",
+    "recommendation_hold",
+    "recommendation_under",
+    "recommendation_sell",
     # The scanner names the session it is in and carries each extended
     # session's own print. ``close`` is the regular feed's last trade, so
     # without these there is no way to tell a stale regular price from the

@@ -144,10 +144,12 @@ async def test_quote_exposes_provider_specific_analyst_counts(fake_providers, mo
         return {
             "ticker": ticker,
             "source": "https://www.tradingview.com/symbols/NASDAQ-AAPL/forecast-price-target/",
-            "price_target_average": 348.519916,
+            # Deliberately different values prove only the estimate count is
+            # read from forecast SSR. Shared analyst fields stay scanner-only.
+            "price_target_average": 999.0,
             "price_target_estimates_num": 39,
-            "recommendation_total": 50,
-            "recommendation_mark": 1.61,
+            "recommendation_total": 99,
+            "recommendation_mark": 4.99,
         }
 
     monkeypatch.setattr(tv_access, "analyst_forecasts", forecast)
@@ -156,10 +158,36 @@ async def test_quote_exposes_provider_specific_analyst_counts(fake_providers, mo
     assert blocks["TRADINGVIEW"]["price_target_estimate_count"] == 39
     assert blocks["TRADINGVIEW"]["rating_analyst_count"] == 50
     assert blocks["TRADINGVIEW"]["price_target_period"] == "1 year"
+    assert blocks["TRADINGVIEW"]["price_target_average"] == 348.519916
+    assert blocks["TRADINGVIEW"]["mean_recommendation"] == 1.61
+    assert blocks["TRADINGVIEW"]["price_target_low"] == 240.0
+    assert blocks["TRADINGVIEW"]["price_target_high"] == 500.0
     assert blocks["TRADINGVIEW"]["rating_period"] == "past 3 months"
     assert blocks["TRADINGVIEW"]["currency"] == "USD"
+    assert blocks["TRADINGVIEW"]["rating_distribution"] == {
+        "strong_buy": 25,
+        "buy": 12,
+        "hold": 10,
+        "sell": 1,
+        "strong_sell": 2,
+    }
+    assert sum(blocks["TRADINGVIEW"]["rating_distribution"].values()) == (
+        blocks["TRADINGVIEW"]["rating_analyst_count"]
+    )
+    assert blocks["TRADINGVIEW"]["source"] == "scanner.tradingview.com"
+    assert blocks["TRADINGVIEW"]["forecast_source"].endswith(
+        "/symbols/NASDAQ-AAPL/forecast-price-target/"
+    )
     assert blocks["FINVIZ"]["rating_firm_count"] == 16
     assert blocks["FINVIZ"]["rating_action_count"] == 20
+    assert blocks["FINVIZ"]["rating_distribution"]["buy"] == 7
+    assert blocks["FINVIZ"]["rating_distribution"]["hold"] == 12
+    assert blocks["FINVIZ"]["rating_distribution"]["sell"] == 0
+    assert blocks["FINVIZ"]["rating_distribution"]["unclassified"] == 1
+    assert sum(blocks["FINVIZ"]["rating_distribution"].values()) == 20
+    assert blocks["FINVIZ"]["rating_distribution_method"] == (
+        "visible_rating_rows_final_labels"
+    )
     assert blocks["FINVIZ"]["includes_previous_ratings"] is True
     assert blocks["FINVIZ"]["ratings"][0]["firm"] == "China Renaissance"
     comparison = next(
@@ -190,6 +218,10 @@ async def test_forecast_failure_does_not_suppress_quote_or_invent_a_count(
     assert result["data"]["price"] == 331.9
     assert result["analyst_targets"]["TRADINGVIEW"]["price_target_estimate_count"] is None
     assert result["analyst_targets"]["TRADINGVIEW"]["rating_analyst_count"] == 50
+    assert result["analyst_targets"]["TRADINGVIEW"]["price_target_low"] == 240.0
+    assert result["analyst_targets"]["TRADINGVIEW"]["price_target_high"] == 500.0
+    assert result["analyst_targets"]["TRADINGVIEW"]["rating_distribution"]["strong_buy"] == 25
+    assert result["analyst_targets"]["TRADINGVIEW"]["forecast_source"] is None
     assert result["analyst_targets"]["FINVIZ"]["rating_firm_count"] == 16
     error = next(
         error for error in result["errors"]

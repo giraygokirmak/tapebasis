@@ -87,7 +87,8 @@ rm ~/.tapebasis/health_state.json     # only after fixing the parser
 **Check `sources` before assuming a bug.** Each label names the primary quote upstream that leg
 actually called: TradingView's scanner, finviz.com, query1.finance.yahoo.com, stockanalysis.com and
 bloomberg.com. The auxiliary forecast URL, when fetched, is instead recorded at
-`analyst_targets.TRADINGVIEW.source`. A closed market should agree to the cent; an intraday read
+`analyst_targets.TRADINGVIEW.forecast_source`; the block's `source` names its scanner data. A closed
+market should agree to the cent; an intraday read
 legitimately will not.
 
 If a mismatch is systematic on one field, the tolerance may be wrong. See
@@ -117,8 +118,9 @@ On FX this is permanent, not a timing accident: spot FX has no single official p
 
 The primary quote can remain available while TradingView's auxiliary forecast page is unavailable.
 Check `errors` for its typed code and `detail.capability`; this does not change `data_provider` or the
-primary `providers_answered`. Scanner and Finviz analyst values remain visible, and
-`price_target_estimate_count` stays null rather than using a rating count or another provider's firms.
+primary `providers_answered`. Scanner and Finviz analyst values remain visible, including the TradingView
+target range and rating distribution. `price_target_estimate_count` stays null rather than using a rating
+count or another provider's firms.
 
 A readable but missing or unrecognized forecast block is `NO_DATA`, not a zero count. Finviz's
 `rating_firm_count` measures distinct firms in its visible ratings rows, not mean-target contributors.

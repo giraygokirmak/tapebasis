@@ -235,9 +235,14 @@ list. Those legs are `NOT_ATTEMPTED`, not errors.
 
 `stock_quote` also compares the shared average analyst target at 0.1 % tolerance for Finviz's rounding.
 Top-level `analyst_targets` retains separate TradingView one-year forecast and three-month rating
-analyst counts, and Finviz distinct firms among its visible rating actions. Those counts are not
-combined, are not contributors to a common denominator and do not form consensus. A forecast-page
-failure is an auxiliary `analyst_forecasts` error and does not change primary quote coverage.
+analyst counts, scanner target bounds and five rating buckets. Finviz distinct firms among its visible
+rating actions stay separate from its visible-row rating distribution, which can differ from Finviz's
+displayed distinct-firm summary and leaves unfamiliar labels unclassified. Source rating rows retain
+their original transition strings alongside parsed before/after labels and targets. Each row's implied upside
+is a decimal ratio based on the newest target and only the same SSR's `lastClose`; missing targets stay
+null, and another provider's price is never borrowed. These populations are not combined, are not
+contributors to a common denominator and do not form consensus. A forecast-page failure is an auxiliary
+`analyst_forecasts` error and does not change primary quote coverage or remove scanner distributions.
 
 `stock_prices` exposes per-symbol `misses` and typed `errors`, so one failed ticker does not sink or
 silently vanish from the batch. A returned row without a usable price is `NO_DATA`, not an answer.
@@ -750,7 +755,7 @@ Yahoo from `query1.finance.yahoo.com`; StockAnalysis from `stockanalysis.com/api
 from `bloomberg.com/quote/...` and its market board, fetched with `curl_cffi` because the site gates
 plain HTTP clients on the TLS fingerprint. Nothing is proxied through another provider. `sources`
 records the primary quote upstream each leg used; the auxiliary forecast URL has its own
-`analyst_targets.TRADINGVIEW.source`.
+`analyst_targets.TRADINGVIEW.forecast_source`; its analyst block's `source` names the scanner.
 
 Where a capability exists on only some providers, that is stated rather than simulated: options
 chains come from Finviz and Yahoo (TradingView contributes only the underlying price), backtests run

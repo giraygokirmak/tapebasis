@@ -1,8 +1,9 @@
 """Recorded-provider tests for analyst targets and their distinct count scopes.
 
-The live AAPL readings were reduced to small fixtures. Finviz's firm count is
-derived from its visible ratings rows; TradingView publishes both populations
-in the forecast page's JSON. No test contacts either upstream.
+The live AAPL and NVDA readings were reduced to small fixtures. Finviz's firm
+count and separate row distribution come from its ratings SSR. TradingView's
+scanner publishes its target range and five rating buckets; forecast SSR
+supplies the distinct target-estimate population. No test contacts either upstream.
 """
 from __future__ import annotations
 
@@ -21,9 +22,24 @@ def _finviz_ratings_html() -> str:
     """Return a quote-page fragment with repeated firms in its ratings island."""
     props = {
         "ratings": [
-            {"date": "2026-11-11", "firm": "China Renaissance", "rating": "Hold to Buy"},
-            {"date": "2026-10-01", "firm": "Morgan Stanley", "rating": "Overweight"},
-            {"date": "2026-09-23", "firm": "Morgan Stanley", "rating": "Overweight"},
+            {
+                "date": "2026-11-11",
+                "firm": "China Renaissance",
+                "rating": "Hold to Buy",
+                "priceTarget": "$300 -> $400",
+            },
+            {
+                "date": "2026-10-01",
+                "firm": "Morgan Stanley",
+                "rating": "Overweight → Mkt Perform",
+                "priceTarget": "",
+            },
+            {
+                "date": "2026-09-23",
+                "firm": "Morgan Stanley",
+                "rating": "Special New Rating",
+                "priceTarget": "$0",
+            },
         ],
         "lastClose": 352.1199951171875,
         "recom": 2.22,
@@ -100,6 +116,146 @@ async def test_finviz_analyst_block_uses_the_same_quote_fetch(monkeypatch):
     assert len(calls) == 1
     assert payload["analyst_targets"]["rating_firms"] == 2
     assert payload["analyst_targets"]["ratings_included"] == 3
+
+
+def test_finviz_normalizes_transitions_and_keeps_auditable_source_text():
+    """Final labels drive row buckets and target upside without erasing originals."""
+    shaped = parse_analyst_ratings(_finviz_ratings_html())
+    assert shaped["rating_distribution"] == {
+        "buy": 1,
+        "hold": 1,
+        "sell": 0,
+        "no_rating": 0,
+        "unclassified": 1,
+    }
+    first, second, third = shaped["ratings"]
+    assert first["rating"] == "Hold to Buy"
+    assert first["rating_from"] == "Hold"
+    assert first["rating_to"] == "Buy"
+    assert first["rating_category"] == "Buy"
+    assert first["rating_category_match"] == "known_phrase"
+    assert first["priceTarget"] == "$300 -> $400"
+    assert first["price_target_from"] == 300.0
+    assert first["price_target_to"] == 400.0
+    assert first["implied_upside"] == pytest.approx(400 / 352.1199951171875 - 1)
+    assert second["rating_from"] == "Overweight"
+    assert second["rating_to"] == "Mkt Perform"
+    assert second["rating_category"] == "Hold"
+    assert second["price_target_from"] is None
+    assert second["price_target_to"] is None
+    assert second["implied_upside"] is None
+    assert third["rating_category"] is None
+    assert third["price_target_to"] is None
+    assert shaped["implied_upside_reference_price"] == 352.1199951171875
+    assert shaped["implied_upside_unit"] == "decimal_ratio"
+
+
+def test_finviz_classification_uses_final_label_and_audited_qualifiers():
+    """Reverse transitions and novel labels cannot inherit a broad Buy fallback."""
+    props = {
+        "ratings": [
+            {"firm": "Bank A", "rating": "Buy to Hold", "priceTarget": "$90 to $100"},
+            {"firm": "Bank B", "rating": "Speculative Buy", "priceTarget": None},
+            {"firm": "Bank C", "rating": "High Conviction Outperform"},
+            {"firm": "Bank D", "rating": None},
+        ],
+        "lastClose": 100,
+    }
+    markup = (
+        '<script type="application/json" '
+        'data-ssr-props="ssr-island-analyst-ratings-0">'
+        + json.dumps(props)
+        + "</script>"
+    )
+    rows = parse_analyst_ratings(markup)["ratings"]
+    assert rows[0]["rating_from"] == "Buy"
+    assert rows[0]["rating_to"] == "Hold"
+    assert rows[0]["rating_category"] == "Hold"
+    assert rows[0]["price_target_from"] is None
+    assert rows[0]["price_target_to"] is None
+    assert rows[1]["rating"] == "Speculative Buy"
+    assert rows[1]["rating_category"] is None
+    assert rows[1]["rating_category_match"] == "unclassified"
+    assert rows[1]["price_target_from"] is None
+    assert rows[1]["price_target_to"] is None
+    assert rows[1]["implied_upside"] is None
+    assert rows[2]["rating_category"] == "Buy"
+    assert rows[2]["rating_category_match"] == "known_qualifier"
+    assert rows[3]["rating_from"] is None
+    assert rows[3]["rating_to"] is None
+    assert rows[3]["rating_category_match"] is None
+
+
+@pytest.mark.parametrize(
+    ("label", "category"),
+    [
+        ("High Conviction Strong Buy", "Buy"),
+        ("Long Term Market Perform", "Hold"),
+        ("High Conviction Underweight", "Sell"),
+    ],
+)
+def test_finviz_known_qualifiers_accept_complete_multiword_cores(label, category):
+    """Audited modifiers retain multiword phrases, not just one-word labels."""
+    shaped = parse_analyst_ratings(_ratings_markup({
+        "ratings": [{"firm": "Bank", "rating": label}],
+        "lastClose": 100,
+    }))
+    assert shaped["ratings"][0]["rating_category"] == category
+    assert shaped["ratings"][0]["rating_category_match"] == "known_qualifier"
+
+
+def _ratings_markup(props: dict) -> str:
+    """Return a ratings island for a focused parser input fixture."""
+    return (
+        '<script type="application/json" '
+        'data-ssr-props="ssr-island-analyst-ratings-0">'
+        + json.dumps(props)
+        + "</script>"
+    )
+
+
+@pytest.mark.parametrize("target", [None, "", "NaN", "Infinity", "-Infinity", 200])
+def test_finviz_rejects_missing_and_non_finite_targets(target):
+    """Targets cannot become non-finite values or leak through numeric SSR text."""
+    markup = _ratings_markup({
+        "ratings": [{"firm": "Bank", "rating": "Buy", "priceTarget": target}],
+        "lastClose": 100,
+    })
+    row = parse_analyst_ratings(markup)["ratings"][0]
+    assert row["price_target_from"] is None
+    assert row["price_target_to"] is None
+    assert row["implied_upside"] is None
+    assert parse_analyst_ratings(markup)["implied_upside_reference_price"] == 100.0
+
+
+def test_finviz_upside_uses_only_the_same_ssr_price_and_positive_target():
+    """A missing, invalid or non-finite reference cannot invent a target upside."""
+    props = {
+        "ratings": [{
+            "firm": "CLSA",
+            "rating": "High Conviction Outperform → Outperform",
+            "priceTarget": "$425 → $255",
+        }],
+        "lastClose": 100.0,
+    }
+    markup = _ratings_markup(props)
+    row = parse_analyst_ratings(markup)["ratings"][0]
+    assert row["rating_from"] == "High Conviction Outperform"
+    assert row["rating_to"] == "Outperform"
+    assert row["rating_category"] == "Buy"
+    assert row["price_target_from"] == 425.0
+    assert row["price_target_to"] == 255.0
+    assert row["implied_upside"] == pytest.approx(1.55)
+    for invalid in (None, 0, -100, "100", True, float("nan"), float("inf")):
+        shaped = parse_analyst_ratings(_ratings_markup({**props, "lastClose": invalid}))
+        row = shaped["ratings"][0]
+        assert row["price_target_from"] == 425.0
+        assert row["price_target_to"] == 255.0
+        assert row["implied_upside"] is None
+        assert shaped["implied_upside_reference_price"] is None
+    for tiny_close in (5e-324, 1e-323):
+        shaped = parse_analyst_ratings(_ratings_markup({**props, "lastClose": tiny_close}))
+        assert shaped["ratings"][0]["implied_upside"] is None
 
 
 @pytest.mark.parametrize(
@@ -250,3 +406,19 @@ def test_scanner_target_count_is_not_replaced_by_rating_buckets():
     """The observed scanner null does not become a guessed forecast population."""
     assert "price_target_estimates_num" not in native.QUOTE_COLUMNS
     assert "recommendation_total" in native.QUOTE_COLUMNS
+
+
+def test_scanner_columns_use_the_forecast_page_rating_field_mapping():
+    """Strong Buy/Buy and Sell/Strong Sell use the frontend's exact raw fields."""
+    expected = {
+        "recommendation_buy": 50,
+        "recommendation_over": 6,
+        "recommendation_hold": 15,
+        "recommendation_under": 0,
+        "recommendation_sell": 1,
+    }
+    assert set(expected).issubset(native.QUOTE_COLUMNS)
+    assert {"price_target_low", "price_target_high"}.issubset(native.QUOTE_COLUMNS)
+    assert sum(expected.values()) == 72
+    assert "recommendation_strong_buy" not in native.QUOTE_COLUMNS
+    assert "recommendation_strong_sell" not in native.QUOTE_COLUMNS

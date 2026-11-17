@@ -294,7 +294,8 @@ Every provider is asked for its own data: TradingView from `scanner.tradingview.
 forecast page and its chart websocket, Finviz from `finviz.com` HTML and JSON islands, Yahoo from `query1.finance.yahoo.com`,
 StockAnalysis from `stockanalysis.com/api/quotes`, Bloomberg from `bloomberg.com` quote pages and its
 market board. Nothing is proxied through another provider. `sources` records the primary quote
-upstream each leg used; the auxiliary forecast URL is at `analyst_targets.TRADINGVIEW.source`.
+upstream each leg used; the auxiliary forecast URL is at `analyst_targets.TRADINGVIEW.forecast_source`
+and that analyst block's `source` names the scanner.
 
 Where a capability exists on only some providers, that is stated, not simulated: options chains come
 from Finviz and Yahoo (TradingView contributes only the underlying price), backtests run twice on

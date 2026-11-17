@@ -569,11 +569,16 @@ def _analyst_target_blocks(
 ) -> dict[str, dict[str, Any]]:
     """Return provider-labelled analyst data without equating count populations.
 
-    TradingView's forecast page supplies both the number of analysts offering a
-    one-year target and the number giving ratings in the past three months. The
-    scanner's rating total is retained when the supplementary page is missing,
-    but it never becomes a forecast count. Finviz exposes its shorter list's
-    distinct visible rating firms, not either of those TradingView counts.
+    TradingView's scanner supplies the target average and range, rating mean,
+    rating total and five rating buckets. Its supplementary forecast-SSR reader
+    supplies the number of analysts offering a one-year target. The scanner's
+    rating total never becomes a target-estimate count.
+
+    Finviz exposes its shorter list's distinct visible rating firms, not either
+    TradingView population. Its rating distribution counts visible rows, not
+    distinct firms, and its unclassified labels remain distinct from Hold.
+    Its source rows retain their original rating and target strings alongside
+    parsed transitions. Each row's upside uses only the same SSR's lastClose.
 
     The blocks live outside ``data``: ``data`` has one selected value and one
     origin per compared field, while each analyst block belongs wholly to its
@@ -585,19 +590,24 @@ def _analyst_target_blocks(
         forecast = tv_forecast or {}
         blocks[TRADINGVIEW] = {
             "currency": quote.get("currency"),
-            "price_target_average": forecast.get("price_target_average")
-            if forecast.get("price_target_average") is not None
-            else quote.get("price_target_average"),
+            "price_target_average": quote.get("price_target_average"),
+            "price_target_low": quote.get("price_target_low"),
+            "price_target_high": quote.get("price_target_high"),
             "price_target_estimate_count": forecast.get("price_target_estimates_num"),
             "price_target_period": "1 year",
-            "rating_analyst_count": forecast.get("recommendation_total")
-            if forecast.get("recommendation_total") is not None
-            else quote.get("recommendation_total"),
+            "rating_analyst_count": quote.get("recommendation_total"),
             "rating_period": "past 3 months",
-            "mean_recommendation": forecast.get("recommendation_mark")
-            if forecast.get("recommendation_mark") is not None
-            else quote.get("recommendation_mark"),
-            "source": forecast.get("source"),
+            "mean_recommendation": quote.get("recommendation_mark"),
+            "rating_distribution": {
+                "strong_buy": quote.get("recommendation_buy"),
+                "buy": quote.get("recommendation_over"),
+                "hold": quote.get("recommendation_hold"),
+                "sell": quote.get("recommendation_under"),
+                "strong_sell": quote.get("recommendation_sell"),
+            },
+            "rating_distribution_method": "scanner_rating_buckets",
+            "source": "scanner.tradingview.com",
+            "forecast_source": forecast.get("source"),
         }
     if pair.fv.payload is not None:
         quote = pair.fv.payload
@@ -611,6 +621,10 @@ def _analyst_target_blocks(
             "price_target_period": None,
             "rating_firm_count": targets.get("rating_firms"),
             "rating_action_count": targets.get("ratings_included"),
+            "rating_distribution": targets.get("rating_distribution"),
+            "rating_distribution_method": targets.get("rating_distribution_method"),
+            "implied_upside_reference_price": targets.get("implied_upside_reference_price"),
+            "implied_upside_unit": targets.get("implied_upside_unit"),
             "includes_previous_ratings": targets.get("includes_previous_ratings"),
             "rating_firm_method": targets.get("field"),
             "mean_recommendation": targets.get("mean_recommendation")
@@ -673,11 +687,12 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         asked provider failed, one provider name when only that provider
         answered, or ``NONE`` when no provider did. ``resolutions``
         records how each provider's ticker was derived. ``analyst_targets``
-        retains each provider's own target, analyst-count scope and, for Finviz,
-        the visible rating actions used to derive its distinct firm count. A
-        failed forecast page adds a capability-tagged error without changing the
-        primary quote's coverage. ``session`` names the window the served
-        ``price`` printed in (``pre_market``, ``regular``,
+        retains each provider's own target, analyst-count scope, rating
+        distribution and, for Finviz, the visible rating actions used to derive
+        its distinct firm count. Finviz row transitions and same-SSR implied
+        upside are retained. A failed forecast page adds a capability-tagged
+        error without changing the primary quote's coverage. ``session`` names
+        the window the served ``price`` printed in (``pre_market``, ``regular``,
         ``post_market`` or ``overnight``), and it is taken from the winning
         provider's own print rather than from another leg's label, so a delayed
         feed cannot describe a print it did not supply.

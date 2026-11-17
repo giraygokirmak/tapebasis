@@ -5,6 +5,15 @@ Registry availability is recorded separately where a tag was published only part
 
 ## [1.1.2] - 2026-11-17
 
+### Added
+
+- Added TradingView analyst target bounds and the forecast page's five-bucket rating distribution
+  using its actual scanner fields, while keeping its SSR target-estimate population separate.
+- Added Finviz visible-row rating distributions, preserved rating and price-target transitions, and
+  per-row implied upside computed only from the same SSR's `lastClose` and newest target. Unknown
+  final rating labels stay unclassified. Missing, invalid and nonpositive targets leave upside null,
+  as do non-finite inputs and results.
+
 ### Fixed
 
 - Bounded PyPI and npm post-publication retries to explicit incomplete results, accepting only verified content.

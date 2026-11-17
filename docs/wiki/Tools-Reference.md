@@ -54,21 +54,46 @@ not evidence of independent editorial or analyst coverage.
 block when its quote page answers. Other primary quote providers have no supplied analyst block. It
 never replaces the count from one provider with another's:
 
-* TradingView's scanner supplies its average target, rating mean and rating count. Its forecast page
-  separately supplies `price_target_estimate_count`, the analysts offering one-year price forecasts,
-  and `rating_analyst_count`, those giving stock ratings in the past three months. The scanner returns
-  null for the estimate-count field, so the page's `price_target_estimates_num` is read explicitly; it
-  is not inferred from recommendation buckets. The currency comes from the scanner.
+* TradingView's scanner supplies its average target, `price_target_low`, `price_target_high`, rating
+  mean and rating count. Its five-key `rating_distribution` follows the forecast page's actual field
+  mapping: Strong Buy = `recommendation_buy`, Buy = `recommendation_over`, Hold = `recommendation_hold`,
+  Sell = `recommendation_under`, Strong Sell = `recommendation_sell`. The forecast page separately
+  supplies `price_target_estimate_count`, the analysts offering one-year price forecasts.
+  `rating_analyst_count`, those giving stock ratings in the past three months, is a different
+  population. The scanner returns null for the estimate-count field, so the page's
+  `price_target_estimates_num` is read explicitly; it is not inferred from recommendation buckets.
+  Currency and ordinary analyst values come from the scanner. `source` names that scanner and
+  `forecast_source` records the auxiliary page when it answered.
 * Finviz's snapshot contains only `Target Price` and `Recom`, respectively the mean target and mean
   recommendation. The visible `AnalystRatings` island on the same already-fetched page supplies the
   target, recommendation, rating list and distinct `rating_firm_count`, with repeated firm actions
-  collapsed. Its `rating_action_count`, `includes_previous_ratings` flag, `as_of` date and source rows
-  expose the derivation. This shorter visible firm list is neither the number of analysts behind its
-  average target nor proof that TradingView's larger populations contradict it.
+  collapsed. Its separate `rating_distribution` classifies final labels from visible rows into `buy`,
+  `hold`, `sell`, `no_rating` and `unclassified`; unlike Finviz's broad UI fallback, an unknown label is
+  not silently called Hold. `rating_category_match` identifies `known_phrase` and audited
+  `known_qualifier` matches, or `unclassified`, so a novel label such as `Speculative Buy` does not
+  inherit Buy merely from its last word. This derived visible-row distribution can differ from
+  Finviz's displayed summary, which uses its first valid rating per distinct firm. The row distribution
+  is neither a distinct-firm nor a total analyst population.
+  `rating_action_count`, `includes_previous_ratings`, `as_of` and source rows expose their
+  derivation. This shorter visible firm list is neither the number of analysts behind its average
+  target nor proof that TradingView's larger populations contradict it.
+
+Every Finviz source row preserves the original `rating` and `priceTarget` strings and adds parsed
+`rating_from`, `rating_to`, `rating_category`, `rating_category_match`, `price_target_from` and
+`price_target_to`. Rating transitions accept arrows and the older `to` syntax, so `Buy to Hold`
+resolves to Hold while target strings split only on numeric arrow separators. For
+`High Conviction Outperform → Outperform` and `$425 → $255`, the parsed values are respectively
+`High Conviction Outperform` / `Outperform` and `425` / `255`; the original strings remain available.
+The row's `implied_upside` is `(price_target_to / lastClose) - 1`, expressed as a decimal ratio. Its
+reference is exposed as `implied_upside_reference_price`, with unit `decimal_ratio`. It is null when
+the newest target or same-SSR `lastClose` is absent, invalid, nonpositive or non-finite, or the result
+cannot be represented as a finite number. It never uses another provider's price. For a 255 target and
+100 reference, the value is approximately 1.55, meaning 155 % upside, without rounding the raw ratio.
 
 A failed TradingView forecast page is an `analyst_forecasts` capability error, not a primary quote
-failure. Scanner data and any successful Finviz analyst block remain available, and the absent forecast
-count stays null. Analyst counts do not join a consensus or an agreement verdict.
+failure. Scanner data, including its range and distribution, and any successful Finviz analyst block
+remain available. The absent forecast count and `forecast_source` stay null. Analyst counts and rating
+distributions do not join a consensus or an agreement verdict.
 
 The `session` key in `data` and at the envelope level names the window `data.price` is a print from:
 `pre_market`, `regular`, `post_market` or `overnight`, and `data.price_field` names the provider field it

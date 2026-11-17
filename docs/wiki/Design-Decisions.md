@@ -1441,6 +1441,48 @@ missing one. The independently selected price target in `data` still has one sou
 
 ---
 
+## 65. Analyst distributions retain their observed fields and rows
+
+**Decision:** TradingView target bounds and rating buckets come from its scanner, while its target
+estimate count still comes from forecast-page SSR. Strong Buy / Buy / Hold / Sell / Strong Sell map in
+order to `recommendation_buy`, `recommendation_over`, `recommendation_hold`, `recommendation_under`
+and `recommendation_sell`. The provider block names the scanner as `source` and the auxiliary page as
+`forecast_source`.
+
+Finviz's Buy / Hold / Sell distribution classifies visible rating rows, not distinct firms or all
+analysts. The final label after an arrow or older rating-only `to` separator is used. Recognized exact
+labels and audited qualifiers expose `known_phrase` / `known_qualifier` matching metadata; novel labels,
+including those ending in a known word, remain `unclassified` rather than inheriting Finviz frontend's
+broad Hold or token-based Buy fallback. The derived row distribution deliberately can differ from
+Finviz's displayed first-valid-rating-per-distinct-firm summary.
+
+A row's parsed before/after labels and targets sit beside its preserved original strings.
+`price_target_to` uses the newest target after a numeric arrow, matching Finviz's own upside calculation.
+`implied_upside` is a decimal ratio computed only with the same SSR's positive finite `lastClose` and
+remains null when an input is absent, invalid or nonpositive, or the result is non-finite. No other
+provider supplies the reference price.
+
+**Why:** live NVDA scanner data exposed price bounds of 130.00 and 710.29 and buckets of 50, 6, 15, 0
+and 1, matching the page's Strong Buy through Strong Sell display when the actual `over` and `under`
+fields were queried. Querying only `buy`, `hold` and `sell` would mislabel that display. The
+`price_target_estimates_num` scanner field was null while forecast SSR supplied 58, so no distribution
+count can replace it.
+
+Finviz's SSR retains richer transitions than its summary. Its frontend extracts the newest target for
+upside, and a CLSA row carried `High Conviction Outperform → Outperform` with `$425 → $255`. Reusing an
+old target, another provider's quote, or a hand-written analyst count would destroy those facts. The
+frontend also has broad negative / positive phrase dictionaries and defaults other labels to Hold.
+The server retains that useful dictionary evidence but makes unfamiliar labels explicit rather than
+calling them a known consensus category.
+
+**Consequence:** consumers can audit which surface and population supplied every number, distinguish
+visible-row distributions from firm and forecast populations, and reproduce each Finviz upside without
+a price substitution. An auxiliary forecast failure removes only its estimate count and URL; scanner
+range and distribution survive. These richer observations still do not prove cross-provider agreement,
+a shared analyst denominator or editorial consensus.
+
+---
+
 ## Related
 
 - [Architecture](Architecture): how these decisions are implemented

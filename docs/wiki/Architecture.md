@@ -91,7 +91,7 @@ access module and its own upstream:
 
 | Leg | Access module | Upstream |
 | --- | --- | --- |
-| TradingView | `tv_access.py` → `providers/tradingview/native.py` | `scanner.tradingview.com` (quotes, screener, mean target and rating count), `www.tradingview.com/symbols/{symbol}/forecast-price-target/` (target estimate and rating populations), `data.tradingview.com` (chart websocket for OHLCV) |
+| TradingView | `tv_access.py` → `providers/tradingview/native.py` | `scanner.tradingview.com` (quotes, screener, mean target and range, rating mean and count, five rating buckets), `www.tradingview.com/symbols/{symbol}/forecast-price-target/` (target-estimate population), `data.tradingview.com` (chart websocket for OHLCV) |
 | TradingView (overnight) | `tv_access.py` → `providers/tradingview/quote_socket.py` | `data.tradingview.com` quote websocket; `qsd` deltas merge into the preceding symbol snapshot |
 | Yahoo (overnight) | `yh_access.py` | `/v7/finance/quote?overnightPrice=true` with a cookie-bound guest crumb; separate from the chart API |
 | Finviz | `fv_access.py` | `finviz.com` HTML pages and `/api/*` JSON islands; the quote page's `AnalystRatings` SSR props supply visible rating rows and their distinct-firm count |
