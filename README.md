@@ -4,7 +4,9 @@
 
 **Multiple tapes, one basis.** An MCP server that serves **TradingView**, **Finviz**, **Yahoo
 Finance**, **StockAnalysis** and **Bloomberg** market data together, cross-checks every overlapping
-figure, and labels each response with the provider that actually produced it.
+figure, and labels each response with the provider that actually produced it. Separate authenticated
+**Equibles** tools add fundamentals, ownership and licensed positioning without merging them into
+those comparisons.
 
 </div>
 
@@ -17,8 +19,10 @@ zero when they agree, reported when they don't.
 The point is redundancy you can *see*. Every provider that could answer a field is asked, natively
 in parallel. When several answer, the data is cross-checked. When only one answers, you get the data,
 clearly marked as single-source. When none answers, you get `NONE` instead of a
-plausible-looking number. And because every provider scrapes or calls an undocumented upstream, a
-background monitor probes every endpoint and reports API/schema drift inside ordinary tool responses.
+plausible-looking number. And because every market-comparison provider scrapes or calls an
+undocumented upstream, a background monitor probes every endpoint and reports API/schema drift inside
+ordinary tool responses. Equibles is the documented exception: its own versioned, Bearer-authenticated
+REST API, its own datasets and an explicit entitlement contract.
 
 Each provider is fetched natively: TradingView's own scanner and chart websocket, Finviz's HTML and
 JSON islands, Yahoo's chart API, StockAnalysis's quote API, Bloomberg's quote pages. No leg proxies
@@ -46,7 +50,7 @@ instead of requested.
 
 ## The `data_provider` contract
 
-Every tool result carries exactly one of eight values. It states **coverage**, never agreement:
+Every tool result carries exactly one of nine values. It states **coverage**, never agreement:
 
 | Value          | Meaning                                                                    |
 | -------------- | -------------------------------------------------------------------------- |
@@ -57,6 +61,7 @@ Every tool result carries exactly one of eight values. It states **coverage**, n
 | `YAHOO`        | Only Yahoo Finance answered. Served, but **not** corroborated.             |
 | `SA`           | Only StockAnalysis answered. Served, but **not** corroborated; US equities and ETFs only. |
 | `BLOOMBERG`    | Only Bloomberg answered. Served, but **not** corroborated; its quote can be delayed. |
+| `EQUIBLES`     | One or more named Equibles datasets answered. Single-source, **never merged** with another provider; `attribution`, `as_of`, `reporting_delay` and `entitlement` are mandatory. |
 | `NONE`         | No provider could supply the primary value; a separately labelled `news` block can still be available. |
 
 `ALL` means "every provider asked answered", not "they agree". Agreement is a separate axis, and it
@@ -65,6 +70,11 @@ never `ALL`: the label describes coverage, and a listed error is missing coverag
 `providers_answered` names exactly which providers contributed. The positive agreement notice appears
 only after a real agreeing comparison. Invalid pairs keep their readings, `match: null` and a
 `not_comparable` reason; a resolved symbol that returns no data is `NO_DATA`, not `NOT_ATTEMPTED`.
+
+An Equibles response has no `comparisons` entries. Its `data_provider` stays `EQUIBLES` even when
+some requested datasets failed, because each surviving block is still Equibles-only and must not be
+read as multi-source corroboration. `EQUIBLES` never joins the market fan-out or the freshness
+tie-break.
 
 The same envelope also contains:
 
@@ -209,7 +219,7 @@ served and clearly labelled, not hidden.
 
 ---
 
-## Tools (35)
+## Tools (41)
 
 ### Multi-source, every capable provider asked, answers compared
 
@@ -274,9 +284,12 @@ leg's provenance. `fields.news.source` is `null`; its `coverage` and `supplied` 
 news contributors. Unparsable times remain `published_at: null` and sort last. If the Finviz
 editorial leg fails, `data` is `null` and independent news remains only in top-level `news`.
 
-**No tool requires an API key.** `market_sentiment` prefers Marketaux when `MARKETAUX_API_TOKEN` is
-set, and otherwise scores Finviz headlines locally (VADER with a financial lexicon). That path is
-deterministic, offline and free. Because the headlines are Finviz's, that path is labelled `FINVIZ`; see [Sentiment](#sentiment-no-api-key-required).
+**No general market tool requires an API key.** `market_sentiment` prefers Marketaux when
+`MARKETAUX_API_TOKEN` is set, and otherwise scores Finviz headlines locally (VADER with a financial
+lexicon). That path is deterministic, offline and free. Because the headlines are Finviz's, that
+path is labelled `FINVIZ`; see [Sentiment](#sentiment-no-api-key-required). The separately named
+Equibles tools do require their own key, and their restricted datasets additionally require the
+explicit Enterprise assertion described below.
 
 ### Finviz-only, served, labelled `FINVIZ`, explicitly single-source
 
@@ -367,9 +380,60 @@ It adds the extended-hours block on the same request (served whole as
 asked about every ticker in a `stock_prices` batch: its pacing absorbs a short list, so it needs no
 cap like Bloomberg's.
 
+### Equibles-only, official authenticated REST, labelled `EQUIBLES`
+
+These six tools read the documented `https://api.equibles.com/v1` API. There is no Equibles web
+scraping, no proxy through another provider and no general price reconciliation. Rows stay in their
+original units and filing scope inside named datasets.
+
+| Tool | Datasets | Access |
+| --- | --- | --- |
+| `stock_fundamentals` | Company/listing profile, one income, balance or cashflow statement, optional annual revenue breakdown, debt profile and guidance versus actuals | API key |
+| `stock_analyst_estimates` | Verified analyst observations and snapshots with exact source metric, period, dimensions, unit, basis, statistic and publication fields | API key |
+| `stock_ownership_flows` | 13F ownership and activity, N-PORT fund owners, Form 144 proposed sales and optional Form 4 insider transactions | API key |
+| `stock_short_positioning` | FINRA short interest and facility volume, optional SEC fails-to-deliver and weekly off-exchange volume | Enterprise redistribution assertion |
+| `stock_options_analytics` | Option summary and term structure, including open interest, put/call ratios, max pain, implied volatility and expected move | Enterprise redistribution assertion |
+| `stock_price_history` | Stored daily, weekly or monthly OHLCV with split adjustment and provider-adjusted close | Enterprise redistribution assertion |
+
+Configuration:
+
+- `TAPEBASIS_EQUIBLES_ENTITLEMENT` names the declared tier and defaults to `standard`.
+- `TAPEBASIS_EQUIBLES_API_KEY` holds the Bearer credential and is its only companion secret variable.
+  The key is sent only in the `Authorization` header to the official API origin. It never appears in
+  a URL, response, error, cache key or diagnostic; cache identity uses a hash fingerprint instead.
+- Set `TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise` **only** while an active Equibles Enterprise
+  agreement actually permits redistribution of the restricted datasets. The flag is an operator
+  assertion, not an entitlement check performed by this server. A real upstream `403` still becomes
+  `not_entitled`; the flag cannot override it.
+- With no key, standard tools return `NOT_CONFIGURED` without transport. With no Enterprise
+  assertion, restricted tools return `not_entitled` before transport. A mixed response where only
+  some datasets are denied keeps `data_provider: EQUIBLES`, reports
+  `entitlement.status: partially_entitled` and lists `denied_datasets`.
+
+Every response, including a missing-key, denied, quota or upstream-error response, carries the exact
+`Data by Equibles` attribution, `as_of`, per-dataset `freshness` and `reporting_delay`, and the
+`entitlement` block. An unavailable dataset has a null timestamp and its delay definition, never a
+timestamp invented from the local response clock. Observation dates such as `reportPeriodDate`,
+`filedDate`, `settlementDate` and `underlyingCloseDate` are not publication times. In particular,
+13F commonly arrives up to 45 days after quarter end, short interest is twice monthly, FTD arrives
+in delayed half-month batches and off-exchange volume is weekly. An option `expiration` is a future
+schedule and is never used as `as_of`.
+
+Equibles Rating, short-squeeze scores and AI Brief are deliberately not implemented, requested or
+derived from the returned observations. Analyst estimates stay source-labelled observations rather
+than becoming a rating. `stock_options_analytics` is separate from the existing multi-provider
+`stock_options_chain`, whose Finviz and Yahoo contracts are unchanged.
+
+Requests are bounded: one request per selected dataset, one request attempt per transport call, no
+automatic pagination and no alternate-provider fallback. A daily-quota `429` retains public
+`X-RateLimit-*` and reset metadata, never retries, and blocks new Equibles requests until that reset.
+See [Configuration](#configuration) for pacing and timeout settings.
+
 ### Ops
 
-- `tapebasis_health`, run the probes now (`refresh=True`) or read the cached verdict.
+- `tapebasis_health`, run the probes now (`refresh=True`) or read the cached verdict. The Equibles
+  probe checks local key and tier configuration plus the last real response's public quota headers;
+  it deliberately spends no upstream quota.
 - `tapebasis_tool_map`, every tool with its providers and comparison strategy, without any
   upstream call.
 
@@ -377,8 +441,10 @@ cap like Bloomberg's.
 
 ## Rate limits are handled per provider
 
-Every upstream is undocumented and rate-limited by its owner, so every request goes through a
-per-provider limiter ([`ratelimit.py`](src/tapebasis/ratelimit.py)):
+Every market-comparison upstream is undocumented and rate-limited by its owner, so every request goes
+through a per-provider limiter ([`ratelimit.py`](src/tapebasis/ratelimit.py)). The documented
+Equibles API uses the same pacing mechanism but a different quota rule: no retry after its daily
+allowance is exhausted.
 
 | Control | What it does |
 | --- | --- |
@@ -464,10 +530,13 @@ the provider code paths**, so a provider can't hide a break by catching its own 
 | `yahoo.chart_fx` | YAHOO | the `EURUSD=X` resolution path still answers |
 | `yahoo.chart_crypto` | YAHOO | the `BTC-USD` resolution path still answers |
 | `sa.quote_api` | SA | `data.p` present in `/api/quotes/s/aapl` |
+| `equibles.api_key` | EQUIBLES | Local key and entitlement configuration plus the last real response's public quota counters; makes no upstream request |
 
-Bloomberg has **no probe**, deliberately: its site gates plain HTTP clients on the TLS fingerprint,
-so an `httpx` probe would report `DOWN` on a healthy provider. Its tool response is the availability
-signal, and it still shows up under `rate_limits`.
+Bloomberg has **no network probe**, deliberately: its site gates plain HTTP clients on the TLS
+fingerprint, so an `httpx` probe would report `DOWN` on a healthy provider. Its tool response is the
+availability signal, and it still shows up under `rate_limits`. Equibles has only the local
+configuration probe above: an upstream probe would spend the daily allowance that the health report
+is meant to preserve, so a configured key is not presented as verified access.
 
 Each successful probe records a SHA-256 fingerprint of the payload's key paths as a **baseline**
 persisted to `~/.tapebasis/health_state.json`. Later probes compare against it, so a renamed
@@ -627,9 +696,23 @@ Everything is optional. See [`.env.example`](.env.example) for the full list.
 | `TAPEBASIS_BLOOMBERG_BATCH_MAX` | `4` | Tickers per `stock_prices` call asked of Bloomberg (its page path is paced at 10 s) |
 | `TAPEBASIS_BLOOMBERG_BATCH_BUDGET` | `12.0` | Total seconds one `stock_prices` call spends on the Bloomberg leg before naming the rest in `warnings` |
 | `TAPEBASIS_BLOCKING_THREADS` | `4` | Worker ceiling for the pool that runs blocking provider calls, separate from the loop's default executor |
+| `TAPEBASIS_EQUIBLES_API_KEY` | - | Bearer credential for the official Equibles REST API; sent only in `Authorization` |
+| `TAPEBASIS_EQUIBLES_ENTITLEMENT` | `standard` | `enterprise` asserts redistribution rights for the restricted Phase 2 datasets; restricted routes refuse without it |
+| `TAPEBASIS_EQUIBLES_MIN_INTERVAL` | `1.0` | Equibles request spacing (s) |
+| `TAPEBASIS_EQUIBLES_MAX_INFLIGHT` | `1` | Equibles concurrent requests; a separate per-loop gate serializes each quota check and send |
+| `TAPEBASIS_EQUIBLES_MAX_RETRIES` | `1` | Shared-limiter metadata only; Equibles transport always requests zero retries |
+| `TAPEBASIS_EQUIBLES_CACHE_TTL` | `900` | Equibles cache lifetime (s); the key fingerprint and tier are part of the cache identity |
+| `TAPEBASIS_EQUIBLES_TIMEOUT` | `30` | Equibles HTTP timeout (s) |
 | `TAPEBASIS_TV_MAX_RETRIES`, `TAPEBASIS_FINVIZ_MAX_RETRIES`, `TAPEBASIS_YAHOO_MAX_RETRIES` | `2` | Retries per provider request (the shared cooldown is not tunable) |
 | `MARKETAUX_API_TOKEN` | - | Optional. Enables licensed Marketaux news + entity sentiment |
 | `MARKETAUX_DAILY_BUDGET` | `90` | Marketaux request cap per day (free plan is 100) |
+
+For security, do not put the Equibles key in an MCP argument, a custom URL, application JSON or a
+shared log. Set only the environment variable in the server process, use a placeholder in
+`.env.example`, and rotate the key if it was ever disclosed. Cached entries are keyed by a short
+SHA-256 fingerprint plus entitlement rather than by the raw secret, and a failed HTTP response is
+replaced with a sanitized error message rather than echoed upstream text. Redirects are refused so a
+Bearer header cannot follow an upstream `Location` to a different origin.
 
 The legacy `TRADINGVIEW_MCP_*` variables still tune the provider-layer technical-analysis services
 while the scanner, websocket and every tool call go through the `TAPEBASIS_*` limiters above.
@@ -650,6 +733,10 @@ No proxy configuration exists: every provider reaches its upstream directly.
    BLOOMBERG   -> same, but find out why in comparisons: a delayed print is
                   reported as not_comparable with the delay named. Quote
                   exchange_delay / print_time before calling a price live.
+   EQUIBLES    -> quote only the returned named datasets as single-source data.
+                  Preserve Data by Equibles, as_of, reporting_delay and the
+                  entitlement state. A partial failure is not corroboration and
+                  a denied dataset must not be silently omitted.
    NONE        -> say the primary value is unavailable. Do not invent one;
                   independently labelled news may still be available.
 
@@ -738,6 +825,8 @@ src/tapebasis/
 ├── yh_access.py          typed access to the Yahoo Finance provider
 ├── bb_access.py          typed access to bloomberg.com (delayed leg + Bloomberg-only tools)
 ├── sa_access.py          typed access to stockanalysis.com (US equities and ETFs)
+├── eq_access.py          allowlisted Equibles REST, Bearer secrecy, quota and freshness
+├── tools_equibles.py     six isolated Equibles tools with entitlement contracts
 ├── catalog.py            plain-data tool catalogue (providers + comparison strategy)
 ├── tools_market.py       multi-source market tools
 ├── tools_finviz.py       Finviz-only tools
@@ -753,7 +842,8 @@ Every provider is asked for its own data. TradingView quotes come from
 `scanner.tradingview.com`, its forecast page and its chart websocket; Finviz from `finviz.com` HTML and JSON islands;
 Yahoo from `query1.finance.yahoo.com`; StockAnalysis from `stockanalysis.com/api/quotes`; Bloomberg
 from `bloomberg.com/quote/...` and its market board, fetched with `curl_cffi` because the site gates
-plain HTTP clients on the TLS fingerprint. Nothing is proxied through another provider. `sources`
+plain HTTP clients on the TLS fingerprint. Equibles comes only from its versioned authenticated REST
+API and is never a leg in the comparisons above. Nothing is proxied through another provider. `sources`
 records the primary quote upstream each leg used; the auxiliary forecast URL has its own
 `analyst_targets.TRADINGVIEW.forecast_source`; its analyst block's `source` names the scanner.
 

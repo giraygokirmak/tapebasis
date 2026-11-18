@@ -52,11 +52,17 @@ def test_all_tools_are_registered():
         "combined_analysis",
         "bloomberg_quote",
         "bloomberg_markets",
+        "stock_fundamentals",
+        "stock_analyst_estimates",
+        "stock_ownership_flows",
+        "stock_short_positioning",
+        "stock_options_analytics",
+        "stock_price_history",
         "tapebasis_health",
         "tapebasis_tool_map",
     }
     assert names == expected
-    assert len(names) == 35
+    assert len(names) == 41
 
 
 def test_every_tool_has_a_description():

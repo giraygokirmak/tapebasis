@@ -27,7 +27,7 @@ The `v1.0.0` wheel, sdist and npm launcher are published. `pip install tapebasis
 
 Package names and Git tags do not prove that every registry carries the same release. Consult the
 reviewed [changelog](https://github.com/giraygokirmak/tapebasis/blob/main/CHANGELOG.md) for summaries
-and [Releasing](Releasing) for partial-publication recovery. In particular, `1.1.2` is in development
+and [Releasing](Releasing) for partial-publication recovery. In particular, `1.1.3` is in development
 and is not an available package or image yet.
 
 ### Checkout
@@ -244,6 +244,6 @@ bloomberg.com rejects plain HTTP clients on the TLS fingerprint.
 ## Next
 
 - [Response Contract](Response-Contract): every field explained
-- [Tools Reference](Tools-Reference): all 35 tools
+- [Tools Reference](Tools-Reference): all 41 tools
 - [Configuration](Configuration): environment variables
 - [Docker](Docker): prebuilt GHCR image or a local build

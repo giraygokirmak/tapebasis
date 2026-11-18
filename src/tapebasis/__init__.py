@@ -15,6 +15,9 @@ compares the answers, and labels each response with exactly one
     delay and a print time derived from the intraday series. StockAnalysis
     covers US equities and ETFs only, and serves the same consolidated tape
     Yahoo does, so that pair is weak corroboration.
+``EQUIBLES``
+    Separate, authenticated Equibles datasets. These are single-source and
+    are never merged into the market comparison above.
 ``NONE``
     No provider produced data.
 
@@ -27,6 +30,6 @@ See :mod:`tapebasis.reconcile` for the fan-out/comparison engine,
 upstream schema-drift monitor.
 """
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 
 __all__ = ["__version__"]

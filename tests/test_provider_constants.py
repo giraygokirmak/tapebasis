@@ -3,10 +3,11 @@
 Two properties.
 
 ``health.PROVIDERS`` and ``tools_market.ALL_PROVIDERS`` were two independent
-literals over the same five labels. Adding a leg to one silently left it
+literals over the reconciliation labels. Adding a leg to one silently left it
 unprobed (or unasked), and nothing failed. They now derive from the single
-``PROVIDER_ORDER`` list, with Bloomberg excluded from the probe list for the one
-stated reason: its site gates plain HTTP clients on the TLS fingerprint.
+``PROVIDER_ORDER`` list. Bloomberg is excluded from plain HTTP probes because
+of its TLS gate; Equibles is excluded from general market fan-out because it
+must never be merged with another provider.
 
 Blocking provider work used ``asyncio.to_thread``, which runs on the loop's
 default executor, shared with everything else that pool serves. A whole-market
@@ -28,7 +29,9 @@ def test_the_market_tools_ask_exactly_the_reconciliation_order():
     """A second literal let a tool ask a provider the reconciler does not order."""
     from tapebasis import tools_market
 
-    assert tools_market.ALL_PROVIDERS == PROVIDER_ORDER
+    assert tools_market.ALL_PROVIDERS == tuple(
+        provider for provider in PROVIDER_ORDER if provider != "EQUIBLES"
+    )
 
 
 def test_the_health_monitor_probes_every_leg_it_can_reach():
@@ -36,7 +39,12 @@ def test_the_health_monitor_probes_every_leg_it_can_reach():
     from tapebasis import health
 
     assert set(health.PROVIDERS) == set(PROVIDER_ORDER) - {"BLOOMBERG"}
-    assert "BLOOMBERG" not in health.PROVIDERS
+    assert {"BLOOMBERG", "EQUIBLES"}.isdisjoint(health.PROVIDERS)
+    assert "EQUIBLES" not in PROVIDER_ORDER
+    from tapebasis.providers_state import DataProvider
+
+    assert DataProvider.EQUIBLES.value == "EQUIBLES"
+    assert any(probe.provider == "EQUIBLES" for probe in health._probes())
 
 
 def test_error_codes_are_stated_once():

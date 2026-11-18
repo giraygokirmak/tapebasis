@@ -86,9 +86,10 @@ from .symbols import (
 #: US-only coverage of the latter are handled by the print-time guards and the
 #: resolution notes rather than by keeping them out of the comparison.
 #:
-#: Derived from :data:`tapebasis.providers_state.PROVIDER_ORDER`, which is the
-#: single list of provider labels: a second literal here would let a tool ask a
-#: provider the reconciler does not order, or order one the tools never ask.
+#: Derived from :data:`tapebasis.providers_state.PROVIDER_ORDER`, which contains
+#: only the general market fan-out. Equibles is deliberately outside that list:
+#: its separate single-provider fundamental and positioning tools never merge
+#: into a live price or use this general provider set.
 ALL_PROVIDERS = PROVIDER_ORDER
 
 #: Read a numeric environment override without letting a typo crash the import.

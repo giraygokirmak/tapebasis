@@ -52,6 +52,7 @@ _WARM_ORIGINS: tuple[str, ...] = (
     "query1.finance.yahoo.com",
     "query2.finance.yahoo.com",
     "stockanalysis.com",
+    "api.equibles.com",
 )
 
 #: Strong references to the in-flight warm-up tasks. A bare ``create_task``

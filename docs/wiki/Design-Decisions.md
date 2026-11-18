@@ -1493,6 +1493,91 @@ a shared analyst denominator or editorial consensus.
 
 ---
 
+## Equibles stays isolated, authenticated and licensed
+
+**Decision:** phase 1 consists of `stock_fundamentals`, `stock_analyst_estimates` and
+`stock_ownership_flows`. Phase 2 consists of `stock_short_positioning`,
+`stock_options_analytics` and `stock_price_history`. All six use only the official
+`https://api.equibles.com/v1` REST routes. Equibles is represented by the `EQUIBLES` provider label,
+but not by `PROVIDER_ORDER`, `tools_market.ALL_PROVIDERS` or the reconciler's `DEFAULT_ORDER`.
+Existing Finviz/Yahoo data and `stock_options_chain` are unchanged. Raw upstream objects stay in
+named datasets rather than one combined payload. Rating, squeeze-score and AI Brief capabilities
+are neither called nor derived from observations.
+
+**Why:** the integration has a distinct authentication, redistribution and freshness contract. A
+Finviz-like scalar merge would lose filing scope, original units and publication delay, and would
+make an uncorroborated licensed dataset look like multi-source agreement. Keeping Equibles outside
+`PROVIDER_ORDER` is deliberate: that list drives existing market fan-out, comparisons, resolution
+labels and freshness selection. It is not the catalogue enum. The six tools raise
+`DataProvider.EQUIBLES` directly and leave every existing price leg unchanged.
+
+### Attribution and failure are first-class
+
+Every returned tool envelope carries exact `attribution: "Data by Equibles"`, `as_of`, per-dataset
+`freshness` and `reporting_delay`, `entitlement`, `params_applied` and the no-merge policy, including
+when no dataset answered. Caller-argument validation happens before envelope construction and is not
+disguised as an upstream response. A failed or denied dataset keeps its delay definition and null
+observation dates instead of inheriting the local response clock. Intended query parameters stay
+visible on preflight denial, with no claim that they were sent.
+
+A partial dataset failure remains `data_provider: EQUIBLES`, not `PARTIAL`. `PARTIAL` is a
+multi-source coverage statement and would make these responses sound corroborated. `errors` names
+the failed dataset, `fields` identifies only Equibles as supplier, and `data` preserves the
+surviving raw blocks. With some `403` responses, the status is `partially_entitled` and
+`denied_datasets` lists the unavailable blocks. A tool-wide preflight denial expands that list to the
+actual requested dataset names, not a synthetic `all` item. When all fail, state is `NONE` and `data` is null
+while licensing/freshness metadata remains visible.
+
+Freshness uses dataset-specific observation semantics rather than the maximum of every upstream
+date. Statements use fiscal period dates, insiders use `transactionDate` while filing dates stay
+separate as `publication_at`, guidance uses `filedDate`, short interest uses `settlementDate` and
+options use underlying close/open-interest dates. `expiration` is a contract schedule, not an
+observation. Publication availability must not be conflated with the value's observation date.
+`observation_age_seconds` and date-only approximation flags never imply exact intraday knowledge.
+
+### Enterprise is a local redistribution assertion
+
+`TAPEBASIS_EQUIBLES_ENTITLEMENT` defaults to `standard`; only exact case-insensitive `enterprise`
+asserts permission to redistribute the restricted short/FTD/off-exchange, options and stored-price
+datasets. Unknown values fall back to standard instead of becoming arbitrary response tiers.
+
+This is explicitly **Tapebasis's stricter local redistribution policy**, not a claim that the
+upstream API names or enforces the same plan requirement. Upstream plan behavior does not waive the
+operator's need for an active Enterprise agreement before redistribution. Tapebasis cannot verify
+that agreement. The route map `eq_access.ROUTES` is both route allowlist and the low-level authority
+for this policy; a caller's readability flag cannot bypass it or impose Enterprise on an ordinary
+route. Actual upstream `403` maps to `not_entitled` regardless of the local setting.
+
+### Secrets and quota fail closed
+
+The token is read only from `TAPEBASIS_EQUIBLES_API_KEY`, the companion to the tier setting. It is
+placed only in an `Authorization: Bearer ...` header to the hard-coded official origin. URLs,
+provenance, responses, exception strings and health state never contain it. Cache identity contains
+a short SHA-256 fingerprint plus tier, so a key rotation misses the previous key's cache without
+retaining the credential. Redirect responses are refused, upstream error prose is replaced with a
+sanitized category, and no undocumented routes are reachable.
+
+One selected dataset means one request and no automatic pagination. The transport explicitly calls
+the shared limiter with `attempts=0`. Its general configuration remains intact but does not re-enable
+Equibles retries. A `429` retains only public `X-RateLimit-*` and reset details, and blocks later
+calls until reset. The block is checked both before entry and inside the protected send path; a
+loop-local lock makes that check plus the one corresponding request atomic. A second concurrent
+caller therefore cannot cross the daily quota after the first caller observes its `429`, even if
+ordinary limiter concurrency is configured wider. These locks are weakly per event loop; there is
+no import-time global asyncio primitive.
+
+Health deliberately does not call the quota-bearing Equibles API. It reports local key/tier
+configuration and, after a real response, structured quota/reset state through `rate_limits`.
+A configured key is not described as verified access. `tapebasis_health` coverage describes all
+checks in its local report, not network use, and `tapebasis_tool_map.providers_answered` describes
+providers represented in the local catalogue, not providers contacted or exclusively reconciliation
+legs.
+
+**Validation boundary:** all transport, concurrency, entitlement and freshness tests are hermetic
+mocks. The suite automatically refuses any unfaked `api.equibles.com` transport. No real credential
+or Enterprise agreement was available, so live endpoint behavior and publication rights are not
+claimed as verified.
+
 ## Related
 
 - [Architecture](Architecture): how these decisions are implemented

@@ -12,6 +12,7 @@ Providers are first-class peers, asked in parallel:
 ``YAHOO``        query1.finance.yahoo.com chart API.
 ``SA``           stockanalysis.com's consolidated quote API, US equities/ETFs.
 ``BLOOMBERG``    bloomberg.com public quote pages, a leg with a known delay.
+``EQUIBLES``     authenticated SEC-derived fundamentals and licensed positioning.
 
 ``ALL`` means **every provider that was asked answered**. It is a statement
 about coverage, not about agreement. Agreement is a separate axis: it lives in
@@ -45,6 +46,10 @@ stated rather than presented as two witnesses. It sits immediately before
 Bloomberg in the documented order: a live feed, but the narrowest coverage (US
 equities and ETFs, no indices, FX, crypto, commodities or foreign listings), so it should not
 outrank a broader feed on a tie.
+
+Equibles is deliberately outside general price reconciliation. Its official,
+authenticated REST tools preserve single-provider datasets with attribution,
+observation timestamps, reporting delays and explicit entitlement status.
 """
 from __future__ import annotations
 
@@ -63,6 +68,7 @@ class DataProvider(str, Enum):
     YAHOO = "YAHOO"
     SA = "SA"
     BLOOMBERG = "BLOOMBERG"
+    EQUIBLES = "EQUIBLES"
     NONE = "NONE"
 
 
@@ -83,6 +89,9 @@ class Verification(str, Enum):
 #: Bloomberg and StockAnalysis are last because they are the legs whose
 #: coverage is narrowest or whose prints can be structurally older: order only
 #: matters for display and for the documented tie-break.
+# Equibles is a catalogue provider below, not another market-comparison leg.
+# Keeping it out of this order preserves every existing quote/freshness loop;
+# its six isolated tools use DataProvider.EQUIBLES directly.
 PROVIDER_ORDER: tuple[str, ...] = (
     "TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"
 )
@@ -94,6 +103,7 @@ PROVIDER_NAMES: dict[str, str] = {
     "YAHOO": "Yahoo Finance",
     "SA": "StockAnalysis",
     "BLOOMBERG": "Bloomberg",
+    "EQUIBLES": "Equibles",
 }
 
 
@@ -145,6 +155,11 @@ PROVIDER_MEANING: dict[DataProvider, str] = {
         "equity and index quotes are exchange-delayed; check `exchange_delay` and "
         "`print_time` before calling a price live."
     ),
+    DataProvider.EQUIBLES: (
+        "Data came from EQUIBLES only. It is single-source and NOT corroborated, "
+        "and it is never merged with another provider. Keep the 'Data by "
+        "Equibles' attribution, as_of timestamp and reporting delay with the data."
+    ),
     DataProvider.NONE: (
         "No provider could supply this data. Do not present any value for it."
     ),
@@ -191,6 +206,7 @@ ERROR_CODES: tuple[str, ...] = (
     "UPSTREAM_ERROR",
     "UPSTREAM_RATE_LIMIT",
     "UPSTREAM_TIMEOUT",
+    "not_entitled",
 )
 
 

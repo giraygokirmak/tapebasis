@@ -3,6 +3,47 @@
 Tapebasis uses semantic versions. Each release section is the reviewed source of its GitHub Release summary.
 Registry availability is recorded separately where a tag was published only partially.
 
+## [1.1.3] - 2026-11-18
+
+### Added
+
+- Added six separate Equibles tools backed only by the official authenticated REST API:
+  `stock_fundamentals`, `stock_analyst_estimates`, `stock_ownership_flows`,
+  `stock_short_positioning`, `stock_options_analytics` and `stock_price_history`.
+  The tool surface is now 41 tools; existing Finviz, Yahoo and `stock_options_chain` contracts
+  remain unchanged, and Equibles never joins the market fan-out. Raw datasets keep their original
+  units, filing evidence, scope and per-dataset freshness and reporting delays.
+- Added explicit response and failure contracts for `Data by Equibles`, `as_of`, `reporting_delay`
+  and entitlement. Partial dataset failures stay `EQUIBLES`; partial `403` responses expose
+  `partially_entitled` and `denied_datasets` rather than silently reducing coverage.
+- Added a local Equibles configuration and declared-tier gate. `TAPEBASIS_EQUIBLES_API_KEY` supplies
+  the Bearer credential, and `TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise` asserts that the operator's
+  active redistribution agreement covers the restricted Phase 2 datasets. Preflight denials and real
+  upstream `403` responses both use `not_entitled`; the flag does not override an actual denial.
+- Equibles Rating, squeeze scores and AI Brief are deliberately absent: they are neither requested,
+  implemented nor synthesized from the returned observations.
+- Added an allowlisted redirect-refusing Equibles transport with sanitized errors, one request per
+  selected dataset, no automatic pagination and no transport retries after daily `429`. Public quota
+  and reset metadata blocks later requests until reset and appears in `tapebasis_health` under
+  `rate_limits`. Health checks inspect only local configuration and the last real quota headers;
+  this quota deadline is in-memory only and is not restored after a process restart.
+- Added an automatic hermetic Equibles network guard plus tests for route and Enterprise bypass,
+  redirects, sanitized errors, cache key rotation, concurrent daily-quota blocking and two event
+  loops. No tests use a live credential or Equibles endpoint.
+
+### Changed
+
+- Raised package, MCP Registry and launcher versions to `1.1.3`. Documentation now describes all six
+  Equibles tools and the nine provider labels alongside their security, freshness, quota and health
+  semantics.
+
+### Release process
+
+- No live Equibles key or Enterprise agreement was available during validation. Endpoint behavior and
+  actual Enterprise publication rights are therefore not claimed as verified. Tagging, package
+  publication and registry availability remain separate protected release steps; this version bump
+  claims no completed publication or registry availability.
+
 ## [1.1.2] - 2026-11-17
 
 ### Added
@@ -96,6 +137,7 @@ Registry availability is recorded separately where a tag was published only part
 - PyPI, npm and the tested GHCR image were published and verified by protected recovery.
 - MCP Registry metadata remains at this version while later package releases are completed.
 
+[1.1.3]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/giraygokirmak/tapebasis/compare/v1.0.0...v1.1.0

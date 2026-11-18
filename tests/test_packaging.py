@@ -90,7 +90,8 @@ async def _check_npm_stdio(launcher: Path, env: dict[str, str], cwd: Path) -> No
             names = {tool.name for tool in tools.tools}
             assert "stock_quote" in names
             assert "tapebasis_health" in names
-            assert len(names) == 35
+            assert "stock_fundamentals" in names
+            assert len(names) == 41
 
 
 def test_built_distribution_initializes_and_lists_tools(distributions, tmp_path):

@@ -162,8 +162,15 @@ class ProviderLimiter:
         self._cache.clear()
 
     def snapshot(self) -> dict[str, Any]:
+        """Return public pacing state and any structured Equibles quota state.
+
+        Equibles quota headers and its epoch reset deadline are operational
+        metadata, not credentials or upstream response prose. They are attached
+        dynamically by that access layer; other provider snapshots stay
+        unchanged. A past deadline remains visible with zero remaining seconds.
+        """
         now = time.monotonic()
-        return {
+        result = {
             "provider": self.provider,
             "min_interval_s": self.min_interval,
             "max_inflight": self.max_inflight,
@@ -171,6 +178,16 @@ class ProviderLimiter:
             "block_streak": self._block_streak,
             "cached_entries": len(self._cache),
         }
+        quota = getattr(self, "equibles_quota", None)
+        if isinstance(quota, dict) and quota:
+            result["quota"] = dict(quota)
+        blocked_until = float(getattr(self, "equibles_blocked_until", 0.0) or 0.0)
+        if blocked_until > 0:
+            remaining = max(0.0, blocked_until - time.time())
+            result["quota_blocked_until_epoch"] = blocked_until
+            result["quota_blocked_remaining_s"] = round(remaining, 1)
+            result["quota_block_active"] = remaining > 0
+        return result
 
 
 class RateLimitError(Exception):
@@ -222,6 +239,14 @@ LIMITERS: dict[str, ProviderLimiter] = {
         min_interval=_env_float("TAPEBASIS_BLOOMBERG_MIN_INTERVAL", 10.0),
         max_inflight=_env_int("TAPEBASIS_BLOOMBERG_MAX_INFLIGHT", 1),
         max_retries=_env_int("TAPEBASIS_BLOOMBERG_MAX_RETRIES", 1),
+    ),
+    # Equibles API quotas apply across MCP and REST. One shared limiter keeps
+    # this process from adding a burst on top of the account's other clients.
+    "EQUIBLES": ProviderLimiter(
+        provider="EQUIBLES",
+        min_interval=_env_float("TAPEBASIS_EQUIBLES_MIN_INTERVAL", 1.0),
+        max_inflight=_env_int("TAPEBASIS_EQUIBLES_MAX_INFLIGHT", 1),
+        max_retries=_env_int("TAPEBASIS_EQUIBLES_MAX_RETRIES", 1),
     ),
 }
 

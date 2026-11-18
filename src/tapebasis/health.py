@@ -1,10 +1,11 @@
 """Upstream health and schema-drift monitor.
 
-Every provider scrapes or calls an undocumented upstream (finviz.com's HTML
-and unversioned JSON islands, TradingView's scanner and symbol search, Yahoo's
-chart API, stockanalysis.com's quote API). Any of them can change a path, a
-JSON key or a status code without notice. When that happens, tools start
-failing or silently returning zeros.
+Every market-comparison provider scrapes or calls an undocumented upstream
+(finviz.com's HTML and unversioned JSON islands, TradingView's scanner and symbol
+search, Yahoo's chart API, stockanalysis.com's quote API). Any of them can change
+a path, a JSON key or a status code without notice. When that happens, tools start
+failing or silently returning zeros. Equibles instead uses documented,
+authenticated REST and has a separate local configuration probe.
 
 This module probes each upstream directly, independently of the provider code
 paths, and classifies the result:
@@ -42,22 +43,25 @@ TRADINGVIEW = "TRADINGVIEW"
 FINVIZ = "FINVIZ"
 YAHOO = "YAHOO"
 SA = "SA"
+EQUIBLES = "EQUIBLES"
 
 #: Every provider the monitor probes, in display order. Derived from the one
 #: provider order in :mod:`tapebasis.providers_state` rather than written out
 #: again, so the monitor's list and the reconciliation list cannot disagree:
-#: they used to be two independent literals, and adding a leg to one silently
-#: left it unprobed.
-#:
-#: Bloomberg is the one leg left out. bloomberg.com gates plain HTTP clients on
-#: the TLS fingerprint, so an ``httpx`` probe there would report a false outage
-#: on a provider whose tools work (see :mod:`tapebasis.tools_health`).
-PROVIDERS: tuple[str, ...] = tuple(p for p in PROVIDER_ORDER if p != "BLOOMBERG")
+#: Bloomberg is excluded because its site gates plain HTTP clients on the TLS
+#: fingerprint. Equibles has a separate local probe below: it checks credentials
+#: and entitlement without spending the shared REST/MCP daily request quota.
+#: That probe intentionally is not in this display list, which remains the
+#: set of independently HTTP-probed reconciliation legs.
+PROVIDERS: tuple[str, ...] = tuple(
+    p for p in PROVIDER_ORDER if p not in {"BLOOMBERG", "EQUIBLES"}
+)
 
 STATUS_OK = "OK"
 STATUS_DRIFT = "DRIFT"
 STATUS_DOWN = "DOWN"
 STATUS_UNKNOWN = "UNKNOWN"
+STATUS_NOT_CONFIGURED = "NOT_CONFIGURED"
 
 DEFAULT_INTERVAL = float(os.environ.get("TAPEBASIS_HEALTH_INTERVAL", "300"))
 DEFAULT_TTL = float(os.environ.get("TAPEBASIS_HEALTH_TTL", "60"))
@@ -348,6 +352,13 @@ def _probes() -> list[Probe]:
             required_keys=("chart.result.0.meta", "chart.result.0.timestamp"),
             watched_keys=_YAHOO_CHART_FIELDS,
         ),
+        # ── Equibles: local configuration only, no quota-bearing request ───
+        Probe(
+            id="equibles.api_key",
+            provider=EQUIBLES,
+            description="Equibles API-key presence and Enterprise configuration (local)",
+            url="local:equibles-entitlement",
+        ),
         # ── StockAnalysis ───────────────────────────────────────────────────
         Probe(
             id="sa.quote_api",
@@ -535,6 +546,29 @@ class HealthMonitor:
             description=probe.description,
             url=probe.url,
         )
+        if probe.id == "equibles.api_key":
+            # An upstream health request would count against the very daily
+            # allowance this report helps preserve. Configuration and the last
+            # real request's public quota headers are enough until a tool call.
+            from . import eq_access
+            from .ratelimit import limiter
+
+            paced = limiter(EQUIBLES)
+            quota = getattr(paced, "equibles_quota", {})
+            result.checked_at = time.time()
+            if not eq_access.api_key():
+                result.status = STATUS_NOT_CONFIGURED
+                result.message = "TAPEBASIS_EQUIBLES_API_KEY is not set; no upstream request was made"
+            else:
+                result.status = STATUS_OK
+                result.message = (
+                    "API key is configured; actual access is verified only by an explicit tool call"
+                    if not quota else f"Last real API response quota: {quota}"
+                )
+            result.watched = [
+                f"entitlement={eq_access.entitlement()}", f"quota={quota}",
+            ]
+            return result
         started = time.monotonic()
 
         async def _once() -> httpx.Response:
@@ -742,6 +776,8 @@ class HealthMonitor:
             return STATUS_DOWN
         if any(r.status == STATUS_DRIFT for r in rows):
             return STATUS_DRIFT
+        if any(r.status == STATUS_NOT_CONFIGURED for r in rows):
+            return STATUS_NOT_CONFIGURED
         return STATUS_OK
 
     def degraded(self) -> bool:
@@ -786,7 +822,8 @@ class HealthMonitor:
             limiters = {}
         return {
             "providers": {
-                provider: self.provider_status(provider) for provider in PROVIDERS
+                provider: self.provider_status(provider)
+                for provider in (*PROVIDERS, EQUIBLES)
             },
             "degraded": self.degraded(),
             "issues": self.issues(),

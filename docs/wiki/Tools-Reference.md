@@ -1,6 +1,6 @@
 # Tools Reference
 
-35 tools. `providers` is the tool's **possible** provider set, not a promise about any single call:
+41 tools. `providers` is the tool's **possible** provider set, not a promise about any single call:
 an individual response can degrade to fewer providers if some fail. The per-call truth is always that
 response's `data_provider` plus its `providers_answered`.
 
@@ -585,6 +585,158 @@ as a snapshot, not a live tape.
 
 ---
 
+## Equibles-only (6)
+
+These tools call the documented, versioned `https://api.equibles.com/v1` REST API with a Bearer key.
+They do not scrape an Equibles page, proxy through another provider or join the market-comparison
+fan-out. Their raw response objects stay in separately named datasets: no value is merged with
+TradingView, Finviz, Yahoo, StockAnalysis or Bloomberg. `comparisons` remains empty and
+`verification` is `SINGLE_SOURCE` when at least one dataset answers.
+
+All six returned envelopes, including preflight denials and transport failures, carry top-level
+`attribution: "Data by Equibles"`, `as_of`, `freshness`, `reporting_delay` and `entitlement`. An
+available envelope also repeats those fields inside `data`; when every dataset failed, `data` is null
+and the top-level contract remains. Malformed caller arguments are rejected before this envelope is
+constructed. `params_applied` retains the intended query for each dataset, including when preflight
+refusal means it was never sent, and any clamped bound is also a warning. There is one request per
+selected dataset and no automatic pagination.
+
+`TAPEBASIS_EQUIBLES_API_KEY` is read only from the environment. The key goes only in the
+`Authorization` header to the official origin. It is never returned in a URL, response, error,
+provenance or diagnostic, and the cache uses a hashed key fingerprint plus the entitlement tier.
+`TAPEBASIS_EQUIBLES_ENTITLEMENT` defaults to `standard`. `401` makes configuration visibly unusable;
+a missing key keeps the declared `standard` tier with `configured: false`.
+
+`TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise` is the operator's explicit assertion that an active
+Enterprise agreement permits redistribution. It is not a check this server can perform. Restricted
+calls are denied with `not_entitled` before transport without that setting, and an actual `403` has
+the same code even with it. If some datasets succeed and others return `403`, the response stays
+`data_provider: EQUIBLES`, with `entitlement.status: partially_entitled` and `denied_datasets`.
+Redirect responses are refused rather than followed, so credentials cannot be forwarded elsewhere.
+After a daily-quota `429`, public quota/reset metadata is retained, no retry is made and further
+requests stop until reset. That remembered quota block is process-local and is lost on restart.
+
+Equibles Rating, squeeze scores and AI Brief are not requested, implemented or derived. Analyst
+observations are not converted into a proprietary rating, and option calculations are not converted
+into squeeze or dealer-sign opinions.
+
+### `stock_fundamentals`
+
+| | |
+| --- | --- |
+| Authentication | `TAPEBASIS_EQUIBLES_API_KEY`; standard route set |
+| Symbol | Mechanical US-listed ticker; share classes accept `BRK.B` or `BRK-B` |
+| `statement` | `income` (default), `balance` or `cashflow` |
+| `year`, `period` | Optional single fiscal period; `period` is `FY`, `Q1`, `Q2`, `Q3` or `Q4` |
+| `include_segments` | Include annual revenue breakdown, default true |
+| `include_debt` | Include reported balances, instruments and covenant coverage, default true |
+| `include_guidance` | Include management guidance and reported actuals, default true |
+| Requests | Profile plus statement, then one for each selected optional block; debt pages cap at 25 instruments and 25 reported totals, guidance at 20 releases |
+| Returned blocks | `profile`, `financial_statement`, optional `revenue_breakdown`, `debt_profile`, `guidance` |
+
+The profile supplies identity such as CIK and CUSIP when upstream provides them. Statement lines,
+original values and units, fiscal period, restatement metadata, accession and filing evidence remain
+in the raw blocks. `filedDate` records when a line became public; `periodEnd` is the accounting
+observation, not its publication time. Proposed future guidance remains distinct from the reported
+actual and its source verdict; no score is calculated here.
+
+### `stock_analyst_estimates`
+
+| | |
+| --- | --- |
+| Authentication | `TAPEBASIS_EQUIBLES_API_KEY`; standard route set |
+| `metric`, `period`, `dimensions` | Optional **exact upstream labels**, not a fuzzy search; maximum 512, 256 and 1024 characters respectively |
+| `snapshot_id` | Optional valid UUID from a previous `snapshots` result |
+| `limit`, `offset` | One observation page, clamped to 1..100 and 0..100000; no follow-up page is fetched automatically |
+| Returned blocks | Complete `analyst_estimates` response, including its snapshots, observations, units, basis, statistic and publication labels |
+
+Source metric values can remain numeric strings to preserve upstream precision. Revisions and
+snapshots are observations rather than a consensus target population. Do not combine their analysts
+with Finviz or TradingView rating counts, and do not present this data as an Equibles Rating.
+
+### `stock_ownership_flows`
+
+| | |
+| --- | --- |
+| Authentication | `TAPEBASIS_EQUIBLES_API_KEY`; standard route set |
+| `limit` | Page cap for activity, fund, insider and proposed-sale rows, 1..500 |
+| `periods` | Requested 13F periods, 1..500; this is one request, not repeated pagination |
+| `include_insiders` | Include Form 4 insider transactions, default true |
+| `include_fund_owners` | Include N-PORT fund ownership, default true |
+| Requests | Ownership, activity and proposed sales, plus each selected optional block |
+| Returned blocks | `institutional_ownership`, `institutional_activity`, `proposed_sales`, optional `insider_transactions`, `fund_owners` |
+
+These populations have different legal meanings and reporting schedules. 13F positions commonly
+arrive up to 45 days after quarter end; N-PORT report dates vary by fund; Form 144 proposed sales are
+intentions, not completed transactions; Form 4 filings are event-driven and generally due within two
+business days. Keep accession, report and transaction dates with each row. There is no proprietary
+ownership, insider-sentiment or squeeze score.
+
+### `stock_short_positioning`
+
+| | |
+| --- | --- |
+| Authentication | API key **and** `TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise` |
+| `limit` | Rows per selected dataset, 1..500; one page per dataset |
+| `start_date`, `end_date` | Optional inclusive `YYYY-MM-DD` filters; malformed dates are refused before transport |
+| `include_fails_to_deliver` | Include SEC FTD balances, default true |
+| `include_off_exchange` | Include weekly FINRA ATS/OTC transparency, default true |
+| Requests | Short interest and short volume, plus each selected optional block |
+| Returned blocks | `short_interest`, `short_volume`, optional `fails_to_deliver`, `off_exchange_volume` |
+
+Short interest is published twice monthly and uses its settlement date. Short volume covers the
+FINRA facility-reported subset, not consolidated tape volume. SEC fails-to-deliver arrives in
+half-month batches with approximately two weeks of delay. Off-exchange observations are weekly and
+also delayed. None of these series is live and no squeeze score is derived from them.
+
+### `stock_options_analytics`
+
+| | |
+| --- | --- |
+| Authentication | API key **and** explicit Enterprise redistribution assertion |
+| `expiration` | Optional `YYYY-MM-DD` expiration for the summary |
+| `max_expirations` | Term-structure cap, clamped to 1..12 |
+| Requests | One option summary plus one term structure |
+| Returned blocks | `options_summary`, `options_term_structure` |
+
+The raw blocks retain open interest, put/call ratios, max pain, implied volatility, expected move,
+`underlyingCloseDate`, `openInterestDate` and the provider's `delayed` flag when supplied. Max pain
+and expected move are source calculations, not forecasts. `expiration` is a future schedule and is
+never used for `as_of`. Quote timing follows the account's actual plan; an absent or false delayed
+flag is not evidence of real-time access.
+
+This tool is separate from `stock_options_chain`: the existing Finviz/Yahoo contract, comparison and
+volume/OI semantics are unchanged, and neither tool's values are merged into the other.
+
+### `stock_price_history`
+
+| | |
+| --- | --- |
+| Authentication | API key **and** explicit Enterprise redistribution assertion |
+| `limit` | One page of 1..500 bars; no automatic pagination |
+| `start_date`, `end_date` | Optional inclusive `YYYY-MM-DD` session filters |
+| `interval` | `daily` (default), `weekly` or `monthly` |
+| Returned blocks | Complete `price_history` object |
+
+Open, high, low, close and volume are the source's split-adjusted traded fields. `adjustedClose`
+also reflects cash dividends, but the provider does not certify a consistent total-return series.
+Currency and original values are preserved. This is stored history, not a live-price feed and never
+a reconciliation leg for `stock_quote` or `stock_prices`.
+
+### Freshness and errors
+
+The top-level `as_of` is the newest **observation timestamp actually present** in the returned
+datasets. `freshness.datasets` retains earliest and latest dates per block and identifies date-only
+values. It does not use local cache or response time to manufacture freshness. A failed or denied
+dataset still appears in `reporting_delay` and has a null timestamp in `freshness.datasets`.
+
+`401` maps to a rejected-key state, `403` to `not_entitled`, a missing listing or period to
+`NO_DATA`, quota exhaustion to `UPSTREAM_RATE_LIMIT`, and malformed upstream JSON to `SCHEMA_DRIFT`.
+Other status and transport errors are sanitized; upstream prose is not echoed. A result is not
+silently downgraded to another provider or to an empty success.
+
+---
+
 ## Ops (2)
 
 | Tool | Purpose |
@@ -605,8 +757,14 @@ as a snapshot, not a live tape.
 | Index levels | `market_indices` | Yes |
 | Headlines | `stock_news` | Merged stories, with per-story provider corroboration |
 | How the market feels | `market_sentiment` | Single-source score; merged news has its own label |
-| Options positioning | `stock_options_chain` | On volume/OI |
-| Filings, ownership, peers | `stock_filings`, `stock_ownership`, `stock_peers` | No |
+| Options chain positioning | `stock_options_chain` | On volume/OI |
+| Equibles option analytics | `stock_options_analytics` | No, separate Enterprise dataset |
+| Equibles SEC fundamentals or guidance | `stock_fundamentals` | No, isolated Equibles blocks |
+| Verified analyst observations without a rating | `stock_analyst_estimates` | No |
+| 13F, N-PORT, insider or Form 144 flows | `stock_ownership_flows` | No |
+| Short, FTD or off-exchange history | `stock_short_positioning` | No, Enterprise |
+| Equibles stored OHLCV | `stock_price_history` | No, Enterprise |
+| Filings, ownership, peers | `stock_filings`, `stock_ownership`, `stock_peers` | No, Finviz |
 | Government bond yields | `bloomberg_markets` | No, Bloomberg-only |
 | Bloomberg's own quote reading | `bloomberg_quote` | No: one provider asked, delay-labelled |
 | Crypto / futures scans | `crypto_*`, `futures_*` | No |

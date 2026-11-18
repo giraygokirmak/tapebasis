@@ -18,8 +18,11 @@ metadata and the ordinary GitHub Release. GHCR `1.1.1`, `1.1`, `1` and `latest` 
 the tested root digest
 `sha256:18a54e02f28d195030cd02ee1f45088eeb05a34792d532197f143f6a73a209d7`. The release environment's
 stage-only token remains limited to the single package but must be revoked when staging is no longer
-needed. The `1.1.2` release is not published while this completed `v1.1.1` status is recorded separately
-from the existing Release body.
+needed. The `1.1.2` source version was not published; its status remains historical and must not be
+rewritten. The current `1.1.3` source adds the Equibles integration and is also not published while
+this completed `v1.1.1` status is recorded separately from the existing Release body. No live
+Equibles credential or Enterprise agreement has been validated, and registry publication still needs
+the protected release steps and maintainer approval described below.
 The rejected `v1.1.0` run
 `44060097251` has no tested release artifacts: its Python 3.10 validation failed before the build or
 protected publication started. No package, image, MCP entry or ordinary GitHub Release is published for

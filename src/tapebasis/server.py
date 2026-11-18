@@ -6,8 +6,10 @@ Run over stdio (default) or streamable HTTP::
     tapebasis streamable-http --host 0.0.0.0 --port 8000
 
 Every tool response carries ``data_provider`` ∈ ``ALL`` / ``TRADINGVIEW`` /
-``FINVIZ`` / ``YAHOO`` / ``SA`` / ``BLOOMBERG`` / ``NONE``, and any upstream
-schema drift detected by the health monitor is reported inside the same response.
+``FINVIZ`` / ``YAHOO`` / ``SA`` / ``BLOOMBERG`` / ``EQUIBLES`` / ``NONE``,
+and any upstream schema drift detected by the health monitor is reported inside
+the same response. Equibles is an isolated authenticated data surface, never a
+leg whose values get merged into another provider's quote.
 Bloomberg is a reconciliation leg whose equity quotes are exchange-delayed;
 StockAnalysis is one whose coverage is US-only. Both are reported rather than
 counted as disagreements or as missing data.
@@ -32,14 +34,21 @@ logger = logging.getLogger("tapebasis")
 INSTRUCTIONS = (
     "Market data from multiple independent providers (TradingView, Finviz, Yahoo "
     "Finance, StockAnalysis and Bloomberg), each fetched natively and asked in "
-    "parallel. Every tool result includes `data_provider`, one of ALL, TRADINGVIEW, "
-    "FINVIZ, YAHOO, SA, BLOOMBERG or NONE.\n\n"
+    "parallel where their definitions permit comparison. Equibles supplies separate "
+    "authenticated fundamental and licensed-data tools; its fields are never merged "
+    "with another provider. Every tool result includes `data_provider`, one of ALL, "
+    "TRADINGVIEW, FINVIZ, YAHOO, SA, BLOOMBERG, EQUIBLES or NONE.\n\n"
     "HOW TO READ IT:\n"
     "- ALL: every provider that was asked answered. This is COVERAGE, not agreement. "
     "Check `comparisons` for whether the readings match, and `providers_answered` for "
     "exactly which providers contributed.\n"
-    "- TRADINGVIEW, FINVIZ, YAHOO, SA or BLOOMBERG: only that provider had the data. "
-    "You MUST tell the user this figure is single-source and not cross-verified.\n"
+    "- TRADINGVIEW, FINVIZ, YAHOO, SA, BLOOMBERG or EQUIBLES: only that provider had "
+    "the data. You MUST tell the user this figure is single-source and not cross-verified.\n"
+    "- EQUIBLES: retain the exact 'Data by Equibles' attribution, `as_of`, freshness "
+    "and `reporting_delay` fields with the observation. Historically reported values "
+    "are not live. Phase 2 tools return `not_entitled` unless an active Enterprise "
+    "redistribution agreement is explicitly configured. Equibles ratings, squeeze "
+    "scores and AI Briefs are not supplied.\n"
     "- BLOOMBERG readings can be structurally older: its equity and index quotes are "
     "exchange-delayed (typically 15 minutes). Check `exchange_delay` and `print_time` "
     "before calling such a price live, and relay a `not_comparable` reason instead of "
@@ -50,7 +59,7 @@ INSTRUCTIONS = (
     "- NONE: no primary value; do not invent one. A separate `news` block may still "
     "have its own coverage.\n\n"
     "Symbol news comes only from TradingView's licensed Marketaux feed, Finviz and "
-    "Yahoo Finance; StockAnalysis and Bloomberg have no symbol-news adapter here. "
+    "Yahoo Finance; StockAnalysis, Bloomberg and Equibles have no symbol-news adapter here. "
     "News-bearing calls return the newest 10 real unique stories by default. Each "
     "story's `consensus` requires multiple providers and means provider corroboration, "
     "not independent editorial verification. Read `news.data_provider`, "
@@ -76,6 +85,9 @@ INSTRUCTIONS = (
     "state.\n\n"
     "TOOLS: stock_quote, stock_prices, stock_screener, market_indices, stock_news, "
     "stock_options_chain, stock_earnings, stock_extended_hours, technical_analysis, "
+    "stock_fundamentals, stock_analyst_estimates, stock_ownership_flows, "
+    "stock_short_positioning, stock_options_analytics, stock_price_history "
+    "(last three: Equibles plus local Enterprise redistribution assertion), "
     "stock_filings, stock_ownership, stock_peers, stock_why_moving, stock_chart, "
     "stock_dilution, stock_screener_filters, crypto_*, futures_*, stock_backtest*, "
     "market_snapshot, market_sentiment, egx_market_overview, combined_analysis, "
@@ -111,7 +123,7 @@ async def lifespan(_server: FastMCP):
 
 
 mcp = FastMCP(
-    name="Tapebasis, TradingView + Finviz + Yahoo + StockAnalysis + Bloomberg",
+    name="Tapebasis, multiple market-data providers plus Equibles",
     instructions=INSTRUCTIONS,
     lifespan=lifespan,
 )
@@ -121,6 +133,7 @@ def _register_all() -> dict[str, int]:
     """Attach every tool family to the server."""
     from . import (
         tools_bloomberg,
+        tools_equibles,
         tools_finviz,
         tools_health,
         tools_market,
@@ -132,6 +145,7 @@ def _register_all() -> dict[str, int]:
         "finviz": tools_finviz.register(mcp),
         "tradingview": tools_tradingview.register(mcp),
         "bloomberg": tools_bloomberg.register(mcp),
+        "equibles": tools_equibles.register(mcp),
         "health": tools_health.register(mcp),
     }
     return counts

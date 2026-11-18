@@ -24,9 +24,9 @@ See [Health Monitor](Health-Monitor).
 
 ## Rate limiting (every provider)
 
-Every upstream is undocumented and rate-limited by its owner, so **every** request (TradingView
-scanner, TradingView chart websocket, Finviz HTML/JSON, Yahoo chart API, StockAnalysis quote API,
-Bloomberg quote pages) passes through a per-provider limiter ([`ratelimit.py`](https://github.com/giraygokirmak/tapebasis/blob/main/src/tapebasis/ratelimit.py)).
+Every market-comparison upstream is undocumented and rate-limited by its owner, so **every** request
+(TradingView scanner, TradingView chart websocket, Finviz HTML/JSON, Yahoo chart API, StockAnalysis
+quote API, Bloomberg quote pages) passes through a per-provider limiter ([`ratelimit.py`](https://github.com/giraygokirmak/tapebasis/blob/main/src/tapebasis/ratelimit.py)). The documented Equibles API is the exception to scraping, not to pacing: its authenticated reads use the same limiter, but do not retry after daily-quota exhaustion.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -95,6 +95,48 @@ questions of one agent turn without ever serving a price a live feed would disag
 
 Current limiter state (`min_interval_s`, `max_inflight`, `cooling_down_s`, `block_streak`,
 `cached_entries`) is reported by `tapebasis_health` and `GET /health` under `rate_limits`.
+For Equibles it additionally includes public `quota` counters, `quota_blocked_until_epoch`,
+`quota_blocked_remaining_s` and `quota_block_active` once a real response supplies those headers.
+This quota and reset state is process-local and in-memory: restarting loses the remembered deadline,
+so deployment-level quota coordination still needs an external control.
+
+## Equibles
+
+Equibles is a separate single-provider surface. Only its official versioned REST routes are used;
+no web-page scraping or general market comparison is involved. Every general market tool still
+works without these variables.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TAPEBASIS_EQUIBLES_API_KEY` | unset | Key sent only in the `Authorization: Bearer ...` request header to the official API origin |
+| `TAPEBASIS_EQUIBLES_ENTITLEMENT` | `standard` | The operator's **local redistribution policy assertion**. Exact `enterprise` permits restricted Phase 2 routes; any other value falls back to `standard` |
+| `TAPEBASIS_EQUIBLES_TIMEOUT` | `30` | HTTP timeout in seconds; keep it positive for ordinary operation |
+| `TAPEBASIS_EQUIBLES_CACHE_TTL` | `900` | In-memory cache lifetime in seconds; keyed by query, a short SHA-256 key fingerprint and tier, never the raw key |
+| `TAPEBASIS_EQUIBLES_MIN_INTERVAL` | `1.0` | Seconds between API requests |
+| `TAPEBASIS_EQUIBLES_MAX_INFLIGHT` | `1` | Ordinary request concurrency; a separate loop-local quota gate serializes the quota check plus its corresponding send |
+| `TAPEBASIS_EQUIBLES_MAX_RETRIES` | `1` | Ordinary shared-limiter setting only. The Equibles tool transport explicitly requests zero retries, so this setting does not re-enable them |
+
+The Enterprise setting is a **local licensing policy required by this integration**, not a statement
+that the upstream API identically names or enforces those plans. The documented upstream plan or
+free-plan behavior of a route does not waive Tapebasis's redistribution rule. The operator must have
+an active Enterprise agreement that actually covers redistribution before setting `enterprise`.
+Tapebasis cannot verify a contract, and an actual upstream `403` remains authoritative: it returns
+`not_entitled` regardless of local configuration. An ordinary route is never denied merely because
+a caller's readability flag says `enterprise=True`; the route allowlist controls the requirement.
+
+Without the key, standard calls fail locally with `NOT_CONFIGURED`; restricted calls fail locally
+with `not_entitled` when the assertion is absent. Upstream `401` additionally marks the key unusable.
+Output on every returned envelope, including preflight denial and transport failure, preserves
+`Data by Equibles`, `as_of`, per-dataset `freshness` and `reporting_delay`, and `entitlement`.
+Malformed caller arguments instead fail before envelope construction. Secret-bearing upstream error text is not
+repeated, redirects are refused and cache identity changes when a key rotates. See
+[Response Contract](Response-Contract) and [Tools Reference](Tools-Reference).
+
+Tool calls spend at most one request per selected dataset, with no automatic pagination. A daily
+`429` is never retried. Public `Retry-After` and `X-RateLimit-*` headers are parsed where available,
+new requests stay blocked until that reset, and the health tool reads only this local state plus key
+and tier configuration; it does not spend quota on an artificial health request. The remembered reset
+and blocker are in-memory only, so a restart or another worker does not inherit them.
 
 ## Concurrency and blocking work
 
@@ -199,6 +241,16 @@ TAPEBASIS_BLOOMBERG_MAX_INFLIGHT=1
 TAPEBASIS_BLOOMBERG_QUOTE_DEADLINE=12.0
 TAPEBASIS_BLOOMBERG_BATCH_MAX=4
 TAPEBASIS_BLOOMBERG_BATCH_BUDGET=12.0
+
+# Optional official Equibles REST tools. Keep the real key only in a protected
+# process environment; never share a committed example containing a real key.
+TAPEBASIS_EQUIBLES_API_KEY=
+# Set to enterprise ONLY while your active agreement permits redistribution.
+TAPEBASIS_EQUIBLES_ENTITLEMENT=standard
+TAPEBASIS_EQUIBLES_TIMEOUT=30
+TAPEBASIS_EQUIBLES_CACHE_TTL=900
+TAPEBASIS_EQUIBLES_MIN_INTERVAL=1.0
+TAPEBASIS_EQUIBLES_MAX_INFLIGHT=1
 
 # Optional: licensed news + sentiment
 # MARKETAUX_API_TOKEN=

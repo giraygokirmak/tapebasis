@@ -55,7 +55,6 @@
     "ratelimit.py::cache_get",
     "ratelimit.py::cache_set",
     "ratelimit.py::limiter",
-    "ratelimit.py::snapshot",
     "reconcile.py::__post_init__",
     "reconcile.py::_as_float",
     "reconcile.py::_error_dict",

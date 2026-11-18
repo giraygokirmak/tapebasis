@@ -257,6 +257,89 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "comparison": "single-source",
         "notes": "Finviz's proprietary filter vocabulary; TradingView uses different column names.",
     },
+    # ── Equibles-only: isolated official REST data, never a merged quote ────
+    {
+        "name": "stock_fundamentals",
+        "capability": "company identity, SEC statements, segment revenue, debt and guidance",
+        "providers": "EQUIBLES",
+        "comparison": "single-source, no fields merged with another provider",
+        "notes": (
+            "Requires TAPEBASIS_EQUIBLES_API_KEY and a plan permitting the intended "
+            "redistribution. ``statement`` is income, balance or cashflow; one fiscal "
+            "period is requested. Optional annual revenue, debt/covenant and "
+            "guidance-vs-actual blocks remain separate. CIK and CUSIP come from the "
+            "profile. The raw original units, restatement metadata and filing "
+            "provenance are preserved. Every response carries Data by Equibles, "
+            "as_of, reporting_delay and entitlement status."
+        ),
+    },
+    {
+        "name": "stock_analyst_estimates",
+        "capability": "verified analyst estimates and source-labelled snapshot observations",
+        "providers": "EQUIBLES",
+        "comparison": "single-source, not a rating population or consensus merge",
+        "notes": (
+            "Exact source metric, period, dimensions and optional snapshot filters "
+            "are forwarded. Pages are 1-100 observations with no automatic paging. "
+            "Original unit, basis, statistic and analyst fields remain intact; no "
+            "Equibles Rating, squeeze score or AI Brief is requested or synthesized."
+        ),
+    },
+    {
+        "name": "stock_ownership_flows",
+        "capability": "13F ownership and activity, N-PORT funds, insider transactions and Form 144",
+        "providers": "EQUIBLES",
+        "comparison": "single-source, every filing population stays separate",
+        "notes": (
+            "One request per selected dataset, no automatic pagination. 13F rows "
+            "typically face quarter-end filing lag of up to 45 days; N-PORT report "
+            "dates vary per fund. Proposed sales are intentions, not completed "
+            "transactions. No proprietary ownership or sentiment score is added. "
+            "Attribution, observation dates and reporting delay are mandatory."
+        ),
+    },
+    {
+        "name": "stock_short_positioning",
+        "capability": "FINRA short interest and facility volume, SEC FTD and weekly off-exchange volume",
+        "providers": "EQUIBLES",
+        "comparison": "single-source restricted datasets, no comparison or squeeze calculation",
+        "notes": (
+            "Returns not_entitled before transport unless "
+            "TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise explicitly asserts the "
+            "active redistribution agreement. A real 403 has the same code; it is "
+            "never downgraded to partial standard data. Short interest is twice "
+            "monthly, short volume covers FINRA facilities only, FTD arrives in "
+            "delayed half-month batches and off-exchange observations are weekly."
+        ),
+    },
+    {
+        "name": "stock_options_analytics",
+        "capability": "open interest, put/call ratios, max pain, implied volatility and expected move",
+        "providers": "EQUIBLES",
+        "comparison": "single-source restricted calculation, not merged with stock_options_chain",
+        "notes": (
+            "Enterprise redistribution configuration is mandatory. Preserves "
+            "summary and term structure, underlyingCloseDate, openInterestDate "
+            "and the delayed flag. Max pain and expected move are provider "
+            "calculations, not forecasts. No squeeze score, dealer-sign "
+            "inference or AI opinion is added. The existing multi-provider "
+            "stock_options_chain is unchanged."
+        ),
+    },
+    {
+        "name": "stock_price_history",
+        "capability": "stored split-adjusted and provider-adjusted OHLCV history",
+        "providers": "EQUIBLES",
+        "comparison": "single-source stored history, never a live-price reconciliation leg",
+        "notes": (
+            "Daily, weekly or monthly bars, maximum 500 rows per call, with no "
+            "automatic pagination. Requires explicit Enterprise redistribution "
+            "configuration. Open, high, low, close and volume are split-adjusted; "
+            "adjustedClose also reflects cash dividends and is not certified as "
+            "a consistent total-return series. Values remain in the returned "
+            "currency and are never merged with another provider."
+        ),
+    },
     # ── Bloomberg-only tools: one provider asked, so one provider labelled ───
     {
         "name": "bloomberg_quote",

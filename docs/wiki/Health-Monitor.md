@@ -8,8 +8,10 @@ A provider that catches its own exception looks healthy from the outside. So the
 upstream **independently of the provider code paths**: it can fail even when every tool call
 succeeds, and that failure is the signal.
 
-The probe set covers every reconciliation leg that can be probed over HTTP: TradingView, Finviz,
-Yahoo and StockAnalysis. Bloomberg is a leg too, but it cannot be probed, see below.
+The network probe set covers every reconciliation leg that can be probed over HTTP: TradingView,
+Finviz, Yahoo and StockAnalysis. Bloomberg is a leg too, but it cannot be safely probed, see below.
+Equibles has a local-only probe: it verifies local key/tier configuration and remembers public quota
+headers after a real API response, never spending upstream quota for health.
 
 ## Probes
 
@@ -24,16 +26,26 @@ Yahoo and StockAnalysis. Bloomberg is a leg too, but it cannot be probed, see be
 | `yahoo.chart_fx` | YAHOO | the FX resolution path still answers (`EURUSD=X`) |
 | `yahoo.chart_crypto` | YAHOO | the crypto resolution path still answers (`BTC-USD`) |
 | `sa.quote_api` | SA | `data.p` present in `/api/quotes/s/aapl` |
+| `equibles.api_key` | EQUIBLES | Local only: key presence, declared standard/enterprise tier and last real public quota headers. No URL is contacted |
 
-Bloomberg has **no probe**, deliberately. Its site gates plain HTTP clients on the TLS fingerprint:
+Bloomberg has **no network probe**, deliberately. Its site gates plain HTTP clients on the TLS fingerprint:
 `httpx` receives a 403 robot page whatever headers it sends, while `curl_cffi` with a specific
 impersonation version gets 200. A probe built on `httpx` would therefore report `DOWN` on a perfectly
 healthy provider. The same asymmetry blocks a meaningful probe on the `curl_cffi` path, because the
 monitor's contracts are HTTP-level ones. Instead, `bloomberg_quote` / `bloomberg_markets` report the
 failure they actually hit (`UPSTREAM_BLOCKED`, `SCHEMA_DRIFT`, `NOT_CONFIGURED` when `curl_cffi` is
 missing), and the tool response is the availability signal. `tapebasis_tool_map` names Bloomberg in
-`providers_answered` and warns that it is the one provider with no probe, so the gap is stated rather
-than implied.
+`providers_answered` and warns that it is the one market leg with no network probe, so the gap is
+stated rather than implied.
+
+Equibles is not a reconciliation leg and its `equibles.api_key` probe deliberately never reaches a
+network URL. If `TAPEBASIS_EQUIBLES_API_KEY` is absent, its status is `NOT_CONFIGURED`; otherwise it
+is `OK` with the explicit statement that only an actual tool call verifies account access. This
+status is not a health claim about the Enterprise agreement. It records the declared tier and public
+`X-RateLimit-*` quota counters after real responses only. `tapebasis_health` under `rate_limits`
+also carries daily `quota`, `quota_blocked_until_epoch`, `quota_blocked_remaining_s` and
+`quota_block_active` when provided by a real response. No raw Bearer key, response prose or synthetic
+health-request quota consumption is involved.
 
 The two extra Yahoo probes exist because the FX and crypto ticker conventions are separate
 assumptions. A probe that only checked `AAPL` would keep reporting `OK` while `EURUSD=X` silently
@@ -117,6 +129,7 @@ docker compose exec tapebasis rm /home/mcpuser/.tapebasis/state/health_state.jso
 | `DRIFT` | Answered, but the status or shape changed: renamed field, moved route, missing marker |
 | `DOWN` | Timeout, connection error, or unexpected HTTP status |
 | `UNKNOWN` | Not probed yet |
+| `NOT_CONFIGURED` | Used by the local Equibles probe when its key is absent; not equated with upstream downtime |
 
 ## How drift reaches a normal tool call
 
@@ -165,7 +178,8 @@ Returns per-probe status, message, fingerprint, and whether the result matches t
 
 ```jsonc
 {
-  "providers": { "TRADINGVIEW": "OK", "FINVIZ": "OK", "YAHOO": "OK", "SA": "OK" },
+  "providers": { "TRADINGVIEW": "OK", "FINVIZ": "OK", "YAHOO": "OK", "SA": "OK",
+                 "EQUIBLES": "NOT_CONFIGURED" },
   "degraded": false,
   "issues": [ ... ],
   "rate_limits": {
@@ -178,7 +192,14 @@ Returns per-probe status, message, fingerprint, and whether the result matches t
     "SA": { "min_interval_s": 0.5, "max_inflight": 2, "cooling_down_s": 0.0,
             "block_streak": 0, "cached_entries": 5 },
     "BLOOMBERG": { "min_interval_s": 10.0, "max_inflight": 1, "cooling_down_s": 0.0,
-                   "block_streak": 0, "cached_entries": 1 }
+                   "block_streak": 0, "cached_entries": 1 },
+    "EQUIBLES": { "min_interval_s": 1.0, "max_inflight": 1, "cooling_down_s": 0.0,
+                  "block_streak": 0, "cached_entries": 1,
+                  "quota": { "daily_limit": 100, "remaining": 0,
+                             "reset_at": "2026-11-19T00:00:00+00:00" },
+                  "quota_blocked_until_epoch": 1795046400.0,
+                  "quota_blocked_remaining_s": 3600.0,
+                  "quota_block_active": true }
   }
 }
 ```
@@ -187,6 +208,13 @@ Returns per-probe status, message, fingerprint, and whether the result matches t
 upstream, and it is not probed. A positive `cooling_down_s` there means the bot wall answered 403 and
 the provider paused itself, which explains both a `bloomberg_*` response that came back `NONE` with
 `UPSTREAM_BLOCKED` and a `TIMEOUT` error on the Bloomberg leg of `stock_quote`.
+
+`EQUIBLES` appears under `providers` as well as `rate_limits`, but its provider entry describes local
+configuration rather than upstream accessibility. The quota example means a real earlier tool call
+exhausted the daily allowance: do not call again until its structured reset. This state is kept only
+in the running process's in-memory limiter, not in `health_state.json`: restarting loses the
+remembered reset, so cross-process or cross-restart quota coordination needs an external control.
+Health `refresh=True` still makes no artificial Equibles request.
 
 A positive `cooling_down_s` means a provider is paused right now: after a `429`, or after the
 Bloomberg bot wall answered 403. That is usually the explanation for a response that suddenly went

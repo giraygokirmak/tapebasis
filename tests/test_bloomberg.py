@@ -75,8 +75,10 @@ def test_bloomberg_is_the_fourth_leg_and_loses_any_tie_break():
     assert DataProvider.BLOOMBERG.value == "BLOOMBERG"
     assert "BLOOMBERG" in PROVIDER_ORDER
     # Last, because a delayed page must never outrank a live feed on a tie.
+    # Equibles is not a market-comparison provider in either order.
     assert PROVIDER_ORDER[-1] == "BLOOMBERG"
     assert DEFAULT_ORDER[-1] == "BLOOMBERG"
+    assert "EQUIBLES" not in DEFAULT_ORDER
 
 
 def test_a_delayed_print_is_not_comparable_not_a_disagreement():

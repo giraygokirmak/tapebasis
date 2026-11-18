@@ -29,7 +29,23 @@
       └──► bb_access ──► curl_cffi (TLS impersonation) ► bloomberg.com/quote/<id>
 
   tools_bloomberg ──► bb_access (same adapter, one provider asked, so single-source)
-      │
+
+  tools_equibles ──► eq_access ──► official api.equibles.com/v1 REST only
+       │                    │
+       │                    ├── documented route allowlist + local redistribution policy
+       │                    ├── Bearer header only; redirects and secret-bearing errors refused
+       │                    ├── one dataset, one request; no pagination/retry after daily 429
+       │                    ├── key fingerprint + tier cache identity, never the raw key
+       │                    ├── provider observation fields per dataset, not local receipt time
+       │                    └── shared limiter plus a per-loop quota check-and-send gate
+       │
+       │  six isolated tools, no symbols.resolve, reconcile or market fan-out
+       ▼
+  separate raw datasets + Data by Equibles + as_of + reporting_delay + entitlement
+
+  tools_health ──► local Equibles key/tier + last real public quota headers
+       │             no Equibles upstream health request
+       ▼
       │  every request above goes through ratelimit.limiter(PROVIDER)
       ▼
   Pair(tv=Attempt, fv=Attempt, yh=Attempt, sa=Attempt, bb=Attempt)
@@ -70,6 +86,8 @@ src/tapebasis/
 ├── yh_access.py          typed access to the Yahoo Finance provider
 ├── bb_access.py          typed access to bloomberg.com (reconciliation leg, curl_cffi)
 ├── sa_access.py          typed access to stockanalysis.com (US equities and ETFs)
+├── eq_access.py          official Equibles REST allowlist, secret/quota/freshness logic
+├── tools_equibles.py     six isolated Equibles tools and their entitlement responses
 ├── catalog.py            plain-data tool catalogue (providers + comparison strategy)
 ├── tools_market.py       the 9 multi-source market tools
 ├── tools_finviz.py       the 7 Finviz-only tools
@@ -91,6 +109,7 @@ access module and its own upstream:
 
 | Leg | Access module | Upstream |
 | --- | --- | --- |
+| Equibles (separate, not a reconciliation leg) | `tools_equibles.py` → `eq_access.py` | Official `api.equibles.com/v1` REST, Bearer authentication; never a web page |
 | TradingView | `tv_access.py` → `providers/tradingview/native.py` | `scanner.tradingview.com` (quotes, screener, mean target and range, rating mean and count, five rating buckets), `www.tradingview.com/symbols/{symbol}/forecast-price-target/` (target-estimate population), `data.tradingview.com` (chart websocket for OHLCV) |
 | TradingView (overnight) | `tv_access.py` → `providers/tradingview/quote_socket.py` | `data.tradingview.com` quote websocket; `qsd` deltas merge into the preceding symbol snapshot |
 | Yahoo (overnight) | `yh_access.py` | `/v7/finance/quote?overnightPrice=true` with a cookie-bound guest crumb; separate from the chart API |
@@ -118,6 +137,36 @@ is the only code that defines the tool contract; it never reaches into provider 
 Provider code does not import anything from the orchestration layer. That one-way dependency is what
 keeps the boundary real rather than decorative. It is why the token-free sentiment fallback lives in
 `tools_tradingview.py` and not inside `marketaux_service.py`.
+
+### Equibles is an isolated provider, not another comparison leg
+
+`tools_equibles.py` does not call `symbols.resolve()` or `reconcile.ask()`. It normalizes only a
+mechanical US ticker, builds a fixed set of named datasets and asks `eq_access.get()` once per
+selected block. A block's raw REST object keeps its original values, units, filing and observation
+provenance. `DataProvider.EQUIBLES` is used directly; deliberately, `EQUIBLES` is neither in
+`PROVIDER_ORDER` nor `DEFAULT_ORDER`, so the existing comparison/freshness implementation does not
+acquire a new leg.
+
+`eq_access.ROUTES` is both the allowlist of documented paths and the authority for Tapebasis's
+local redistribution policy. The exact entitlement tier is `standard` by default; restricted routes
+require an explicit Enterprise assertion, while an ordinary route does not become restricted just
+because a caller passed the readability flag. An upstream `403` still wins over the assertion.
+
+The key is confined to its Bearer header, redirects are refused and error strings are sanitized.
+Cache identity hashes the key and includes the tier. The shared limiter supplies ordinary pacing,
+while the Equibles transport requests zero retries and holds an additional loop-local lock across
+its daily-quota recheck and corresponding HTTP call. This prevents an already queued caller from
+spending more quota after the leader returns `429`; it is not a global asyncio lock and does not
+change general provider retry semantics.
+
+Responses stay `EQUIBLES` even for partial dataset failures, not `PARTIAL`, because no second
+provider corroborated anything. Attribution, freshness, reporting delay and entitlement are still
+present on total failure. Freshness fields are dataset-specific: publication dates remain separate
+from insider transactions and fiscal-period observations, and option expiration is not an `as_of`.
+
+The health monitor uses a local Equibles probe rather than spending quota. It reports configuration
+and the last real public quota/reset headers; these are operational facts, not proof of actual
+account access or redistribution rights.
 
 ### Bloomberg is an adapter with one difference: a declared delay
 
@@ -241,8 +290,10 @@ A closed venue's final print remains readable but has `is_current: false`.
 
 ### `ratelimit.py` is one gate per upstream
 
-Every upstream is undocumented and rate-limited by its owner. Each gets a `ProviderLimiter`
-with a minimum interval, a concurrency cap, a shared exponential cooldown and a short TTL cache.
+Every market-comparison upstream is undocumented and rate-limited by its owner. Each gets a
+`ProviderLimiter` with a minimum interval, a concurrency cap, a shared exponential cooldown and a
+short TTL cache. The documented Equibles API uses the same pacing primitive with its separate quota
+contract described above.
 Raising retry counts would deepen a block; pacing and a process-wide cooldown are what actually
 recover.
 

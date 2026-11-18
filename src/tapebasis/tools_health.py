@@ -57,6 +57,10 @@ async def tapebasis_health(
     statuses = summary["providers"]
     responding = [name for name, status in statuses.items() if status in ("OK", "DRIFT")]
     provider = provider_from_answered(responding)
+    # This is a report about every provider, including one local Equibles state
+    # check. Coverage is ALL when all checks ran; it does not imply that an
+    # upstream request was made for the quota-free Equibles probe.
+    provider = DataProvider.ALL if len(responding) == len(statuses) else provider
 
     warnings = [
         f"{issue['provider']} {issue['status']}: {issue['probe']}, {issue['message']}"
@@ -73,6 +77,12 @@ async def tapebasis_health(
             warnings.append(
                 f"{name} is rate-limit cooling down for another "
                 f"{state['cooling_down_s']}s (block streak {state.get('block_streak')})"
+            )
+        if state.get("quota_block_active"):
+            warnings.append(
+                f"{name} daily request quota is exhausted for another "
+                f"{state.get('quota_blocked_remaining_s')}s; do not retry before "
+                f"epoch {state.get('quota_blocked_until_epoch')}"
             )
 
     extra: dict[str, Any] = {"schema_drift": summary["issues"]}
@@ -122,19 +132,24 @@ async def tapebasis_tool_map() -> dict[str, Any]:
     return envelope(
         {"tools": rows, "count": len(rows), "by_provider": counts},
         provider=DataProvider.ALL,
-        providers_answered=[*PROVIDERS, "BLOOMBERG"],
+        providers_answered=[*PROVIDERS, "BLOOMBERG", "EQUIBLES"],
         fields={
             name: field_source(provider, (), None, supplied=[provider])
             for name, provider in tool_providers.items()
         },
         warnings=[
             *MONITOR.warnings_for(PROVIDERS),
-            "All providers in `providers_answered` are reconciliation legs of at "
-            "least one tool. Bloomberg gates on the TLS fingerprint, so an httpx "
-            "health probe there would report a false outage; it is therefore the "
-            "one leg with no health probe in `providers`/`schema_drift`. The "
+            "`providers_answered` lists providers represented in this local "
+            "catalogue, not providers contacted by this tool: no upstream call "
+            "is made. Every market-comparison provider is a reconciliation leg "
+            "of at least one tool. Bloomberg gates on the TLS fingerprint, so "
+            "an httpx health probe there would report a false outage; it is "
+            "therefore the one market leg with no health probe in "
+            "`providers`/`schema_drift`. The "
             "bloomberg_* tools ask that provider alone and are single-source by "
-            "construction.",
+            "construction. Equibles is isolated rather than a reconciliation leg; "
+            "its local entitlement probe spends no API quota and its raw datasets "
+            "always keep attribution, as_of and reporting delay.",
         ],
         degraded=MONITOR.degraded(),
         sources={"catalog": "local tool metadata"},

@@ -196,7 +196,9 @@ def test_warnings_are_scoped_to_the_provider():
 def test_every_provider_has_its_own_probe():
     """Yahoo used to be probed under TRADINGVIEW; that hid a whole outage."""
     providers = {probe.provider for probe in health._probes()}
-    assert providers == {TRADINGVIEW, FINVIZ, health.YAHOO, health.SA}
+    assert providers == {
+        TRADINGVIEW, FINVIZ, health.YAHOO, health.SA, health.EQUIBLES,
+    }
 
 
 def test_stockanalysis_probes_hit_stockanalysis_only():
@@ -228,7 +230,7 @@ def test_summary_includes_rate_limit_state():
     }
     summary = monitor.summary()
     assert set(summary["providers"]) == {
-        TRADINGVIEW, FINVIZ, health.YAHOO, health.SA,
+        TRADINGVIEW, FINVIZ, health.YAHOO, health.SA, health.EQUIBLES,
     }
     assert "rate_limits" in summary
     assert summary["providers"]["YAHOO"] == "UNKNOWN"

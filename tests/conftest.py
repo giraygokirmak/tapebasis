@@ -50,9 +50,9 @@ def _isolate_health_state(tmp_path, monkeypatch):
     monitor = health.HealthMonitor()
     monkeypatch.setattr(health, "HealthMonitor", lambda *a, **k: monitor)
 
-    from tapebasis import tools_market, tools_finviz, tools_tradingview
+    from tapebasis import tools_equibles, tools_market, tools_finviz, tools_tradingview
 
-    for module in (tools_market, tools_finviz, tools_tradingview):
+    for module in (tools_market, tools_equibles, tools_finviz, tools_tradingview):
         monkeypatch.setattr(module, "MONITOR", monitor, raising=False)
     yield monitor
 
@@ -100,6 +100,23 @@ def _no_stockanalysis_network(monkeypatch):
     # and pass the original back in, so the guard never blocks the code under
     # test while still refusing an accidental live call everywhere else.
     yield real_fetch
+
+
+@pytest.fixture(autouse=True)
+def _no_equibles_network(monkeypatch):
+    """Fail loudly if any test reaches api.equibles.com.
+
+    The Equibles access layer is authenticated and spends a real daily quota,
+    so an unfaked tool call must never leave the test process. A test that
+    exercises the transport patches ``eq_access.shared_client`` itself.
+    """
+    from tapebasis import eq_access
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("test attempted a live api.equibles.com request")
+
+    monkeypatch.setattr(eq_access, "shared_client", refuse)
+    yield
 
 
 @pytest.fixture(autouse=True)
