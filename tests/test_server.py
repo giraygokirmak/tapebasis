@@ -60,9 +60,14 @@ def test_all_tools_are_registered():
         "stock_price_history",
         "tapebasis_health",
         "tapebasis_tool_map",
+        "equibles_company", "equibles_filings", "equibles_investor_events",
+        "equibles_ownership", "equibles_institutions", "equibles_positioning",
+        "equibles_options", "equibles_market_data", "equibles_funds",
+        "equibles_macro", "equibles_market_context", "equibles_public_policy",
+        "equibles_international", "equibles_crypto",
     }
     assert names == expected
-    assert len(names) == 41
+    assert len(names) == 55
 
 
 def test_every_tool_has_a_description():

@@ -10,8 +10,8 @@ succeeds, and that failure is the signal.
 
 The network probe set covers every reconciliation leg that can be probed over HTTP: TradingView,
 Finviz, Yahoo and StockAnalysis. Bloomberg is a leg too, but it cannot be safely probed, see below.
-Equibles has a local-only probe: it verifies local key/tier configuration and remembers public quota
-headers after a real API response, never spending upstream quota for health.
+Equibles has a local-only probe: it checks key presence and remembers public quota headers after a
+real API response, never spending upstream quota for health or claiming to verify plan access.
 
 ## Probes
 
@@ -26,7 +26,7 @@ headers after a real API response, never spending upstream quota for health.
 | `yahoo.chart_fx` | YAHOO | the FX resolution path still answers (`EURUSD=X`) |
 | `yahoo.chart_crypto` | YAHOO | the crypto resolution path still answers (`BTC-USD`) |
 | `sa.quote_api` | SA | `data.p` present in `/api/quotes/s/aapl` |
-| `equibles.api_key` | EQUIBLES | Local only: key presence, declared standard/enterprise tier and last real public quota headers. No URL is contacted |
+| `equibles.api_key` | EQUIBLES | Local only: key presence and last real public quota headers. No URL is contacted and no plan is inferred |
 
 Bloomberg has **no network probe**, deliberately. Its site gates plain HTTP clients on the TLS fingerprint:
 `httpx` receives a 403 robot page whatever headers it sends, while `curl_cffi` with a specific
@@ -41,8 +41,8 @@ stated rather than implied.
 Equibles is not a reconciliation leg and its `equibles.api_key` probe deliberately never reaches a
 network URL. If `TAPEBASIS_EQUIBLES_API_KEY` is absent, its status is `NOT_CONFIGURED`; otherwise it
 is `OK` with the explicit statement that only an actual tool call verifies account access. This
-status is not a health claim about the Enterprise agreement. It records the declared tier and public
-`X-RateLimit-*` quota counters after real responses only. `tapebasis_health` under `rate_limits`
+status is not a health claim about account plan access or publication rights. It records only public
+`X-RateLimit-*` quota counters after real responses. `tapebasis_health` under `rate_limits`
 also carries daily `quota`, `quota_blocked_until_epoch`, `quota_blocked_remaining_s` and
 `quota_block_active` when provided by a real response. No raw Bearer key, response prose or synthetic
 health-request quota consumption is involved.

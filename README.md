@@ -26,7 +26,7 @@ clearly marked as single-source. When none answers, you get `NONE` instead of a
 plausible-looking number. And because every market-comparison provider scrapes or calls an
 undocumented upstream, a background monitor probes every endpoint and reports API/schema drift inside
 ordinary tool responses. Equibles is the documented exception: its own versioned, Bearer-authenticated
-REST API, its own datasets and an explicit entitlement contract.
+REST API, its own datasets and an explicit API access contract.
 
 Each provider is fetched natively: TradingView's own scanner and chart websocket, Finviz's HTML and
 JSON islands, Yahoo's chart API, StockAnalysis's quote API, Bloomberg's quote pages. No leg proxies
@@ -65,7 +65,7 @@ Every tool result carries exactly one of nine values. It states **coverage**, ne
 | `YAHOO`        | Only Yahoo Finance answered. Served, but **not** corroborated.             |
 | `SA`           | Only StockAnalysis answered. Served, but **not** corroborated; US equities and ETFs only. |
 | `BLOOMBERG`    | Only Bloomberg answered. Served, but **not** corroborated; its quote can be delayed. |
-| `EQUIBLES`     | One or more named Equibles datasets answered. Single-source, **never merged** with another provider; `attribution`, `as_of`, `reporting_delay` and `entitlement` are mandatory. Two configured adapters may compare an exactly equivalent EPS estimate or same-date short position |
+| `EQUIBLES`     | One or more named Equibles datasets answered. Single-source, **never merged** with another provider; `attribution`, `as_of`, `reporting_delay` and `access` are mandatory. Two configured adapters may compare an exactly equivalent EPS estimate or same-date short position |
 | `NONE`         | No provider could supply the primary value; a separately labelled `news` block can still be available. |
 
 `ALL` means "every provider asked answered", not "they agree". Agreement is a separate axis, and it
@@ -223,7 +223,7 @@ served and clearly labelled, not hidden.
 
 ---
 
-## Tools (41)
+## Tools (55)
 
 ### Multi-source, every capable provider asked, answers compared
 
@@ -296,8 +296,8 @@ editorial leg fails, `data` is `null` and independent news remains only in top-l
 `MARKETAUX_API_TOKEN` is set, and otherwise scores Finviz headlines locally (VADER with a financial
 lexicon). That path is deterministic, offline and free. Because the headlines are Finviz's, that
 path is labelled `FINVIZ`; see [Sentiment](#sentiment-no-api-key-required). The separately named
-Equibles tools do require their own key, and their restricted datasets additionally require the
-explicit Enterprise assertion described below.
+Equibles tools require their own Bearer key. Their plan access is decided by the actual API
+response, not by a local plan assertion.
 
 ### Finviz-only, served, labelled `FINVIZ`, explicitly single-source
 
@@ -390,52 +390,82 @@ cap like Bloomberg's.
 
 ### Equibles-only, official authenticated REST, labelled `EQUIBLES`
 
-These six tools read the documented `https://api.equibles.com/v1` API. There is no Equibles web
-scraping, no proxy through another provider and no general price reconciliation. Rows stay in their
-original units and filing scope inside named datasets.
+These tools read the documented `https://api.equibles.com/v1` API. There is no Equibles web scraping,
+proxy through another provider or general price reconciliation. Rows stay in their original units and
+filing scope inside named datasets.
 
-| Tool | Datasets | Access |
+| Tool | Datasets | Plan access |
 | --- | --- | --- |
-| `stock_fundamentals` | Company/listing profile, one income, balance or cashflow statement, optional annual revenue breakdown, debt profile and guidance versus actuals | API key |
-| `stock_analyst_estimates` | Verified analyst observations and snapshots with exact source metric, period, dimensions, unit, basis, statistic and publication fields | API key |
-| `stock_ownership_flows` | 13F ownership and activity, N-PORT fund owners, Form 144 proposed sales and optional Form 4 insider transactions | API key |
-| `stock_short_positioning` | FINRA short interest and facility volume, optional SEC fails-to-deliver and weekly off-exchange volume | Enterprise redistribution assertion |
-| `stock_options_analytics` | Option summary and term structure, including open interest, put/call ratios, max pain, implied volatility and expected move | Enterprise redistribution assertion |
-| `stock_price_history` | Stored daily, weekly or monthly OHLCV with split adjustment and provider-adjusted close | Enterprise redistribution assertion |
+| `stock_fundamentals` | Company/listing profile, one income, balance or cashflow statement, optional annual revenue breakdown, debt profile and guidance versus actuals | Actual API response |
+| `stock_analyst_estimates` | Verified analyst observations and snapshots with exact source metric, period, dimensions, unit, basis, statistic and publication fields | Actual API response |
+| `stock_ownership_flows` | 13F ownership and activity, N-PORT fund owners, Form 144 proposed sales and optional Form 4 insider transactions | Actual API response |
+| `stock_short_positioning` | FINRA short interest and facility volume, optional SEC fails-to-deliver and weekly off-exchange volume | Actual API response; no local paid-plan gate |
+| `stock_options_analytics` | Option summary and term structure, including open interest, put/call ratios, max pain, implied volatility and expected move | Equibles Plus or Pro, confirmed by the actual response |
+| `stock_price_history` | Stored daily, weekly or monthly OHLCV with split adjustment and provider-adjusted close | Actual API response; stored history, never a live-price leg |
 
-Configuration:
+Fourteen additional family tools expose the selected official JSON GET routes through an exact
+`dataset` name and a `filters` object. There is no free-form URL parameter. `tapebasis_tool_map`
+returns the local frozen dataset map, including every documented path/query filter, its type,
+required flag and stated bounds. The complete map is in [Equibles datasets](docs/wiki/Equibles-Datasets.md).
+Each dataset makes exactly one GET, with no automatic pagination or
+provider fallback. Free, Plus and Pro access follows the account's real response.
 
-- `TAPEBASIS_EQUIBLES_ENTITLEMENT` names the declared tier and defaults to `standard`.
-- `TAPEBASIS_EQUIBLES_API_KEY` holds the Bearer credential and is its only companion secret variable.
-  The key is sent only in the `Authorization` header to the official API origin. It never appears in
-  a URL, response, error, cache key or diagnostic; cache identity uses a hash fingerprint instead.
-- Set `TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise` **only** while an active Equibles Enterprise
-  agreement actually permits redistribution of the restricted datasets. The flag is an operator
-  assertion, not an entitlement check performed by this server. A real upstream `403` still becomes
-  `not_entitled`; the flag cannot override it.
-- With no key, standard tools return `NOT_CONFIGURED` without transport. With no Enterprise
-  assertion, restricted tools return `not_entitled` before transport. A mixed response where only
-  some datasets are denied keeps `data_provider: EQUIBLES`, reports
-  `entitlement.status: partially_entitled` and lists `denied_datasets`.
+| Family tool | Covered REST data |
+| --- | --- |
+| `equibles_company` | Profiles, financial reports, estimates, debt, valuation and company disclosures |
+| `equibles_filings` | Filing directories, document passages, lines and full-text search |
+| `equibles_investor_events` | Earnings calls, live transcripts, IR materials, events and IPOs |
+| `equibles_ownership` | Insider, institutional, beneficial-owner and supply-chain disclosures |
+| `equibles_institutions` | 13F filers, reported portfolios, consensus holdings and market activity |
+| `equibles_positioning` | FINRA short positions and volume, FTD, off-exchange data and provider scores |
+| `equibles_options` | Raw option chains and contracts, expirations, sessions and source calculations; Plus or Pro |
+| `equibles_market_data` | Quotes, stored OHLCV, intraday bars, technical indicators and corporate actions |
+| `equibles_funds` | Fund and ETF directories, holdings, profiles and annual operations |
+| `equibles_macro` | FRED, Canadian observations, releases and CFTC positioning |
+| `equibles_market_context` | Listings, indexes, advisers, screeners, calendars and market observations |
+| `equibles_public_policy` | Congressional disclosures and government contract awards |
+| `equibles_international` | International filings, ownership and native-report disclosures |
+| `equibles_crypto` | Crypto directory, quotes, price history and intraday bars |
 
-Every response, including a missing-key, denied, quota or upstream-error response, carries the exact
-`Data by Equibles` attribution, `as_of`, per-dataset `freshness` and `reporting_delay`, and the
-`entitlement` block. An unavailable dataset has a null timestamp and its delay definition, never a
-timestamp invented from the local response clock. Observation dates such as `reportPeriodDate`,
-`filedDate`, `settlementDate` and `underlyingCloseDate` are not publication times. In particular,
-13F commonly arrives up to 45 days after quarter end, short interest is twice monthly, FTD arrives
-in delayed half-month batches and off-exchange volume is weekly. An option `expiration` is a future
-schedule and is never used as `as_of`.
+For example, `equibles_options(dataset="chain", filters={"ticker": "NVDA",
+"expiration": "2026-12-18"})` returns the raw option chain under `data.chain`. The expiration filter
+is optional and must use ISO `YYYY-MM-DD`. Use `equibles_company(dataset="financial_statement",
+filters={"ticker": "NVDA", "statement": "income"})` for one raw statement.
 
-Equibles Rating, short-squeeze scores and AI Brief are deliberately not implemented, requested or
-derived from the returned observations. Analyst estimates stay source-labelled observations rather
-than becoming a rating. `stock_options_analytics` is separate from the existing multi-provider
-`stock_options_chain`, whose Finviz and Yahoo contracts are unchanged.
+Configuration and access:
 
-Requests are bounded: one request per selected dataset, one request attempt per transport call, no
-automatic pagination and no alternate-provider fallback. A daily-quota `429` retains public
-`X-RateLimit-*` and reset metadata, never retries, and blocks new Equibles requests until that reset.
-See [Configuration](#configuration) for pacing and timeout settings.
+- `TAPEBASIS_EQUIBLES_API_KEY` is the only local Equibles credential setting. There is no local
+  paid-plan or redistribution assertion variable.
+- The key goes only in the `Authorization: Bearer ...` header to the official origin. It never
+  appears in a URL, response, error, provenance or diagnostic. Cache identity uses a short hash
+  fingerprint, never the raw key.
+- Without a key, every Equibles tool returns `NOT_CONFIGURED` before transport. A real `401` returns
+  `NOT_CONFIGURED` with `access.status: auth_rejected`. A real `403` returns `PLAN_REQUIRED`; it
+  never becomes empty or substituted data. If some datasets in an existing multi-block tool succeed,
+  `access.status` is `partially_available` and `plan_required_datasets` names the denied blocks.
+- The account's documented Free, Plus or Pro plan must permit its request. Normal Bearer keys are
+  not intrinsically limited to Free. Tapebasis does not verify a real account or publication rights
+  in its hermetic tests. The operator remains responsible for permitted use and redistribution.
+- Redirects, undocumented paths, unknown filters, credential query parameters and CSV/binary output
+  are refused. Live transcripts bypass the cache. General live-price tools do not call Equibles.
+
+Every response, including missing-key, plan-denied, quota and upstream errors, carries exact
+`Data by Equibles` attribution, `as_of`, per-dataset `freshness`, `reporting_delay` and `access`.
+Unavailable datasets retain null observation timestamps and their delay definitions, not timestamps
+invented from the local response clock. Filing, settlement and fiscal dates remain distinct. An
+option `expiration` is a future schedule, never `as_of`.
+
+Provider ratings, short-squeeze scores, predictions and AI briefs remain source-labelled facts, not
+Tapebasis analysis. Analyst estimates are not mixed with rating or price-target populations.
+`stock_options_analytics` stays separate from the multi-provider `stock_options_chain`.
+
+Account-owned portfolios, organizations, custom data and web-feed tracker routes are outside this
+surface. Institution-copy backtests and direct comparison of two institutions' portfolios remain
+MCP-only upstream and have no REST bridge here. Exported binary/CSV outputs are also excluded.
+
+Requests use one attempt per selected dataset. A daily-quota `429` retains public `X-RateLimit-*`
+and reset metadata, never retries, and blocks new Equibles requests until reset. See
+[Configuration](#configuration) for pacing and timeout settings.
 
 ### Ops
 
@@ -538,7 +568,7 @@ the provider code paths**, so a provider can't hide a break by catching its own 
 | `yahoo.chart_fx` | YAHOO | the `EURUSD=X` resolution path still answers |
 | `yahoo.chart_crypto` | YAHOO | the `BTC-USD` resolution path still answers |
 | `sa.quote_api` | SA | `data.p` present in `/api/quotes/s/aapl` |
-| `equibles.api_key` | EQUIBLES | Local key and entitlement configuration plus the last real response's public quota counters; makes no upstream request |
+| `equibles.api_key` | EQUIBLES | Local key presence and last real response's public quota counters; makes no upstream request and does not prove plan access |
 
 Bloomberg has **no network probe**, deliberately: its site gates plain HTTP clients on the TLS
 fingerprint, so an `httpx` probe would report `DOWN` on a healthy provider. Its tool response is the
@@ -705,11 +735,10 @@ Everything is optional. See [`.env.example`](.env.example) for the full list.
 | `TAPEBASIS_BLOOMBERG_BATCH_BUDGET` | `12.0` | Total seconds one `stock_prices` call spends on the Bloomberg leg before naming the rest in `warnings` |
 | `TAPEBASIS_BLOCKING_THREADS` | `4` | Worker ceiling for the pool that runs blocking provider calls, separate from the loop's default executor |
 | `TAPEBASIS_EQUIBLES_API_KEY` | - | Bearer credential for the official Equibles REST API; sent only in `Authorization` |
-| `TAPEBASIS_EQUIBLES_ENTITLEMENT` | `standard` | `enterprise` asserts redistribution rights for the restricted Phase 2 datasets; restricted routes refuse without it |
 | `TAPEBASIS_EQUIBLES_MIN_INTERVAL` | `1.0` | Equibles request spacing (s) |
 | `TAPEBASIS_EQUIBLES_MAX_INFLIGHT` | `1` | Equibles concurrent requests; a separate per-loop gate serializes each quota check and send |
 | `TAPEBASIS_EQUIBLES_MAX_RETRIES` | `1` | Shared-limiter metadata only; Equibles transport always requests zero retries |
-| `TAPEBASIS_EQUIBLES_CACHE_TTL` | `900` | Equibles cache lifetime (s); the key fingerprint and tier are part of the cache identity |
+| `TAPEBASIS_EQUIBLES_CACHE_TTL` | `900` | Equibles cache lifetime (s); keyed by query and key fingerprint, never the raw key; live transcripts bypass cache |
 | `TAPEBASIS_EQUIBLES_TIMEOUT` | `30` | Equibles HTTP timeout (s) |
 | `TAPEBASIS_TV_MAX_RETRIES`, `TAPEBASIS_FINVIZ_MAX_RETRIES`, `TAPEBASIS_YAHOO_MAX_RETRIES` | `2` | Retries per provider request (the shared cooldown is not tunable) |
 | `MARKETAUX_API_TOKEN` | - | Optional. Enables licensed Marketaux news + entity sentiment |
@@ -718,7 +747,7 @@ Everything is optional. See [`.env.example`](.env.example) for the full list.
 For security, do not put the Equibles key in an MCP argument, a custom URL, application JSON or a
 shared log. Set only the environment variable in the server process, use a placeholder in
 `.env.example`, and rotate the key if it was ever disclosed. Cached entries are keyed by a short
-SHA-256 fingerprint plus entitlement rather than by the raw secret, and a failed HTTP response is
+SHA-256 fingerprint rather than by the raw secret, and a failed HTTP response is
 replaced with a sanitized error message rather than echoed upstream text. Redirects are refused so a
 Bearer header cannot follow an upstream `Location` to a different origin.
 
@@ -743,7 +772,7 @@ No proxy configuration exists: every provider reaches its upstream directly.
                   exchange_delay / print_time before calling a price live.
    EQUIBLES    -> quote only the returned named datasets as single-source data.
                   Preserve Data by Equibles, as_of, reporting_delay and the
-                  entitlement state. A partial failure is not corroboration and
+                  access state. A partial failure is not corroboration and
                   a denied dataset must not be silently omitted.
    NONE        -> say the primary value is unavailable. Do not invent one;
                   independently labelled news may still be available.
@@ -834,7 +863,10 @@ src/tapebasis/
 ├── bb_access.py          typed access to bloomberg.com (delayed leg + Bloomberg-only tools)
 ├── sa_access.py          typed access to stockanalysis.com (US equities and ETFs)
 ├── eq_access.py          allowlisted Equibles REST, Bearer secrecy, quota and freshness
-├── tools_equibles.py     six isolated Equibles tools with entitlement contracts
+├── eq_catalog.py          frozen Equibles routes, exact dataset/filter validation
+├── equibles_surface.py    shared Equibles access, attribution and freshness contract
+├── tools_equibles.py      six isolated Equibles tools with API access contracts
+├── tools_equibles_families.py  fourteen grouped Equibles REST family tools
 ├── catalog.py            plain-data tool catalogue (providers + comparison strategy)
 ├── tools_market.py       multi-source market tools
 ├── tools_finviz.py       Finviz-only tools

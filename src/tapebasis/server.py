@@ -46,9 +46,11 @@ INSTRUCTIONS = (
     "the data. You MUST tell the user this figure is single-source and not cross-verified.\n"
     "- EQUIBLES: retain the exact 'Data by Equibles' attribution, `as_of`, freshness "
     "and `reporting_delay` fields with the observation. Historically reported values "
-    "are not live. Phase 2 tools return `not_entitled` unless an active Enterprise "
-    "redistribution agreement is explicitly configured. Equibles ratings, squeeze "
-    "scores and AI Briefs are not supplied.\n"
+    "are not live. TAPEBASIS_EQUIBLES_API_KEY is the only local configuration; a "
+    "401 means `auth_rejected` and a 403 means `PLAN_REQUIRED`, never an invented "
+    "empty result. `access` can be configured, not_configured, auth_rejected, "
+    "plan_required or partially_available. Provider ratings, squeeze scores and AI "
+    "briefs are source claims, not Tapebasis analysis.\n"
     "- BLOOMBERG readings can be structurally older: its equity and index quotes are "
     "exchange-delayed (typically 15 minutes). Check `exchange_delay` and `print_time` "
     "before calling such a price live, and relay a `not_comparable` reason instead of "
@@ -87,9 +89,18 @@ INSTRUCTIONS = (
     "stock_options_chain, stock_earnings, stock_extended_hours, technical_analysis, "
     "stock_fundamentals, stock_analyst_estimates, stock_ownership_flows, "
     "stock_short_positioning, stock_options_analytics, stock_price_history "
-    "(last three: Equibles plus local Enterprise redistribution assertion), "
-    "stock_filings, stock_ownership, stock_peers, stock_why_moving, stock_chart, "
+    "(Equibles; options require Plus or Pro, access is decided by the actual "
+    "API response), stock_filings, stock_ownership, stock_peers, stock_why_moving, stock_chart, "
     "stock_dilution, stock_screener_filters, crypto_*, futures_*, stock_backtest*, "
+    "equibles_company, equibles_filings, equibles_investor_events, equibles_ownership, "
+    "equibles_institutions, equibles_positioning, equibles_options, equibles_market_data, "
+    "equibles_funds, equibles_macro, equibles_market_context, equibles_public_policy, "
+    "equibles_international and equibles_crypto. Each grouped Equibles tool accepts "
+    "an exact `dataset` and documented `filters` from `tapebasis_tool_map`, makes one "
+    "GET, never auto-paginates and never falls back to another provider. Raw option "
+    "contracts use equibles_options(dataset='chain'). Account-owned portfolios, "
+    "custom-data/tracker routes and binary files are excluded; institution-copy "
+    "backtests and direct two-institution portfolio comparison remain MCP-only.\n\n"
     "market_snapshot, market_sentiment, egx_market_overview, combined_analysis, "
     "bloomberg_quote, bloomberg_markets, tapebasis_health, tapebasis_tool_map."
 )
@@ -134,6 +145,7 @@ def _register_all() -> dict[str, int]:
     from . import (
         tools_bloomberg,
         tools_equibles,
+        tools_equibles_families,
         tools_finviz,
         tools_health,
         tools_market,
@@ -146,6 +158,7 @@ def _register_all() -> dict[str, int]:
         "tradingview": tools_tradingview.register(mcp),
         "bloomberg": tools_bloomberg.register(mcp),
         "equibles": tools_equibles.register(mcp),
+        "equibles_families": tools_equibles_families.register(mcp),
         "health": tools_health.register(mcp),
     }
     return counts

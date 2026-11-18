@@ -29,7 +29,7 @@ and npm content against the original artifacts, and completed GHCR, the MCP Regi
 Release without rebuilding or moving the tag. GHCR `1.1.3`, `1.1`, `1` and `latest` independently match
 the tested root digest `sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`.
 The npm stage-only token must be revoked after this completed release. No live Equibles credential or
-Enterprise agreement was validated; endpoint behavior and actual publication rights remain unverified.
+Equibles enterprise agreement was validated; endpoint behavior and actual publication rights remain unverified.
 For `1.1.4`, tag run `44292749356` validated and built the source artifacts, published the PyPI wheel
 and sdist, and staged npm. After npm approval, continuation run `44297676282` bound the original source
 ZIP to digest `sha256:119b8f290c1cf91473fa6191fb39c0e3772a2673e381351cb4f95f4aec56a066`, verified
@@ -40,7 +40,7 @@ reviewed `1.1.3` predecessor digest
 `1` and `latest` now match the tested root image-index digest
 `sha256:c16423260ee6a777f2fa79e9b799da7e9552b136593d314e09243121b1397597`; exact `1.1.3`
 remains on its prior digest. The stage-only token can be revoked now that the approval and continuation
-are complete. No live Equibles credential or Enterprise agreement was verified.
+are complete. No live Equibles credential or enterprise agreement was verified.
 These live publication checks are separate from the Release body produced from the tag's changelog.
 The rejected `v1.1.0` run
 `44060097251` has no tested release artifacts: its Python 3.10 validation failed before the build or

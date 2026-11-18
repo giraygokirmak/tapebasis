@@ -6,220 +6,29 @@ another provider. ``attribution``, ``as_of`` and ``reporting_delay`` accompany
 both successful and failed responses, because an error must not turn into a
 silent license or freshness downgrade.
 
-Ratings, squeeze scores, AI-generated briefs and other unexplained opinion
-scores are intentionally outside this integration. Analyst estimates are kept
-as source-labelled observations without turning them into a proprietary score.
+Analyst estimates are kept as source-labelled observations without turning
+them into a Tapebasis rating. Source-labelled provider analytics in the grouped
+REST families remain provider claims, not conclusions synthesized here.
 """
 from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Callable, Coroutine, Mapping
 
 from . import eq_access
-from .health import MONITOR
-from .providers_state import DataProvider, NoDataError, envelope, error_code
-from .reconcile import field_source
+from .providers_state import NoDataError, error_code
+from .equibles_surface import response as surface_response
 
 EQUIBLES = "EQUIBLES"
-_API = "https://api.equibles.com/v1"
-_CONTRACT = "https://equibles.com/legal/terms"
 _CORO = Callable[[], Coroutine[Any, Any, Any]]
-
-_LAGS: dict[str, Any] = {
-    "profile": {
-        "source": "company and listing identity",
-        "schedule": "reference data, not a dated market observation",
-    },
-    "financial_statement": {
-        "source": "SEC filings",
-        "schedule": "fiscal-period statements; filedDate identifies when each line became public",
-    },
-    "revenue_breakdown": {
-        "source": "SEC filings",
-        "schedule": "annual segment, geography and product disclosures; periodEnd identifies the period",
-    },
-    "debt_profile": {
-        "source": "SEC filings",
-        "schedule": "reported balances and instruments as filed; asOfDate identifies the balance date",
-    },
-    "proposed_sales": {
-        "source": "SEC Form 144",
-        "schedule": "filed intentions to sell, not completed transactions",
-    },
-    "insider_transactions": {
-        "source": "SEC Form 4",
-        "schedule": "filed within two business days of the transaction, not a live feed",
-    },
-    "institutional_ownership": {
-        "source": "SEC Form 13F",
-        "schedule": "quarterly filings, commonly available up to 45 days after quarter end",
-    },
-    "institutional_activity": {
-        "source": "SEC Form 13F",
-        "schedule": "quarterly filings, commonly available up to 45 days after quarter end",
-    },
-    "fund_owners": {
-        "source": "SEC Form N-PORT",
-        "schedule": "one row per fund's fiscal reporting period; dates differ between funds",
-    },
-    "short_interest": {
-        "source": "FINRA short interest",
-        "schedule": "published twice monthly, so readings are not live",
-    },
-    "short_volume": {
-        "source": "FINRA facility volume",
-        "schedule": "daily facility-reported subset of volume, not consolidated tape volume",
-    },
-    "fails_to_deliver": {
-        "source": "SEC fails-to-deliver",
-        "schedule": "half-month publication batches with approximately two weeks of delay",
-    },
-    "off_exchange_volume": {
-        "source": "FINRA OTC and ATS transparency",
-        "schedule": "weekly observations, typically released with approximately two weeks of delay",
-    },
-    "options_summary": {
-        "source": "Equibles option calculations over a dated chain",
-        "schedule": "quote timing follows the account's actual plan; check delayed and observation dates",
-    },
-    "options_term_structure": {
-        "source": "Equibles option calculations over dated chains",
-        "schedule": "quote timing follows the account's actual plan; check delayed and observation dates",
-    },
-    "price_history": {
-        "source": "Equibles stored traded OHLCV history",
-        "schedule": "historical bars, not live prices; actual entitlement controls publication rights",
-    },
-    "analyst_estimates": {
-        "source": "Equibles verified analyst-estimate snapshots",
-        "schedule": "as captured and verified in the returned snapshot, not a real-time feed",
-    },
-    "guidance": {
-        "source": "equities filings and earnings calls",
-        "schedule": "event-driven disclosure; filedDate identifies the disclosure",
-    },
-}
-
-
-def _clock() -> datetime:
-    """Return the current UTC clock for response metadata."""
-    return datetime.now(timezone.utc)
-
-
-def _age_seconds(as_of: Any) -> float | None:
-    """Return observation age in seconds for a date or timestamp, else null."""
-    if not as_of:
-        return None
-    text = str(as_of)
-    try:
-        when = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if len(text) == 10:
-        # A date-only observation has no hour precision. Age is marked as
-        # approximate rather than rounding a whole trading date to a fake time.
-        when = when.replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
-    elif when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    return max(0.0, (_clock() - when.astimezone(timezone.utc)).total_seconds())
-
-
-def _contract(
-    tool: str,
-    *,
-    enterprise: bool,
-    freshness: Mapping[str, Any] | None = None,
-    errors: list[dict[str, Any]] | None = None,
-    datasets: Mapping[str, Any] | None = None,
-    dataset_names: tuple[str, ...] | None = None,
-) -> dict[str, Any]:
-    """Build the license, timestamp and entitlement fields for every response."""
-    errors = errors or []
-    names = dataset_names or tuple(datasets or {})
-    status = "enterprise" if enterprise else eq_access.entitlement()
-    configured = bool(eq_access.api_key()) and (
-        eq_access.has_enterprise_entitlement() if enterprise else True
-    )
-    if enterprise and not eq_access.has_enterprise_entitlement():
-        status = "not_entitled"
-    # A 401 means the key is not usable, so advertising ``configured: true``
-    # would hide the one fact the operator needs.
-    if any(error.get("code") == "NOT_CONFIGURED" for error in errors):
-        configured = False
-        if eq_access.api_key():
-            status = "auth_rejected"
-    # A tool-wide preflight denial names every requested block rather than the
-    # synthetic error label ``all``. Dataset-specific 403s keep their own names.
-    denied = [
-        error["dataset"] for error in errors if error.get("code") == "not_entitled"
-    ]
-    if "all" in denied:
-        denied = list(names)
-    if denied:
-        status = "partially_entitled" if datasets else "not_entitled"
-    block = {
-        "phase": 2 if enterprise else 1,
-        "enterprise_required": enterprise,
-        "status": status,
-        "configured": configured,
-        "redistribution_asserted": eq_access.has_enterprise_entitlement() if enterprise else None,
-        "requirement": (
-            "An active Equibles Enterprise agreement permitting redistribution is required."
-            if enterprise else
-            "Use is subject to the operator's active Equibles plan and redistribution rights."
-        ),
-        "terms": _CONTRACT,
-    }
-    if denied:
-        block["denied_datasets"] = denied
-    data: dict[str, Any] = {
-        "attribution": eq_access.ATTRIBUTION,
-        "provider": EQUIBLES,
-        "transport": "official REST API only",
-        "as_of": freshness.get("as_of") if freshness else None,
-        "freshness": dict(freshness or {}),
-        "reporting_delay": {
-            name: dict(_LAGS.get(name, {
-                "source": "the returned provider dataset",
-                "schedule": "event-driven or period-based; use the dataset's observation timestamps",
-            }))
-            for name in names
-        },
-        "entitlement": block,
-    }
-    data["observation_age_seconds"] = _age_seconds(data["as_of"])
-    if data["observation_age_seconds"] is not None:
-        data["observation_age_is_approximate"] = bool(
-            (freshness or {}).get("as_of_date_only")
-        )
-    if errors:
-        block["error_status"] = "no data substituted for the unavailable entitlement or provider response"
-    return data
-
-
-def _fields(data: Mapping[str, Any]) -> dict[str, Any]:
-    """Label each delivered Equibles block as single-source and not compared."""
-    return {
-        name: field_source(EQUIBLES, (), None, supplied=[EQUIBLES])
-        for name in data
-    }
-
-
-def _source_map(paths: Mapping[str, str]) -> dict[str, str]:
-    """Expose credential-free dataset URLs alongside the provider endpoint."""
-    return {
-        EQUIBLES: _API,
-        **{f"EQUIBLES.{name}": eq_access.source_url(path) for name, path in paths.items()},
-    }
 
 
 def _response(
     tool: str,
     symbol: str,
     *,
-    enterprise: bool,
     datasets: Mapping[str, Any] | None = None,
     paths: Mapping[str, str] | None = None,
     errors: list[dict[str, Any]] | None = None,
@@ -228,58 +37,11 @@ def _response(
     params_applied: Mapping[str, Any] | None = None,
     adjustments: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Wrap raw provider datasets without merging, substituting or inventing data."""
-    errors = errors or []
-    datasets = dict(datasets or {})
-    dataset_names = dataset_names or tuple(datasets)
-    delayed = any(
-        isinstance(value, dict) and value.get("delayed") is True
-        for value in datasets.values()
-    )
-    freshness = dict(freshness or eq_access.freshness_for(datasets, delayed=delayed))
-    # An unavailable dataset keeps its null timestamp and delay definition, so a
-    # 403 or a missing key never looks like a response with no freshness fields.
-    for name in dataset_names:
-        freshness["datasets"].setdefault(name, {
-            "as_of": None,
-            "latest_observation_at": None,
-            "earliest_observation_at": None,
-            "basis": "unavailable; no observation timestamp was supplied",
-        })
-    contract = _contract(
-        tool, enterprise=enterprise, freshness=freshness, errors=errors,
-        datasets=datasets, dataset_names=dataset_names,
-    )
-    data = None if errors and not datasets else {**datasets, **contract}
-    warnings = [
-        "Equibles is single-source and not cross-verified. Preserve Data by Equibles attribution "
-        "and each dataset's own as_of and reporting delay.",
-    ]
-    warnings.extend(adjustments or [])
-    if errors:
-        warnings.extend(
-            f"{error.get('dataset', 'Equibles dataset')} unavailable: {error['message']}"
-            for error in errors
-        )
-    return envelope(
-        data,
-        provider=DataProvider.EQUIBLES if datasets else DataProvider.NONE,
-        fields=_fields(datasets),
-        sources=_source_map(paths or {}),
-        errors=errors,
-        warnings=warnings,
-        providers_answered=[EQUIBLES] if datasets else [],
-        degraded=any(issue["provider"] == EQUIBLES for issue in MONITOR.issues()),
-        extra={
-            "symbol": symbol,
-            "attribution": eq_access.ATTRIBUTION,
-            "as_of": freshness.get("as_of"),
-            "reporting_delay": contract["reporting_delay"],
-            "entitlement": contract["entitlement"],
-            "freshness": freshness,
-            "params_applied": dict(params_applied or {}),
-            "comparison_policy": "no Equibles value is merged with another provider",
-        },
+    """Build one Equibles response with actual key and plan access state."""
+    return surface_response(
+        tool, {"symbol": symbol}, datasets=datasets, paths=paths, errors=errors,
+        freshness=freshness, dataset_names=dataset_names, params_applied=params_applied,
+        adjustments=adjustments,
     )
 
 
@@ -288,7 +50,6 @@ async def _fetch(
     tool: str,
     blocks: Mapping[str, tuple[str, Mapping[str, Any] | None]],
     *,
-    enterprise: bool = False,
     adjustments: list[str] | None = None,
 ) -> dict[str, Any]:
     """Fetch a fixed set of REST blocks concurrently, preserving partial errors.
@@ -298,29 +59,11 @@ async def _fetch(
     """
     ticker = eq_access.ticker_for(symbol)
     params_applied = {name: dict(params or {}) for name, (_, params) in blocks.items()}
-    if enterprise and not eq_access.has_enterprise_entitlement():
-        # Refuse before creating transport coroutines, so a default install
-        # cannot accidentally spend quota on restricted data. The error is a
-        # visible contract result, not a warning attached to standard data.
-        return _response(
-            tool, ticker, enterprise=True,
-            paths={name: f"/{fragment}" for name, (fragment, _) in blocks.items()},
-            dataset_names=tuple(blocks), params_applied=params_applied,
-            adjustments=adjustments,
-            errors=[{
-                "provider": EQUIBLES, "code": "not_entitled", "dataset": "all",
-                "message": (
-                    "An active Equibles Enterprise redistribution agreement is required. "
-                    "Set TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise only after that agreement "
-                    "is active; no request was made."
-                ),
-            }],
-        )
     names = tuple(blocks)
     coroutines = []
     for name in names:
         fragment, params = blocks[name]
-        coroutines.append(eq_access.get(fragment, params=params, enterprise=enterprise))
+        coroutines.append(eq_access.get(fragment, params=params))
 
     async def guard(name: str, operation: _CORO) -> Any:
         """Return one dataset or its sanitized error without cancelling peers."""
@@ -342,7 +85,7 @@ async def _fetch(
     }
     errors = [result["error"] for result in results if "error" in result]
     return _response(
-        tool, ticker, enterprise=enterprise, datasets=payloads,
+        tool, ticker, datasets=payloads,
         paths={name: f"/{blocks[name][0]}" for name in names}, errors=errors,
         dataset_names=names, params_applied=params_applied, adjustments=adjustments,
     )
@@ -539,11 +282,10 @@ async def stock_short_positioning(
     include_fails_to_deliver: bool = True,
     include_off_exchange: bool = True,
 ) -> dict[str, Any]:
-    """Read restricted short, FTD and off-exchange history under Enterprise.
+    """Read short, FTD and off-exchange history with an ordinary API key.
 
-    Without ``TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise`` this returns
-    ``not_entitled`` before making any request. The same error applies when
-    the account responds 403; no provider fallback or empty downgrade occurs.
+    An account that lacks a dataset receives an explicit provider error; no
+    provider fallback or empty downgrade occurs.
 
     Args:
         symbol: US-listed stock or ETF ticker.
@@ -572,7 +314,7 @@ async def stock_short_positioning(
     if include_off_exchange:
         blocks["off_exchange_volume"] = (f"securities/{ticker}/off-exchange-volume", query)
     return await _fetch(
-        ticker, "stock_short_positioning", blocks, enterprise=True, adjustments=adjustments,
+        ticker, "stock_short_positioning", blocks, adjustments=adjustments,
     )
 
 
@@ -581,11 +323,11 @@ async def stock_options_analytics(
     expiration: str | None = None,
     max_expirations: int = 8,
 ) -> dict[str, Any]:
-    """Read option summary and term structure only with Enterprise entitlement.
+    """Read paid-plan option summary and term structure with an API key.
 
-    Max pain and expected move remain source calculations, not price forecasts
-    or a newly calculated consensus. No squeeze, dealer-sign or rating score is
-    requested. Calls fail with ``not_entitled`` before transport by default.
+    Equibles requires Plus or Pro for option data. Max pain and expected move
+    remain source calculations, not price forecasts or a new consensus. A Free
+    account receives ``PLAN_REQUIRED`` after the documented upstream refusal.
 
     Args:
         symbol: US-listed optionable stock or ETF ticker.
@@ -609,7 +351,6 @@ async def stock_options_analytics(
                 {"maxExpirations": _bounded(max_expirations, 1, 12, "max_expirations", adjustments)},
             ),
         },
-        enterprise=True,
         adjustments=adjustments,
     )
 
@@ -621,7 +362,7 @@ async def stock_price_history(
     end_date: str | None = None,
     interval: str = "daily",
 ) -> dict[str, Any]:
-    """Read stored Equibles OHLCV under Enterprise, never as a live quote.
+    """Read stored Equibles OHLCV with an API key, never as a live quote.
 
     Args:
         symbol: US-listed ticker.
@@ -650,7 +391,6 @@ async def stock_price_history(
                 },
             ),
         },
-        enterprise=True,
         adjustments=adjustments,
     )
 
@@ -659,9 +399,9 @@ _TOOLS = (
     (stock_fundamentals, "Equibles-only: company identity, SEC fundamentals, debt and guidance"),
     (stock_analyst_estimates, "Equibles-only: verified analyst estimates and snapshot observations"),
     (stock_ownership_flows, "Equibles-only: 13F flows, N-PORT funds and insider sales"),
-    (stock_short_positioning, "Equibles Enterprise: short, FTD and off-exchange observations"),
-    (stock_options_analytics, "Equibles Enterprise: option summary and term structure"),
-    (stock_price_history, "Equibles Enterprise: stored OHLCV history, not a live quote"),
+    (stock_short_positioning, "Equibles-only: short, FTD and off-exchange observations"),
+    (stock_options_analytics, "Equibles paid-plan: option summary and term structure"),
+    (stock_price_history, "Equibles-only: stored OHLCV history, not a live quote"),
 )
 
 

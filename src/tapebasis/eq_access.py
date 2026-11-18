@@ -5,14 +5,12 @@ Only the official ``https://api.equibles.com/v1`` routes are used; this module
 never reads an Equibles web page. The API key stays in the ``Authorization``
 header and neither the key nor upstream error text appears in an exception.
 
-``TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise`` is the explicit operator assertion
-that the Equibles agreement permits redistribution of restricted Phase 2 data.
-The default ``standard`` setting refuses those calls before any network request.
-A plan that responds 403 never turns into an empty or silently reduced result.
+There is no local paid-plan assertion or preflight tier: the documented route
+and the account's real API response decide access. A paid-plan dataset
+that responds 403 becomes ``PLAN_REQUIRED``, never an empty or reduced result.
 
-Only routes named in :data:`ROUTES` may be requested, and the route itself, not
-the caller's flag, decides whether Enterprise entitlement is required. Redirects
-are refused so a bearer header can never follow a location to another origin.
+Only routes named in :data:`ROUTES` may be requested. Redirects are refused so
+a bearer header can never follow a location to another origin.
 """
 from __future__ import annotations
 
@@ -25,7 +23,7 @@ import weakref
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Mapping
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import httpx
 
@@ -48,43 +46,210 @@ _QUOTA_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock
 _TIMEOUT = float(os.environ.get("TAPEBASIS_EQUIBLES_TIMEOUT", "30"))
 _CACHE_TTL = float(os.environ.get("TAPEBASIS_EQUIBLES_CACHE_TTL", "900"))
 
-#: Every documented route this server may call, mapped to whether it contains
-#: restricted Phase 2 material. The map is the allowlist: a route outside it is
-#: refused before transport, even when a caller passes ``enterprise=True``.
-ROUTES: dict[str, bool] = {
-    "/stocks/{ticker}": False,
-    "/stocks/{ticker}/financial-statements/{statement}": False,
-    "/stocks/{ticker}/revenue-breakdown": False,
-    "/stocks/{ticker}/debt-profile": False,
-    "/stocks/{ticker}/guidance": False,
-    "/stocks/{ticker}/analyst-estimates": False,
-    "/securities/{ticker}/institutional-ownership": False,
-    "/securities/{ticker}/institutional-activity": False,
-    "/stocks/{ticker}/proposed-sales": False,
-    "/stocks/{ticker}/insider-transactions": False,
-    "/securities/{ticker}/fund-owners": False,
-    "/securities/{ticker}/short-interest": True,
-    "/securities/{ticker}/short-volume": True,
-    "/securities/{ticker}/fails-to-deliver": True,
-    "/securities/{ticker}/off-exchange-volume": True,
-    "/securities/{ticker}/options/summary": True,
-    "/securities/{ticker}/options/term-structure": True,
-    "/securities/{ticker}/prices": True,
-}
+#: Every documented JSON read route this server may call. The set is the
+#: allowlist: a route outside it is refused before transport. Account-owned
+#: portfolio, organization, tracker and binary-asset routes are not exposed.
+ROUTES: frozenset[str] = frozenset({
+    "/stocks/{ticker}/analyst-estimates",
+    "/stocks/{ticker}/buyback-programs",
+    "/stocks/{ticker}/atm-programs",
+    "/stocks/{exchange}/{ticker}/filings",
+    "/stocks/{exchange}/{ticker}/canadian-fund-holdings",
+    "/stocks/{exchange}/{ticker}/insider-transactions",
+    "/stocks/{exchange}/{ticker}/short-positions",
+    "/fda/catalysts",
+    "/cftc/contracts",
+    "/cftc/contracts/{marketCode}/positions",
+    "/cftc/positions/latest",
+    "/congress/members",
+    "/congress/trades",
+    "/congress/members/{id}/net-worth",
+    "/congress/market-activity",
+    "/stocks/{ticker}/correlated",
+    "/crypto",
+    "/crypto/{symbol}/quote",
+    "/crypto/quotes",
+    "/crypto/{symbol}/prices",
+    "/crypto/{symbol}/bars",
+    "/stocks/{ticker}/debt-profile",
+    "/stocks/{ticker}/debt-instruments/{instrumentId}",
+    "/stocks/{ticker}/dividends",
+    "/stocks/{ticker}/investor-events",
+    "/investor-events/recent",
+    "/stocks/{ticker}/earnings-calls/{fiscalYear}/{fiscalQuarter}",
+    "/stocks/{ticker}/earnings-calls/{fiscalYear}/{fiscalQuarter}/speakers",
+    "/investor-events/{eventId}/speakers",
+    "/stocks/{ticker}/earnings-calls/{fiscalYear}/{fiscalQuarter}/live-transcript",
+    "/investor-events/{eventId}/live-transcript",
+    "/stocks/{ticker}/earnings-calls/{fiscalYear}/{fiscalQuarter}/questions",
+    "/investor-events/{eventId}/questions",
+    "/stocks/{ticker}/earnings-calls/phrase-trend",
+    "/stocks/{ticker}/earnings-briefs",
+    "/stocks/{ticker}/call-insights",
+    "/stocks/{ticker}/call-themes/history",
+    "/investor-events/{eventId}/slides",
+    "/etfs",
+    "/etfs/{ticker}",
+    "/etfs/{ticker}/holdings",
+    "/stocks/{exchange}/{ticker}/director-transactions",
+    "/stocks/{exchange}/{ticker}/financial-reports",
+    "/stocks/{exchange}/{ticker}/financial-reports/native",
+    "/stocks/{exchange}/{ticker}/financial-reports/native/{reportId}",
+    "/stocks/{exchange}/{ticker}/european-fund-holdings",
+    "/stocks/{ticker}/filings",
+    "/filings",
+    "/filings/{documentId}/lines",
+    "/filings/{documentId}/keyword-search",
+    "/stocks/{ticker}/fails-to-deliver",
+    "/securities/{ticker}/fails-to-deliver",
+    "/stocks/{ticker}/exempt-offerings",
+    "/stocks/{ticker}/financial-statements/{statement}",
+    "/stocks/{ticker}/financial-facts/{concept}",
+    "/fred/series",
+    "/fred/series/{seriesId}/observations",
+    "/fred/latest",
+    "/fred/calendar",
+    "/stocks/{ticker}/revenue-breakdown",
+    "/stocks/{ticker}/customer-concentration",
+    "/stocks/{ticker}/going-concern",
+    "/funds",
+    "/funds/{ticker}/holdings",
+    "/funds/{ticker}/operations",
+    "/stocks/{ticker}/fund-owners",
+    "/securities/{ticker}/fund-owners",
+    "/investment-advisers",
+    "/investment-advisers/{crd}",
+    "/stocks/{ticker}/government-contracts",
+    "/stocks/{exchange}/{ticker}/government-contracts",
+    "/government-contracts/top",
+    "/stocks/{ticker}/guidance",
+    "/13f/flows",
+    "/stocks/{ticker}/ownership-signals",
+    "/securities/{ticker}/ownership-signals",
+    "/stocks/{ticker}/holder-targets",
+    "/securities/{ticker}/holder-targets",
+    "/stocks/{ticker}/institutional-holders",
+    "/securities/{ticker}/institutional-holders",
+    "/stocks/{ticker}/institutional-ownership",
+    "/securities/{ticker}/institutional-ownership",
+    "/stocks/{ticker}/holder-mix",
+    "/securities/{ticker}/holder-mix",
+    "/stocks/{ticker}/institutional-activity",
+    "/securities/{ticker}/institutional-activity",
+    "/13f/market-activity",
+    "/13f/most-held",
+    "/indexes",
+    "/indexes/{index}",
+    "/indexes/{index}/changes",
+    "/indexes/{index}/forecast",
+    "/indexes/{index}/fund-flows",
+    "/stocks/{ticker}/insider-transactions",
+    "/stocks/{ticker}/insider-ownership",
+    "/stocks/{ticker}/proposed-sales",
+    "/insiders",
+    "/insider-sentiment-scores",
+    "/institutions",
+    "/institutions/{cik}/portfolio",
+    "/institutions/{cik}/summary",
+    "/institutions/{cik}/profile",
+    "/institutions/{cik}/style-history",
+    "/institutions/{cik}/sector-allocation",
+    "/institutions/{cik}/activity",
+    "/institutions/{cik}/beneficial-ownership",
+    "/stocks/{ticker}/ir-news",
+    "/stocks/{ticker}/ir-events",
+    "/stocks/{ticker}/shareholder-votes",
+    "/super-investors",
+    "/consensus-holdings",
+    "/ipos",
+    "/ipos/{cik}",
+    "/stocks/{ticker}/kpis",
+    "/stocks/{ticker}/non-gaap-bridge",
+    "/listings",
+    "/markets",
+    "/stocks/{ticker}",
+    "/stocks/{exchange}/{ticker}/major-holdings",
+    "/market/put-call-ratios",
+    "/market/vix",
+    "/market/status",
+    "/market/calendar",
+    "/stocks/{ticker}/valuation-multiples",
+    "/stocks/{ticker}/valuation-multiples/history",
+    "/stocks/{ticker}/options/expirations",
+    "/securities/{ticker}/options/expirations",
+    "/stocks/{ticker}/options/chain",
+    "/securities/{ticker}/options/chain",
+    "/stocks/{ticker}/options/contract",
+    "/securities/{ticker}/options/contract",
+    "/stocks/{ticker}/options/contract/bars",
+    "/securities/{ticker}/options/contract/bars",
+    "/stocks/{ticker}/options/contract/trades",
+    "/securities/{ticker}/options/contract/trades",
+    "/stocks/{ticker}/options/session",
+    "/securities/{ticker}/options/session",
+    "/stocks/{ticker}/options/summary",
+    "/securities/{ticker}/options/summary",
+    "/stocks/{ticker}/options/term-structure",
+    "/securities/{ticker}/options/term-structure",
+    "/stocks/{ticker}/options/volatility",
+    "/securities/{ticker}/options/volatility",
+    "/stocks/{ticker}/options/strategy",
+    "/securities/{ticker}/options/strategy",
+    "/stocks/{ticker}/executive-changes",
+    "/stocks/{ticker}/executive-compensation",
+    "/stocks/{exchange}/{ticker}/public-short-positions",
+    "/stocks/{ticker}/quote",
+    "/securities/{ticker}/quote",
+    "/quotes",
+    "/screener/stocks",
+    "/filings/search",
+    "/stocks/{ticker}/filings/search",
+    "/filings/{documentId}/search",
+    "/stocks/{ticker}/short-volume",
+    "/securities/{ticker}/short-volume",
+    "/stocks/{ticker}/short-interest",
+    "/securities/{ticker}/short-interest",
+    "/stocks/{ticker}/short-interest/forecast",
+    "/stocks/{ticker}/off-exchange-volume",
+    "/securities/{ticker}/off-exchange-volume",
+    "/short-interest/snapshot",
+    "/short-volume/largest",
+    "/short-squeeze-scores",
+    "/stocks/{exchange}/{ticker}/short-disclosures",
+    "/stocks/{ticker}/bars",
+    "/securities/{ticker}/bars",
+    "/stocks/{ticker}/holders",
+    "/securities/{ticker}/holders",
+    "/stocks/{ticker}/ownership-summary",
+    "/securities/{ticker}/ownership-summary",
+    "/stocks/{ticker}/beneficial-ownership",
+    "/securities/{ticker}/beneficial-ownership",
+    "/stocks/{ticker}/prices",
+    "/securities/{ticker}/prices",
+    "/prices/latest",
+    "/stocks/{ticker}/technicals/atr",
+    "/securities/{ticker}/technicals/atr",
+    "/stocks/{ticker}/technicals/bollinger-bands",
+    "/securities/{ticker}/technicals/bollinger-bands",
+    "/stocks/{ticker}/technicals/obv",
+    "/securities/{ticker}/technicals/obv",
+    "/stocks/{ticker}/technicals/stochastic",
+    "/securities/{ticker}/technicals/stochastic",
+    "/stocks/{ticker}/splits",
+    "/stocks/{ticker}/supply-chain",
+    "/stocks/{ticker}/supply-chain/overlap",
+})
 
-_ROUTE_PATTERNS: tuple[tuple[re.Pattern[str], bool], ...] = tuple(
-    (
-        re.compile(
-            "^"
-            + "/".join(
-                r"[^/]+" if part.startswith("{") else re.escape(part)
-                for part in template.strip("/").split("/")
-            )
-            + "$"
-        ),
-        restricted,
+_ROUTE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(
+        "^"
+        + "/".join(
+            r"[^/]+" if part.startswith("{") else re.escape(part)
+            for part in template.strip("/").split("/")
+        )
+        + "$"
     )
-    for template, restricted in ROUTES.items()
+    for template in ROUTES
 )
 
 _US_TICKER = re.compile(r"[A-Z]{1,5}(?:[.-][A-Z])?")
@@ -119,36 +284,20 @@ def api_key() -> str:
     return os.environ.get("TAPEBASIS_EQUIBLES_API_KEY", "").strip()
 
 
-def entitlement() -> str:
-    """Return standard or enterprise, failing closed for an unknown value.
+def route_allowed(path: str) -> bool:
+    """Return whether a safely encoded relative route is on the allowlist.
 
-    A typo must never appear as a made-up tier in the response contract. Only
-    the exact enterprise value asserts redistribution; every other value is
-    treated as standard and restricted routes remain unavailable.
+    ``get`` percent-encodes the colon in a MIC:TICKER path value. That single
+    encoding is equivalent to a literal colon and is safe to normalize before
+    matching. Every other percent encoding, including a second encoding pass,
+    stays invalid so a path cannot change meaning after the allowlist check.
     """
-    value = os.environ.get("TAPEBASIS_EQUIBLES_ENTITLEMENT", "standard").strip().lower()
-    return "enterprise" if value == "enterprise" else "standard"
-
-
-def has_enterprise_entitlement() -> bool:
-    """Report whether the operator explicitly enabled restricted redistribution."""
-    return entitlement() == "enterprise"
-
-
-def route_requires_enterprise(path: str) -> bool | None:
-    """Return the route's entitlement requirement, or ``None`` when not allowed.
-
-    Args:
-        path: Route relative to ``/v1``, already percent-encoded per segment.
-
-    Returns:
-        ``True`` for a documented restricted route, ``False`` for a documented
-        standard route, and ``None`` for anything outside the allowlist.
-    """
-    for pattern, restricted in _ROUTE_PATTERNS:
-        if pattern.match(path.strip("/")):
-            return restricted
-    return None
+    normalized = re.sub(r"%3a", ":", path, flags=re.IGNORECASE)
+    if unquote(normalized) != normalized:
+        return False
+    if re.search(r"(?:^|%)(?:2f|5c|3f|23)|[?#\\]|\.\.", path, re.IGNORECASE):
+        return False
+    return any(pattern.match(normalized.strip("/")) for pattern in _ROUTE_PATTERNS)
 
 
 def ticker_for(symbol: str) -> str:
@@ -385,7 +534,7 @@ def _blocked_until(response: httpx.Response) -> float:
 
 
 def _cache_identity(path: str, query: Mapping[str, Any]) -> str:
-    """Return a cache key that changes with the key fingerprint and entitlement.
+    """Return a cache key that changes with the key fingerprint.
 
     The raw credential is never part of the key: a rotating key must not reuse a
     previous key's cached payload, but the key itself must not be retained in a
@@ -393,47 +542,36 @@ def _cache_identity(path: str, query: Mapping[str, Any]) -> str:
     """
     identity = repr(sorted(query.items()))
     fingerprint = hashlib.sha256(api_key().encode()).hexdigest()[:16]
-    return f"{path}?{identity}&key={fingerprint}&entitlement={entitlement()}"
+    return f"{path}?{identity}&key={fingerprint}"
 
 
 async def request(
     path: str,
     *,
     params: Mapping[str, Any] | None = None,
-    enterprise: bool = False,
+    cache: bool = True,
 ) -> dict[str, Any]:
     """Read one official Equibles API route with pacing and a bounded cache.
 
     Args:
         path: Route relative to ``/v1``, supplied by this package, not a URL.
         params: Optional query parameters. Credentials are never accepted here.
-        enterprise: Retained for call-site readability. The route allowlist is
-            the authority, so a restricted route still requires entitlement even
-            when this flag is false, and a standard route never does.
-
+        cache: Use the key-scoped cached result when true. Live transcripts pass
+            false so an incrementally changing text is never served stale.
     Returns:
         The decoded JSON object. Response objects stay intact so units, filing
         provenance and partial coverage remain the provider's own statements.
 
     Raises:
-        ProviderError: With stable ``NOT_CONFIGURED``, ``not_entitled``,
+        ProviderError: With stable ``NOT_CONFIGURED``, ``PLAN_REQUIRED``,
             ``UPSTREAM_RATE_LIMIT``, ``UPSTREAM_ERROR`` or ``SCHEMA_DRIFT`` code.
         NoDataError: For a missing listing or period.
     """
-    restricted = route_requires_enterprise(path)
-    if restricted is None:
+    if not route_allowed(path):
         raise ProviderError(
             PROVIDER,
             "this route is not on the documented Equibles allowlist; no request was made",
             code="PROVIDER_ERROR",
-        )
-    if restricted and not has_enterprise_entitlement():
-        raise ProviderError(
-            PROVIDER,
-            "This tool requires an Equibles Enterprise redistribution agreement. "
-            "Set TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise only after that agreement "
-            "is active; no request was made.",
-            code="not_entitled",
         )
     key = api_key()
     if not key:
@@ -443,10 +581,21 @@ async def request(
             code="NOT_CONFIGURED",
         )
     query = {name: value for name, value in (params or {}).items() if value is not None}
+    forbidden = {
+        name for name in query
+        if re.search(r"(?:authorization|api.?key|access.?token|bearer|secret)", name, re.IGNORECASE)
+    }
+    if forbidden:
+        raise ProviderError(
+            PROVIDER, "credentials are accepted only from TAPEBASIS_EQUIBLES_API_KEY",
+            code="PROVIDER_ERROR",
+        )
+    if any(str(value).lower() == "csv" for name, value in query.items() if name == "format"):
+        raise ProviderError(PROVIDER, "only JSON responses are supported", code="PROVIDER_ERROR")
     paced = limiter(PROVIDER)
     cache_key = _cache_identity(path, query)
     cached = paced.cache_get(cache_key, _env_number("TAPEBASIS_EQUIBLES_CACHE_TTL", _CACHE_TTL))
-    if isinstance(cached, dict):
+    if cache and isinstance(cached, dict):
         return cached
     blocked = float(getattr(paced, "equibles_blocked_until", 0.0) or 0.0)
     if blocked > time.time():
@@ -520,9 +669,9 @@ async def request(
             if response.status_code == 403:
                 raise ProviderError(
                     PROVIDER,
-                    "The Equibles account or redistribution agreement does not include this "
-                    "dataset; the response was not downgraded",
-                    code="not_entitled",
+                    "The Equibles plan does not include this dataset; upgrade the plan or "
+                    "remove the dataset from this call. No result was downgraded.",
+                    code="PLAN_REQUIRED",
                 )
             if response.status_code == 404:
                 raise NoDataError(PROVIDER, "Equibles has no matching listing or period")
@@ -543,7 +692,8 @@ async def request(
                     PROVIDER, "Equibles response was not a JSON object", code="SCHEMA_DRIFT"
                 )
             paced.equibles_blocked_until = 0.0
-            paced.cache_set(cache_key, payload)
+            if cache:
+                paced.cache_set(cache_key, payload)
             return payload
 
     # One request per call. ``attempts=0`` prevents the shared limiter from
@@ -556,10 +706,10 @@ async def get(
     fragment: str,
     *,
     params: Mapping[str, Any] | None = None,
-    enterprise: bool = False,
+    cache: bool = True,
 ) -> dict[str, Any]:
-    """Read a relative route with path-segment escaping; return its decoded object."""
-    return await request(_path(fragment), params=params, enterprise=enterprise)
+    """Read an allowlisted relative JSON route and return its decoded object."""
+    return await request(_path(fragment), params=params, cache=cache)
 
 
 __all__ = [
@@ -568,12 +718,10 @@ __all__ = [
     "PROVIDER",
     "ROUTES",
     "api_key",
-    "entitlement",
     "freshness_for",
     "get",
-    "has_enterprise_entitlement",
     "request",
-    "route_requires_enterprise",
+    "route_allowed",
     "source_url",
     "ticker_for",
 ]

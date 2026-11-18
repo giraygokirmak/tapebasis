@@ -30,20 +30,21 @@
 
   tools_bloomberg ──► bb_access (same adapter, one provider asked, so single-source)
 
-  tools_equibles ──► eq_access ──► official api.equibles.com/v1 REST only
+  tools_equibles / tools_equibles_families ──► eq_access ──► api.equibles.com/v1 REST only
        │                    │
-       │                    ├── documented route allowlist + local redistribution policy
+       │                    ├── frozen documented route/dataset allowlist
        │                    ├── Bearer header only; redirects and secret-bearing errors refused
        │                    ├── one dataset, one request; no pagination/retry after daily 429
-       │                    ├── key fingerprint + tier cache identity, never the raw key
+       │                    ├── key fingerprint cache identity, never the raw key
+       │                    ├── live transcripts bypass cache; no arbitrary URL or schema download
        │                    ├── provider observation fields per dataset, not local receipt time
        │                    └── shared limiter plus a per-loop quota check-and-send gate
        │
-       │  six isolated tools, no symbols.resolve, reconcile or market fan-out
+       │  20 isolated tools, no general market-price fan-out
        ▼
-  separate raw datasets + Data by Equibles + as_of + reporting_delay + entitlement
+  separate raw datasets + Data by Equibles + as_of + reporting_delay + access
 
-  tools_health ──► local Equibles key/tier + last real public quota headers
+  tools_health ──► local Equibles key presence + last real public quota headers
        │             no Equibles upstream health request
        ▼
       │  every request above goes through ratelimit.limiter(PROVIDER)
@@ -88,7 +89,11 @@ src/tapebasis/
 ├── sa_access.py          typed access to stockanalysis.com (US equities and ETFs)
 ├── eq_access.py          official Equibles REST allowlist, secret/quota/freshness logic
 ├── equibles_reconcile.py optional exact-context EPS and same-date short-interest adapters
-├── tools_equibles.py     six isolated Equibles tools and their entitlement responses
+├── eq_catalog.py          frozen 188-route dataset/filter catalogue and validator
+├── equibles_surface.py    shared raw-dataset, access, freshness and attribution envelope
+├── tools_equibles.py      six established isolated Equibles tools
+├── tools_equibles_families.py  fourteen grouped dataset/filter tools
+├── catalog_families.py    grouped tool metadata generated from local frozen data
 ├── catalog.py            plain-data tool catalogue (providers + comparison strategy)
 ├── tools_market.py       the 9 multi-source market tools
 ├── tools_finviz.py       the 7 Finviz-only tools
@@ -141,11 +146,11 @@ keeps the boundary real rather than decorative. It is why the token-free sentime
 
 ### Equibles is isolated, with two guarded shared-field adapters
 
-The six dedicated Equibles tools remain isolated. In addition, `equibles_reconcile.py` offers two
+The 20 dedicated Equibles tools remain isolated. In addition, `equibles_reconcile.py` offers two
 narrow adapters to shared tools: exact-context EPS estimates in `stock_earnings`, and
 same-settlement-date short interest in `stock_ownership`. They are omitted entirely when
-`TAPEBASIS_EQUIBLES_API_KEY` is absent, and the latter also requires Enterprise entitlement, so
-keyless responses have no Equibles request, scope, provenance or coverage effect. Their ordering
+`TAPEBASIS_EQUIBLES_API_KEY` is absent, and each depends on the actual API response for plan access,
+so keyless responses have no Equibles request, scope, provenance or coverage effect. Their ordering
 label lives in `RECONCILIATION_PROVIDER_ORDER` only; `PROVIDER_ORDER` and `DEFAULT_ORDER` remain the
 general market list. Neither adapter can supply a live price, option contract or ownership
 population. See [Design Decisions](Design-Decisions#equibles-joins-exactly-two-shared-fields-guarded-by-equivalence)
@@ -159,22 +164,24 @@ selected block. A block's raw REST object keeps its original values, units, fili
 provenance. `DataProvider.EQUIBLES` is used directly; deliberately, `EQUIBLES` is neither in
 `PROVIDER_ORDER` nor `DEFAULT_ORDER`, so the existing comparison/freshness implementation does not
 acquire a new leg. Only a capability that explicitly creates an Equibles attempt can reconcile it,
-using the separate `RECONCILIATION_PROVIDER_ORDER` sequence. leg.
+using the separate `RECONCILIATION_PROVIDER_ORDER` sequence.
 
-`eq_access.ROUTES` is both the allowlist of documented paths and the authority for Tapebasis's
-local redistribution policy. The exact entitlement tier is `standard` by default; restricted routes
-require an explicit Enterprise assertion, while an ordinary route does not become restricted just
-because a caller passed the readability flag. An upstream `403` still wins over the assertion.
+`eq_access.ROUTES` and `eq_catalog.CATALOG` are the frozen allowlist for documented JSON GET routes
+and their exact filters. The runtime never downloads a schema or accepts an arbitrary URL. The actual
+Free, Plus or Pro API response decides access; there is no local paid-plan assertion or pre-request
+denial. Upstream `401` is an unusable credential and `403` is `PLAN_REQUIRED`, never an empty success.
+Account-owned route families, binary/CSV output, institution-copy backtests and direct comparison of
+two institutions' portfolios remain outside this surface. Live transcripts bypass the cache.
 
 The key is confined to its Bearer header, redirects are refused and error strings are sanitized.
-Cache identity hashes the key and includes the tier. The shared limiter supplies ordinary pacing,
+Cache identity hashes the key. The shared limiter supplies ordinary pacing,
 while the Equibles transport requests zero retries and holds an additional loop-local lock across
 its daily-quota recheck and corresponding HTTP call. This prevents an already queued caller from
 spending more quota after the leader returns `429`; it is not a global asyncio lock and does not
 change general provider retry semantics.
 
 Responses stay `EQUIBLES` even for partial dataset failures, not `PARTIAL`, because no second
-provider corroborated anything. Attribution, freshness, reporting delay and entitlement are still
+provider corroborated anything. Attribution, freshness, reporting delay and access are still
 present on total failure. Freshness fields are dataset-specific: publication dates remain separate
 from insider transactions and fiscal-period observations, and option expiration is not an `as_of`.
 

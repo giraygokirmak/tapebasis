@@ -13,21 +13,21 @@ Every tool returns the same envelope. Learn it once and every tool is readable.
 | `YAHOO` | `SINGLE_SOURCE` | Only Yahoo Finance answered | Same, from the Yahoo side |
 | `SA` | `SINGLE_SOURCE` | Only StockAnalysis answered | Same; note it covers US equities and ETFs only |
 | `BLOOMBERG` | `SINGLE_SOURCE` | Only Bloomberg answered | Same, but state `exchange_delay` / `print_time` before calling a price live |
-| `EQUIBLES` | `SINGLE_SOURCE` | One or more named Equibles datasets answered | Keep each dataset separate and single-source. Preserve `Data by Equibles`, `as_of`, `reporting_delay` and entitlement. This label remains even when another requested dataset failed |
+| `EQUIBLES` | `SINGLE_SOURCE` | One or more named Equibles datasets answered | Keep each dataset separate and single-source. Preserve `Data by Equibles`, `as_of`, `reporting_delay` and `access`. This label remains even when another requested dataset failed |
 | `NONE` | `UNAVAILABLE` | No provider supplied the primary value | Say the primary value is unavailable. Do not invent one; an independently labelled `news` block may still be present |
 
 `verification` is derived, never independent: `ALL` and `PARTIAL` → `MULTI_SOURCE`, a single provider
 including `EQUIBLES` → `SINGLE_SOURCE`, `NONE → UNAVAILABLE`.
 
-**Equibles is a separate single-provider contract, not a reconciliation leg.** The six Equibles-only
-tools return raw upstream objects in named datasets with empty `comparisons`. `fields.<dataset>` says
+**Equibles is a separate single-provider contract, not a general reconciliation leg.** The 20 Equibles-only
+tools and 14 grouped family tools return raw upstream objects in named datasets with empty `comparisons`. `fields.<dataset>` says
 `source: EQUIBLES`, `supplied: [EQUIBLES]` and has no compared population. If one dataset fails but
 another answers, the response stays `EQUIBLES`, never `PARTIAL`: `PARTIAL` would incorrectly claim
 multi-source coverage. `errors` names the failed dataset and `providers_answered` remains only
 `[EQUIBLES]`. If every dataset fails, the state is `NONE` with `data: null`.
 
 The Equibles-only fields below are present at the top level of each returned tool envelope, on
-success, preflight denial and transport failure. Invalid caller arguments, such as a malformed date,
+success, configuration/plan denial and transport failure. Invalid caller arguments, such as a malformed date,
 snapshot UUID, unsupported statement, period, interval or non-US ticker, are rejected before this
 envelope is built. Their validation errors therefore do not masquerade as an Equibles provider
 response:
@@ -37,16 +37,16 @@ response:
 | `attribution` | Exact string `Data by Equibles`; it must stay attached when the data is redistributed |
 | `as_of` | Newest provider observation timestamp found across returned datasets, or null. It is not the fetch or cache time |
 | `freshness` | Object with `basis`, `datasets`, delay statement and observation note. Per dataset it keeps earliest/latest dates and date-only precision; failed datasets retain null dates |
-| `reporting_delay` | Source and reporting schedule for every requested dataset, even unavailable ones. Filing observation dates are not publication times |
-| `entitlement` | `phase`, `enterprise_required`, `status`, `configured`, `redistribution_asserted`, requirement and terms URL. Denials add `denied_datasets`; failures add an explicit no-substitution statement |
-| `params_applied` | Intended query per dataset, sent unchanged when transport occurs. Clamped bounds are visible. A preflight denial retains the intended queries even though none was sent; a parameterless dataset has `{}` |
+| `reporting_delay` | Source and reporting schedule for every requested dataset, even unavailable ones. Filing observation dates are not publication times. Live transcripts are not cached; options follow the actual paid-plan response |
+| `access` | `status` is `configured`, `not_configured`, `auth_rejected`, `plan_required` or `partially_available`; `configured` reflects usable key presence, not a verified plan. Includes the actual-response plan rule, requirement and terms URL. Plan denials add `plan_required_datasets`; failures add an explicit no-substitution statement |
+| `params_applied` | Intended query per dataset, sent unchanged when transport occurs. Legacy bounded tools report clamps; grouped tools reject out-of-range values. A keyless denial retains intended queries even though none was sent; a parameterless dataset has `{}` |
 | `comparison_policy` | Exact statement that no Equibles value is merged with another provider |
 
-Restricted tools use `not_entitled` before transport unless the operator explicitly sets
-`TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise`. That setting asserts an active redistribution agreement;
-it does not prove one. A real upstream `403` still maps to `not_entitled`. Partial dataset denials
-produce `entitlement.status: partially_entitled` rather than silently dropping the denied datasets.
-A missing key reports `NOT_CONFIGURED`; an actual `401` marks the configured key unusable.
+The only credential setting is `TAPEBASIS_EQUIBLES_API_KEY`. There is no local plan or redistribution
+assertion and no pre-request paid-plan denial. A real upstream `403` maps to `PLAN_REQUIRED`. Partial
+dataset denials produce `access.status: partially_available` and `plan_required_datasets`, rather than
+silently dropping denied datasets. A missing key reports `NOT_CONFIGURED` with `not_configured`;
+an actual `401` reports `NOT_CONFIGURED` with `auth_rejected` and marks the key unusable.
 
 The API key is only ever sent as the Bearer `Authorization` header to the documented official API
 origin. Redirects are refused, upstream error prose is sanitized, and no raw credential appears in
@@ -134,7 +134,7 @@ rating or price-target denominator.
 `PROVIDER_ORDER` names the ordinary market legs. `RECONCILIATION_PROVIDER_ORDER` additionally
 contains `EQUIBLES`, but it admits no request on its own: only `stock_earnings` and the optional
 short-interest cross-check in `stock_ownership` create an authenticated Equibles attempt, after
-configuration and entitlement gates pass. The six Equibles-only tools remain separate.
+key-presence and symbol gates pass. The 20 dedicated Equibles tools remain separate.
 
 Without `TAPEBASIS_EQUIBLES_API_KEY`, no adapter function is called. Consequently `EQUIBLES` does not
 appear in `providers_answered`, `sources`, `errors`, `fields` or `comparisons` for those tools, and

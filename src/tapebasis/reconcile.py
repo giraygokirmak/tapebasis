@@ -291,7 +291,7 @@ async def ask(
     and is recorded as ``NOT_ATTEMPTED`` rather than as a failure, so it never
     shows up in ``errors`` or drags the response down to ``NONE``. Equibles has
     no implicit call: a capability supplies ``eq_fn`` only after its own key,
-    symbol and entitlement gates pass, otherwise it is entirely outside the
+    symbol and key-presence gates pass, otherwise it is entirely outside the
     request's provider scope.
     """
 

@@ -31,8 +31,8 @@ Yahoo does, so that pair is weak corroboration. See
 
 **No general market tool requires an API key.** Its capabilities work out of the box;
 `MARKETAUX_API_TOKEN` only upgrades news and sentiment to a licensed feed. The separate Equibles
-tools require `TAPEBASIS_EQUIBLES_API_KEY`; restricted datasets additionally require an explicit
-Enterprise redistribution assertion. See [Configuration](Configuration).
+tools require `TAPEBASIS_EQUIBLES_API_KEY`. The actual Equibles Free, Plus or Pro response decides
+dataset access; there is no local plan assertion. See [Configuration](Configuration).
 
 ---
 
@@ -59,7 +59,8 @@ asks them all, compares, and tells the agent what it is holding.
 | --- | --- |
 | [Getting Started](Getting-Started) | Install, run over stdio or HTTP, first calls |
 | [Response Contract](Response-Contract) | The envelope, every field, how to read it correctly |
-| [Tools Reference](Tools-Reference) | All 41 tools, providers, and what is compared |
+| [Tools Reference](Tools-Reference) | All 55 tools, providers, and what is compared |
+| [Equibles Datasets](Equibles-Datasets) | Frozen REST routes, dataset names, exact filters and provider parameter descriptions |
 | [Architecture](Architecture) | Module layout, data flow, why the pieces sit where they do |
 | [Health Monitor](Health-Monitor) | Probes, fingerprints, drift detection, baselines |
 | [Sentiment](Sentiment) | Token-free local scoring vs. licensed Marketaux |
@@ -85,7 +86,7 @@ Every tool result carries exactly one of nine values. It states **coverage**, ne
 | `YAHOO` | Only Yahoo Finance answered. Served, but **not** corroborated. |
 | `SA` | Only StockAnalysis answered. Served, but **not** corroborated; US equities and ETFs only. |
 | `BLOOMBERG` | Only Bloomberg answered. Served, but **not** corroborated; its quote can be delayed. |
-| `EQUIBLES` | One or more separate Equibles datasets answered. Single-source, never merged; preserve attribution, freshness, reporting delay and entitlement. Partial dataset failure keeps this label. |
+| `EQUIBLES` | One or more separate Equibles datasets answered. Single-source, never merged; preserve attribution, freshness, reporting delay and access. Partial dataset failure keeps this label. |
 | `NONE` | No provider supplied the primary value; a separately labelled `news` block may remain available. |
 
 `ALL` says every provider asked answered, never that they agree, and a leg that was asked and

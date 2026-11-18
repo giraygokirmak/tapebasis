@@ -49,7 +49,7 @@ outrank a broader feed on a tie.
 
 Equibles is outside general price and freshness arbitration. Its official,
 authenticated REST tools preserve single-provider datasets with attribution,
-observation timestamps, reporting delays and explicit entitlement status.
+observation timestamps, reporting delays and explicit API access status.
 Capability-specific adapters may compare a documented, equivalent period or
 observation without making Equibles a global live-quote provider.
 """
@@ -215,7 +215,7 @@ ERROR_CODES: tuple[str, ...] = (
     "UPSTREAM_ERROR",
     "UPSTREAM_RATE_LIMIT",
     "UPSTREAM_TIMEOUT",
-    "not_entitled",
+    "PLAN_REQUIRED",
 )
 
 

@@ -74,11 +74,19 @@ def test_non_us_or_unsafe_tickers_are_rejected(query):
         eq_access.ticker_for(query)
 
 
-def test_documented_route_allowlist_is_the_entitlement_authority():
-    """Only the documented routes are callable, and the route states its tier."""
-    assert eq_access.route_requires_enterprise("/stocks/NVDA") is False
-    assert eq_access.route_requires_enterprise("/securities/NVDA/options/summary") is True
-    assert eq_access.route_requires_enterprise("/admin/keys") is None
+def test_documented_route_allowlist_is_the_only_route_authority():
+    """Only documented routes are callable; there is no local tier switch."""
+    assert eq_access.route_allowed("/stocks/NVDA") is True
+    assert eq_access.route_allowed("/securities/NVDA/options/summary") is True
+    assert eq_access.route_allowed("/stocks/XTSE%3AWDO/prices") is True
+    assert eq_access.route_allowed("/admin/keys") is False
+    assert eq_access.route_allowed("/stocks/A%2FB/prices") is False
+    for attack in (
+        "/stocks/XTSE%253AWDO/prices", "/stocks/XTSE%3aWDO/prices%2fadmin",
+        "/stocks/XTSE%3AWDO%5cadmin/prices", "/stocks/XTSE%3AWDO%3fadmin/prices",
+        "/stocks/XTSE%3AWDO%23admin/prices",
+    ):
+        assert eq_access.route_allowed(attack) is False
 
 
 @pytest.mark.asyncio
@@ -91,49 +99,34 @@ async def test_missing_key_is_not_configured_with_no_network(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_unknown_route_and_low_level_enterprise_bypass_are_refused(monkeypatch):
-    """A caller cannot reach an undocumented route or a restricted route by flag."""
+async def test_unknown_route_and_credential_query_reused(monkeypatch):
+    """A caller cannot add an undocumented route, legacy flag or credential."""
     monkeypatch.setenv("TAPEBASIS_EQUIBLES_API_KEY", "eq_test_only")
     monkeypatch.setattr(eq_access, "shared_client", _no_call)
     with pytest.raises(ProviderError) as unknown:
         await eq_access.get("admin/keys")
     assert unknown.value.code == "PROVIDER_ERROR"
-    # The route, not the caller's ``enterprise=False`` default, decides.
-    with pytest.raises(ProviderError) as restricted:
-        await eq_access.get("securities/NVDA/options/summary")
-    assert restricted.value.code == "not_entitled"
-    # The caller flag is documentation only, never a new permission boundary.
-    # Reach the transport with a synthetically successful route, proving the
-    # standard route itself did not demand enterprise just because the flag was
-    # passed for call-site readability.
-    async def success(_url, **_kwargs):
-        return httpx.Response(
-            200, json={"ticker": "NVDA"},
-            request=httpx.Request("GET", "https://api.equibles.com/v1/stocks/NVDA"),
-        )
-
-    monkeypatch.setattr(
-        eq_access, "shared_client", lambda *_a, **_k: _client(success),
-    )
-    assert (await eq_access.get("stocks/NVDA", enterprise=True))["ticker"] == "NVDA"
+    with pytest.raises(ProviderError) as credential:
+        await eq_access.get("securities/NVDA/options/summary", params={"apiKey": "bad"})
+    assert credential.value.code == "PROVIDER_ERROR"
+    with pytest.raises(ProviderError) as csv:
+        await eq_access.get("securities/NVDA/prices", params={"format": "CSV"})
+    assert csv.value.code == "PROVIDER_ERROR"
 
 
-def test_unknown_entitlement_values_fall_back_to_standard(monkeypatch):
-    """A typo is not a new tier and can never unlock restricted routes."""
-    monkeypatch.setenv("TAPEBASIS_EQUIBLES_ENTITLEMENT", "Enterprise-ish")
-    assert eq_access.entitlement() == "standard"
-    assert eq_access.has_enterprise_entitlement() is False
-    monkeypatch.setenv("TAPEBASIS_EQUIBLES_ENTITLEMENT", " ENTERPRISE ")
-    assert eq_access.entitlement() == "enterprise"
+def test_legacy_entitlement_is_not_an_authority():
+    """The removed environment switch cannot expose an entitlement API."""
+    assert not hasattr(eq_access, "entitlement")
+    assert not hasattr(eq_access, "has_enterprise_entitlement")
 
 
 @pytest.mark.asyncio
-async def test_phase_two_does_not_even_call_the_access_layer(monkeypatch):
-    """The default tier cannot downgrade restricted data or spend a request."""
+async def test_keyless_paid_plan_tools_return_not_configured(monkeypatch):
+    """No local entitlement denial is synthesized and no request is made."""
     async def forbidden(*_args, **_kwargs):
         raise AssertionError("restricted transport was reached")
 
-    monkeypatch.setattr(eq_access, "get", forbidden)
+    monkeypatch.setattr(eq_access, "shared_client", forbidden)
     for function in (
         tools_equibles.stock_short_positioning,
         tools_equibles.stock_options_analytics,
@@ -142,12 +135,10 @@ async def test_phase_two_does_not_even_call_the_access_layer(monkeypatch):
         response = await function("NVDA")
         assert response["data_provider"] == "NONE"
         assert response["data"] is None
-        assert response["entitlement"]["status"] == "not_entitled"
-        assert "all" not in response["entitlement"]["denied_datasets"]
-        assert response["freshness"]["datasets"].keys() == {
-            *response["entitlement"]["denied_datasets"],
-        }
-        assert response["errors"][0]["code"] == "not_entitled"
+        assert response["access"]["status"] == "not_configured"
+        assert response["access"]["status"] == "not_configured"
+        assert "plan_required_datasets" not in response["access"]
+        assert response["errors"][0]["code"] == "NOT_CONFIGURED"
         assert response["attribution"] == "Data by Equibles"
         assert "as_of" in response and "reporting_delay" in response
         assert not response["providers_answered"]
@@ -161,8 +152,8 @@ async def test_standard_fundamentals_require_a_key_but_preserve_contract(monkeyp
     )
     assert response["data_provider"] == "NONE"
     assert response["errors"][0]["code"] == "NOT_CONFIGURED"
-    assert response["entitlement"]["status"] == "standard"
-    assert response["entitlement"]["configured"] is False
+    assert response["access"]["status"] == "not_configured"
+    assert response["access"]["configured"] is False
     assert response["comparison_policy"] == "no Equibles value is merged with another provider"
     # Every requested dataset still names its delay when no data arrived.
     assert set(response["reporting_delay"]) == {"profile", "financial_statement"}
@@ -329,7 +320,7 @@ async def test_concurrent_callers_cannot_cross_the_daily_quota_wall(monkeypatch)
 @pytest.mark.parametrize(
     "status,code",
     [
-        (401, "NOT_CONFIGURED"), (403, "not_entitled"),
+        (401, "NOT_CONFIGURED"), (403, "PLAN_REQUIRED"),
         (429, "UPSTREAM_RATE_LIMIT"), (500, "UPSTREAM_ERROR"),
         (503, "UPSTREAM_ERROR"),
     ],
@@ -499,26 +490,25 @@ async def test_invalid_dates_and_snapshot_ids_are_refused_before_transport(monke
 
 
 @pytest.mark.asyncio
-async def test_enterprise_success_and_partial_403_are_explicit(monkeypatch):
-    """An Enterprise assertion cannot hide a real account-level denial."""
+async def test_actual_plan_success_and_partial_403_are_explicit(monkeypatch):
+    """A plan denial cannot hide another dataset's real successful response."""
     monkeypatch.setenv("TAPEBASIS_EQUIBLES_API_KEY", "eq_test")
-    monkeypatch.setenv("TAPEBASIS_EQUIBLES_ENTITLEMENT", "enterprise")
 
-    async def fake_get(fragment, *, params=None, enterprise=False):
-        assert enterprise is True
+    async def fake_get(fragment, *, params=None, **kwargs):
+        assert kwargs.get("cache", True) is True
         if "short-interest" in fragment:
             return {"data": [{"settlementDate": "2026-10-30", "shortPosition": 279600000,
                               "daysToCover": 2.8}]}
-        raise ProviderError("EQUIBLES", "plan not included", code="not_entitled")
+        raise ProviderError("EQUIBLES", "plan not included", code="PLAN_REQUIRED")
 
     monkeypatch.setattr(eq_access, "get", fake_get)
     response = await tools_equibles.stock_short_positioning("NVDA")
     assert response["data_provider"] == "EQUIBLES"
     assert response["data"]["short_interest"]["data"][0]["shortPosition"] == 279600000
-    assert response["errors"][0]["code"] == "not_entitled"
+    assert {error["code"] for error in response["errors"]} == {"PLAN_REQUIRED"}
     assert "short_volume" not in response["data"]
-    assert response["entitlement"]["status"] == "partially_entitled"
-    assert set(response["entitlement"]["denied_datasets"]) == {
+    assert response["access"]["status"] == "partially_available"
+    assert set(response["access"]["plan_required_datasets"]) == {
         "short_volume", "fails_to_deliver", "off_exchange_volume",
     }
     assert response["data"]["attribution"] == "Data by Equibles"
@@ -539,8 +529,8 @@ async def test_auth_rejection_does_not_advertise_a_configured_account(monkeypatc
         "NVDA", include_segments=False, include_debt=False, include_guidance=False,
     )
     assert response["data_provider"] == "NONE"
-    assert response["entitlement"]["configured"] is False
-    assert response["entitlement"]["status"] == "auth_rejected"
+    assert response["access"]["configured"] is False
+    assert response["access"]["status"] == "auth_rejected"
     assert set(response["reporting_delay"]) == {"profile", "financial_statement"}
 
 
@@ -551,8 +541,8 @@ async def test_options_and_prices_use_their_restricted_routes(monkeypatch):
     monkeypatch.setenv("TAPEBASIS_EQUIBLES_ENTITLEMENT", "enterprise")
     requested = []
 
-    async def fake_get(fragment, *, params=None, enterprise=False):
-        requested.append((fragment, params, enterprise))
+    async def fake_get(fragment, *, params=None, **kwargs):
+        requested.append((fragment, params, kwargs.get("cache", True)))
         if "options" in fragment:
             return {"underlyingCloseDate": "2026-11-17", "delayed": True,
                     "maxPainStrike": 155, "expectedMove": {"absolute": 5.2}}

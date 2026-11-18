@@ -1,8 +1,8 @@
 """Admit only equivalent Equibles observations into shared reconciliation.
 
-No network call is made without ``TAPEBASIS_EQUIBLES_API_KEY``. Short interest
-additionally requires the explicit Enterprise redistribution assertion. These
-adapters never supply live prices, option contracts or ownership populations.
+No network call is made without ``TAPEBASIS_EQUIBLES_API_KEY``. The account's
+actual plan decides access after that key is presented. These adapters never
+supply live prices, option contracts or ownership populations.
 """
 from __future__ import annotations
 
@@ -127,12 +127,10 @@ def short_interest_observations(payload: Mapping[str, Any]) -> list[dict[str, An
 
 
 async def fetch_short_interest_observations(ticker: str) -> dict[str, Any]:
-    """Return same-date candidates after both key and Enterprise gates pass."""
+    """Return same-date short-position candidates using the configured API key."""
     ticker = eq_access.ticker_for(ticker)
     path = f"securities/{ticker}/short-interest"
-    payload = await eq_access.get(
-        path, params={"limit": 500, "offset": 0}, enterprise=True,
-    )
+    payload = await eq_access.get(path, params={"limit": 500, "offset": 0})
     return {
         "observations": short_interest_observations(payload),
         "attribution": eq_access.ATTRIBUTION,

@@ -3,6 +3,41 @@
 Tapebasis uses semantic versions. Each release section is the reviewed source of its GitHub Release summary.
 Registry availability is recorded separately where a tag was published only partially.
 
+## [Unreleased]
+
+### Added
+
+- Added 14 `equibles_*` family tools, bringing the MCP surface to 55 tools. They expose 188
+  selected official Equibles JSON GET routes through exact `dataset` and documented `filters`, not
+  per-endpoint tools or arbitrary URLs. `tapebasis_tool_map` and
+  [Equibles Datasets](docs/wiki/Equibles-Datasets.md) provide the frozen route/filter map.
+- Grouped calls preserve raw named datasets with `Data by Equibles`, observation freshness,
+  reporting delay and `access`. Each dataset makes one authenticated GET with no automatic
+  pagination or provider fallback. Live transcripts bypass cache; options retain the actual paid-plan
+  requirement and `equibles_options(dataset="chain")` returns the raw chain.
+- Account-owned portfolio/organization/custom-data/web-feed trackers and binary/CSV assets stay
+  excluded. Institution-copy backtests and direct two-institution portfolio comparison are not added.
+  Provider ratings, predictions, squeeze scores and AI briefs remain source-labelled, not Tapebasis
+  recommendations.
+
+### Changed
+
+- Removed `TAPEBASIS_EQUIBLES_ENTITLEMENT`, the local paid-tier assertion, pre-request
+  `not_entitled` response and the old `entitlement` response field. `access` is now the sole public
+  access status field. A missing key or real `401` returns `NOT_CONFIGURED`; a real `403` returns
+  `PLAN_REQUIRED`, with `partially_available` where another requested dataset succeeds. Free, Plus
+  and Pro access follows the actual Equibles response, never an empty or substituted result.
+- Route validation accepts only the safe `%3A` normalization needed for `MIC:TICKER` and rejects
+  other percent encodings and double encoding. Frozen filters use the reviewed OpenAPI types and
+  explicit documented bounds, including UUID identifiers. Every route now has a hermetic HTTP-level
+  one-GET regression test.
+- Preserved the six established Equibles tools, exact-context EPS comparison and same-FINRA-
+  settlement-date short-position comparison. Keyless general tools still make no Equibles request
+  and gain no Equibles provider scope. Analyst populations stay separate, and Equibles never becomes
+  a general live-price arbitration leg.
+- Updated README, wiki, `.env.example` and packaged-server tool count together. No live Equibles key,
+  account plan or publication right is claimed as validated; this entry is not a version release.
+
 ## [1.1.4] - 2026-11-18
 
 ### Added

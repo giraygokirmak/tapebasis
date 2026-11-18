@@ -148,7 +148,7 @@ async def tapebasis_tool_map() -> dict[str, Any]:
             "`providers`/`schema_drift`. The "
             "bloomberg_* tools ask that provider alone and are single-source by "
             "construction. Equibles is isolated rather than a reconciliation leg; "
-            "its local entitlement probe spends no API quota and its raw datasets "
+            "its local key/quota probe spends no API quota and its raw datasets "
             "always keep attribution, as_of and reporting delay.",
         ],
         degraded=MONITOR.degraded(),

@@ -1,6 +1,6 @@
 # Tools Reference
 
-41 tools. `providers` is the tool's **possible** provider set, not a promise about any single call:
+55 tools. `providers` is the tool's **possible** provider set, not a promise about any single call:
 an individual response can degrade to fewer providers if some fail. The per-call truth is always that
 response's `data_provider` plus its `providers_answered`.
 
@@ -497,7 +497,7 @@ Served and labelled `FINVIZ`, explicitly single-source. No other provider has a 
 those legs are marked `NOT_ATTEMPTED`, which is **not** an error and is excluded from `errors`.
 
 `stock_ownership` has one exception to that single-source statement, and only for short interest:
-with both an Equibles key and an explicit Enterprise entitlement it compares Finviz's latest
+with an Equibles key and a plan response that supplies the dataset it compares Finviz's latest
 `short_interest_shares_k * 1000` with an Equibles `shortPosition` carrying the same FINRA
 `settlementDate`, in shares. The result is `data.short_interest_consensus`, with any comparison and
 single-field provenance added to `comparisons` and `fields`. A different or ambiguous settlement date
@@ -621,40 +621,81 @@ as a snapshot, not a live tape.
 
 ---
 
-## Equibles-only (6)
+## Equibles-only (20)
 
 These tools call the documented, versioned `https://api.equibles.com/v1` REST API with a Bearer key.
-They do not scrape an Equibles page, proxy through another provider or join the market-comparison
-fan-out. Their raw response objects stay in separately named datasets: no value is merged with
+They do not scrape an Equibles page, proxy through another provider or join general market-price
+arbitration. Their raw response objects stay in separately named datasets: no value is merged with
 TradingView, Finviz, Yahoo, StockAnalysis or Bloomberg. `comparisons` remains empty and
-`verification` is `SINGLE_SOURCE` when at least one dataset answers.
+`verification` is `SINGLE_SOURCE` when at least one dataset answers. Two explicitly configured
+shared-field adapters are the only exception, described under `stock_earnings` and `stock_ownership`.
 
-All six returned envelopes, including preflight denials and transport failures, carry top-level
-`attribution: "Data by Equibles"`, `as_of`, `freshness`, `reporting_delay` and `entitlement`. An
-available envelope also repeats those fields inside `data`; when every dataset failed, `data` is null
-and the top-level contract remains. Malformed caller arguments are rejected before this envelope is
-constructed. `params_applied` retains the intended query for each dataset, including when preflight
-refusal means it was never sent, and any clamped bound is also a warning. There is one request per
-selected dataset and no automatic pagination.
+All 20 returned envelopes, including configuration/plan denials and transport failures, carry
+top-level `attribution: "Data by Equibles"`, `as_of`, `freshness`, `reporting_delay` and `access`.
+An available envelope also repeats those fields inside `data`; when every dataset failed, `data` is
+null and the top-level contract remains. Malformed caller arguments are rejected before this envelope
+is constructed. `params_applied` retains the intended query for each dataset, including when a keyless
+refusal means it was never sent. The six established tools preserve their bounded-parameter behavior;
+grouped calls validate exact names and reject out-of-range values. There is one request per selected
+dataset and no automatic pagination or provider fallback.
 
 `TAPEBASIS_EQUIBLES_API_KEY` is read only from the environment. The key goes only in the
 `Authorization` header to the official origin. It is never returned in a URL, response, error,
-provenance or diagnostic, and the cache uses a hashed key fingerprint plus the entitlement tier.
-`TAPEBASIS_EQUIBLES_ENTITLEMENT` defaults to `standard`. `401` makes configuration visibly unusable;
-a missing key keeps the declared `standard` tier with `configured: false`.
+provenance or diagnostic, and the cache uses a hashed key fingerprint rather than the raw key. There
+is no local plan or redistribution assertion variable. A missing key returns `NOT_CONFIGURED` with
+`access.status: not_configured`; an actual `401` returns `NOT_CONFIGURED` with `auth_rejected`.
 
-`TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise` is the operator's explicit assertion that an active
-Enterprise agreement permits redistribution. It is not a check this server can perform. Restricted
-calls are denied with `not_entitled` before transport without that setting, and an actual `403` has
-the same code even with it. If some datasets succeed and others return `403`, the response stays
-`data_provider: EQUIBLES`, with `entitlement.status: partially_entitled` and `denied_datasets`.
-Redirect responses are refused rather than followed, so credentials cannot be forwarded elsewhere.
-After a daily-quota `429`, public quota/reset metadata is retained, no retry is made and further
-requests stop until reset. That remembered quota block is process-local and is lost on restart.
+The actual Free, Plus or Pro response decides access. An actual `403` returns `PLAN_REQUIRED` with
+`access.status: plan_required`; mixed successful and denied datasets stay `data_provider: EQUIBLES`,
+with `access.status: partially_available` and `plan_required_datasets`. Options require the plan that
+Equibles documents for those routes, currently Plus or Pro. No denial becomes empty or substituted
+data. Redirect responses are refused rather than followed, so credentials cannot be forwarded
+elsewhere. After a daily-quota `429`, public quota/reset metadata is retained, no retry is made and
+further requests stop until reset. That remembered quota block is process-local and is lost on restart.
+Live transcript datasets bypass the cache.
 
-Equibles Rating, squeeze scores and AI Brief are not requested, implemented or derived. Analyst
-observations are not converted into a proprietary rating, and option calculations are not converted
-into squeeze or dealer-sign opinions.
+Provider ratings, squeeze scores, predictions and AI briefs can be returned as raw, source-labelled
+datasets. They are not Tapebasis recommendations. Analyst-estimate populations remain separate from
+rating and price-target populations, and option calculations remain source calculations rather than
+a synthesized squeeze or dealer-sign opinion.
+
+### Grouped REST families (14)
+
+Each family takes an exact `dataset` and an optional JSON `filters` object restricted to that route's
+documented path and query names. There is no arbitrary URL parameter, runtime schema download,
+automatic pagination or fallback to another provider. `tapebasis_tool_map` includes the frozen map;
+[Equibles Datasets](Equibles-Datasets) lists all 188 selected JSON GET routes, exact dataset names,
+path/query filters, types, required flags and official parameter descriptions. Unknown or unsafe
+values are rejected before transport. Non-US listings use `MIC:TICKER` only where the route documents
+it. Account-owned portfolios, organizations, custom data, web-feed trackers and binary/CSV output
+are excluded. Institution-copy backtests and direct two-institution portfolio comparison remain
+outside this REST surface.
+
+| Family tool | Selected data families |
+| --- | --- |
+| `equibles_company` | Profiles, financial reports and facts, analyst estimates, debt, valuation and disclosures |
+| `equibles_filings` | Filing directories, passages, document lines and full-text search |
+| `equibles_investor_events` | Earnings calls, live transcripts, IR materials, events and IPOs |
+| `equibles_ownership` | Insider, institutional, beneficial-owner and supply-chain disclosures |
+| `equibles_institutions` | 13F filers, reported portfolios, consensus holdings and market activity |
+| `equibles_positioning` | FINRA short positions and volume, FTD, off-exchange data and provider scores |
+| `equibles_options` | Raw chains and contracts, expirations, sessions and source calculations; Plus or Pro |
+| `equibles_market_data` | Quotes, stored OHLCV, intraday bars, technical indicators and corporate actions |
+| `equibles_funds` | Fund and ETF directories, holdings, profiles and annual operations |
+| `equibles_macro` | FRED and Canadian series, releases and CFTC positioning |
+| `equibles_market_context` | Listings, indexes, advisers, screeners, calendars and market observations |
+| `equibles_public_policy` | Congressional disclosures and government contract awards |
+| `equibles_international` | International filings, ownership and native-report disclosures |
+| `equibles_crypto` | Crypto directory, quotes, stored prices and intraday bars |
+
+Example: `equibles_options(dataset="chain", filters={"ticker": "NVDA",
+"expiration": "2026-12-18"})` performs one chain GET and returns the raw response under `data.chain`.
+Expiration is optional and must be an ISO `YYYY-MM-DD` date. Use
+`equibles_company(dataset="financial_statement", filters={"ticker": "NVDA",
+"statement": "income"})` for one raw statement. The wrapper adds `family` and `dataset` beside the
+named raw block; it does not reshape the upstream dataset into a cross-provider schema.
+
+### Six established tools
 
 ### `stock_fundamentals`
 
@@ -712,7 +753,7 @@ ownership, insider-sentiment or squeeze score.
 
 | | |
 | --- | --- |
-| Authentication | API key **and** `TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise` |
+| Authentication | API key; actual API plan response decides access, with no local paid-plan gate |
 | `limit` | Rows per selected dataset, 1..500; one page per dataset |
 | `start_date`, `end_date` | Optional inclusive `YYYY-MM-DD` filters; malformed dates are refused before transport |
 | `include_fails_to_deliver` | Include SEC FTD balances, default true |
@@ -729,7 +770,7 @@ also delayed. None of these series is live and no squeeze score is derived from 
 
 | | |
 | --- | --- |
-| Authentication | API key **and** explicit Enterprise redistribution assertion |
+| Authentication | API key; Equibles documents Plus or Pro for option datasets and the actual response decides |
 | `expiration` | Optional `YYYY-MM-DD` expiration for the summary |
 | `max_expirations` | Term-structure cap, clamped to 1..12 |
 | Requests | One option summary plus one term structure |
@@ -748,7 +789,7 @@ volume/OI semantics are unchanged, and neither tool's values are merged into the
 
 | | |
 | --- | --- |
-| Authentication | API key **and** explicit Enterprise redistribution assertion |
+| Authentication | API key; actual API plan response decides access |
 | `limit` | One page of 1..500 bars; no automatic pagination |
 | `start_date`, `end_date` | Optional inclusive `YYYY-MM-DD` session filters |
 | `interval` | `daily` (default), `weekly` or `monthly` |
@@ -766,7 +807,7 @@ datasets. `freshness.datasets` retains earliest and latest dates per block and i
 values. It does not use local cache or response time to manufacture freshness. A failed or denied
 dataset still appears in `reporting_delay` and has a null timestamp in `freshness.datasets`.
 
-`401` maps to a rejected-key state, `403` to `not_entitled`, a missing listing or period to
+`401` maps to `NOT_CONFIGURED` and `auth_rejected`; `403` maps to `PLAN_REQUIRED`. A missing listing or period maps to
 `NO_DATA`, quota exhaustion to `UPSTREAM_RATE_LIMIT`, and malformed upstream JSON to `SCHEMA_DRIFT`.
 Other status and transport errors are sanitized; upstream prose is not echoed. A result is not
 silently downgraded to another provider or to an empty success.
@@ -778,7 +819,7 @@ silently downgraded to another provider or to an empty success.
 | Tool | Purpose |
 | --- | --- |
 | `tapebasis_health` | Read the cached drift/outage verdict and per-provider rate-limit state, `refresh=True` to probe now, or `accept_baseline=True` to accept the shape being served |
-| `tapebasis_tool_map` | Return this catalogue with no upstream call |
+| `tapebasis_tool_map` | Return this catalogue, including the frozen Equibles dataset/filter map, with no upstream call |
 
 ---
 
@@ -794,12 +835,13 @@ silently downgraded to another provider or to an empty success.
 | Headlines | `stock_news` | Merged stories, with per-story provider corroboration |
 | How the market feels | `market_sentiment` | Single-source score; merged news has its own label |
 | Options chain positioning | `stock_options_chain` | On volume/OI |
-| Equibles option analytics | `stock_options_analytics` | No, separate Enterprise dataset |
+| Equibles option analytics | `stock_options_analytics` or `equibles_options` | No, isolated Equibles datasets; actual plan response decides access |
 | Equibles SEC fundamentals or guidance | `stock_fundamentals` | No, isolated Equibles blocks |
 | Verified analyst observations without a rating | `stock_analyst_estimates` | No |
 | 13F, N-PORT, insider or Form 144 flows | `stock_ownership_flows` | No |
-| Short, FTD or off-exchange history | `stock_short_positioning` | No, Enterprise |
-| Equibles stored OHLCV | `stock_price_history` | No, Enterprise |
+| Short, FTD or off-exchange history | `stock_short_positioning` or `equibles_positioning` | No, actual plan response decides access |
+| Equibles stored OHLCV | `stock_price_history` or `equibles_market_data` | No, actual plan response decides access |
+| Other selected Equibles REST data | `equibles_*` family tools, exact `dataset` and `filters` | No; one JSON GET, no pagination/fallback |
 | Filings, ownership, peers | `stock_filings`, `stock_ownership`, `stock_peers` | No, Finviz; only same-date short interest may add Equibles |
 | Government bond yields | `bloomberg_markets` | No, Bloomberg-only |
 | Bloomberg's own quote reading | `bloomberg_quote` | No: one provider asked, delay-labelled |

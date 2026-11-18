@@ -311,7 +311,7 @@ def test_short_interest_compares_the_same_settlement_date_only():
 
 @pytest.mark.asyncio
 async def test_keyless_ownership_makes_no_equibles_request(monkeypatch):
-    """No key and no Enterprise assertion means no short-interest request."""
+    """No API key means no Equibles request, regardless of legacy environment."""
     from tapebasis import fv_access
 
     called = False
@@ -345,7 +345,6 @@ async def test_ownership_short_consensus_does_not_claim_filing_ownership(
     from tapebasis import fv_access
 
     monkeypatch.setenv("TAPEBASIS_EQUIBLES_API_KEY", "eq_test")
-    monkeypatch.setenv("TAPEBASIS_EQUIBLES_ENTITLEMENT", "enterprise")
 
     async def insider(_symbol, **_kwargs):
         return {"rows": [], "count": 0}

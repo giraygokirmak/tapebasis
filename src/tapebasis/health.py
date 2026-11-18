@@ -50,7 +50,7 @@ EQUIBLES = "EQUIBLES"
 #: again, so the monitor's list and the reconciliation list cannot disagree:
 #: Bloomberg is excluded because its site gates plain HTTP clients on the TLS
 #: fingerprint. Equibles has a separate local probe below: it checks credentials
-#: and entitlement without spending the shared REST/MCP daily request quota.
+#: and actual access state without spending the shared REST/MCP request quota.
 #: That probe intentionally is not in this display list, which remains the
 #: set of independently HTTP-probed reconciliation legs.
 PROVIDERS: tuple[str, ...] = tuple(
@@ -356,8 +356,8 @@ def _probes() -> list[Probe]:
         Probe(
             id="equibles.api_key",
             provider=EQUIBLES,
-            description="Equibles API-key presence and Enterprise configuration (local)",
-            url="local:equibles-entitlement",
+            description="Equibles API-key presence and last real quota state (local)",
+            url="local:equibles-key-and-quota",
         ),
         # ── StockAnalysis ───────────────────────────────────────────────────
         Probe(
@@ -565,9 +565,7 @@ class HealthMonitor:
                     "API key is configured; actual access is verified only by an explicit tool call"
                     if not quota else f"Last real API response quota: {quota}"
                 )
-            result.watched = [
-                f"entitlement={eq_access.entitlement()}", f"quota={quota}",
-            ]
+            result.watched = ["access=actual plan response", f"quota={quota}"]
             return result
         started = time.monotonic()
 

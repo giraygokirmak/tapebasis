@@ -109,41 +109,43 @@ works without these variables.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `TAPEBASIS_EQUIBLES_API_KEY` | unset | Key sent only in the `Authorization: Bearer ...` request header to the official API origin |
-| `TAPEBASIS_EQUIBLES_ENTITLEMENT` | `standard` | The operator's **local redistribution policy assertion**. Exact `enterprise` permits restricted Phase 2 routes; any other value falls back to `standard` |
+
 | `TAPEBASIS_EQUIBLES_TIMEOUT` | `30` | HTTP timeout in seconds; keep it positive for ordinary operation |
-| `TAPEBASIS_EQUIBLES_CACHE_TTL` | `900` | In-memory cache lifetime in seconds; keyed by query, a short SHA-256 key fingerprint and tier, never the raw key |
+| `TAPEBASIS_EQUIBLES_CACHE_TTL` | `900` | In-memory cache lifetime in seconds; keyed by query and short SHA-256 key fingerprint, never the raw key. Live transcripts bypass cache |
 | `TAPEBASIS_EQUIBLES_MIN_INTERVAL` | `1.0` | Seconds between API requests |
 | `TAPEBASIS_EQUIBLES_MAX_INFLIGHT` | `1` | Ordinary request concurrency; a separate loop-local quota gate serializes the quota check plus its corresponding send |
 | `TAPEBASIS_EQUIBLES_MAX_RETRIES` | `1` | Ordinary shared-limiter setting only. The Equibles tool transport explicitly requests zero retries, so this setting does not re-enable them |
 
-The Enterprise setting is a **local licensing policy required by this integration**, not a statement
-that the upstream API identically names or enforces those plans. The documented upstream plan or
-free-plan behavior of a route does not waive Tapebasis's redistribution rule. The operator must have
-an active Enterprise agreement that actually covers redistribution before setting `enterprise`.
-Tapebasis cannot verify a contract, and an actual upstream `403` remains authoritative: it returns
-`not_entitled` regardless of local configuration. An ordinary route is never denied merely because
-a caller's readability flag says `enterprise=True`; the route allowlist controls the requirement.
+There is no local plan or redistribution assertion. The account's actual Free, Plus or Pro API response
+decides dataset access, and a normal Bearer key is not intrinsically restricted to Free. Equibles
+documents daily request allowances of 100 for Free, 10,000 for Plus and 100,000 for Pro. Option
+routes require the documented paid plan, currently Plus or Pro. The 14 grouped tools expose only the
+local frozen allowlist, not arbitrary URLs or runtime schema downloads. Account-owned route groups
+and binary/CSV assets remain excluded. The operator remains responsible for API terms and permitted
+redistribution; hermetic tests do not validate a real credential, plan or publication rights.
 
-Without the key, standard calls fail locally with `NOT_CONFIGURED`; restricted calls fail locally
-with `not_entitled` when the assertion is absent. Upstream `401` additionally marks the key unusable.
-Output on every returned envelope, including preflight denial and transport failure, preserves
-`Data by Equibles`, `as_of`, per-dataset `freshness` and `reporting_delay`, and `entitlement`.
+Without the key, every Equibles call returns `NOT_CONFIGURED` with `access.status: not_configured`
+before transport. Upstream `401` returns `NOT_CONFIGURED` with `auth_rejected` and marks the key
+unusable. Upstream `403` returns `PLAN_REQUIRED` with `plan_required`; a mixed multi-block response
+uses `partially_available` and lists `plan_required_datasets`. Neither denial becomes empty or
+substitute data. Every returned envelope preserves `Data by Equibles`, `as_of`, per-dataset
+`freshness`, `reporting_delay` and `access`, including configuration/plan denial and transport failure.
 
-The same key optionally enables an exact-context EPS-estimate comparison in `stock_earnings`; the
-same-date short-interest comparison in `stock_ownership` additionally needs `enterprise`. These are
-conditional shared-field adapters, not a live-price provider. With the key absent no adapter is
-called, no Equibles request or provider scope appears, and shared tools keep the coverage their other
-providers earn. Hermetic tests cover this wiring; live access and publication rights are not thereby
-verified.
-Malformed caller arguments instead fail before envelope construction. Secret-bearing upstream error text is not
-repeated, redirects are refused and cache identity changes when a key rotates. See
-[Response Contract](Response-Contract) and [Tools Reference](Tools-Reference).
+The same key optionally enables an exact-context EPS-estimate comparison in `stock_earnings` and the
+same-FINRA-settlement-date short-interest comparison in `stock_ownership`. These conditional adapters
+add no live-price provider or ownership population. With the key absent no adapter is called, no
+Equibles request or provider scope appears, and shared tools keep the coverage their other providers
+earn. Malformed caller arguments fail before envelope construction. Secret-bearing upstream error text
+is not repeated, redirects are refused and cache identity changes when a key rotates. See
+[Response Contract](Response-Contract), [Tools Reference](Tools-Reference) and
+[Equibles Datasets](Equibles-Datasets).
 
-Tool calls spend at most one request per selected dataset, with no automatic pagination. A daily
-`429` is never retried. Public `Retry-After` and `X-RateLimit-*` headers are parsed where available,
-new requests stay blocked until that reset, and the health tool reads only this local state plus key
-and tier configuration; it does not spend quota on an artificial health request. The remembered reset
-and blocker are in-memory only, so a restart or another worker does not inherit them.
+Each selected grouped dataset makes exactly one JSON GET, with no automatic pagination or alternate
+provider. Every established tool also bounds its individual selected datasets. A daily `429` is never
+retried. Public `Retry-After` and `X-RateLimit-*` headers are parsed where available, new requests stay
+blocked until that reset, and the health tool reads only this local state plus key presence; it does
+not spend quota on an artificial health request. Live transcript datasets bypass the cache. The
+remembered reset and blocker are in-memory only, so a restart or another worker does not inherit them.
 
 ## Concurrency and blocking work
 
@@ -252,8 +254,8 @@ TAPEBASIS_BLOOMBERG_BATCH_BUDGET=12.0
 # Optional official Equibles REST tools. Keep the real key only in a protected
 # process environment; never share a committed example containing a real key.
 TAPEBASIS_EQUIBLES_API_KEY=
-# Set to enterprise ONLY while your active agreement permits redistribution.
-TAPEBASIS_EQUIBLES_ENTITLEMENT=standard
+# The real Free, Plus or Pro API response controls dataset access.
+# No local plan assertion variable is used.
 TAPEBASIS_EQUIBLES_TIMEOUT=30
 TAPEBASIS_EQUIBLES_CACHE_TTL=900
 TAPEBASIS_EQUIBLES_MIN_INTERVAL=1.0

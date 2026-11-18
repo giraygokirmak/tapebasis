@@ -91,7 +91,7 @@ async def _check_npm_stdio(launcher: Path, env: dict[str, str], cwd: Path) -> No
             assert "stock_quote" in names
             assert "tapebasis_health" in names
             assert "stock_fundamentals" in names
-            assert len(names) == 41
+            assert len(names) == 55
 
 
 def test_built_distribution_initializes_and_lists_tools(distributions, tmp_path):

@@ -4,7 +4,8 @@ Consumed by ``tapebasis_tool_map`` so an agent can see, before calling
 anything, which capabilities are multi-source and which are single-source by
 nature, and for the multi-source ones, exactly which fields are compared.
 
-Kept as plain data (no imports) so building the map costs nothing.
+Most rows are plain data; grouped Equibles rows reuse its local frozen route
+catalogue without importing a provider client or making an upstream request.
 
 ``providers`` is the *possible* provider set for the tool, not the outcome of
 any particular call: an individual response can degrade to fewer providers if
@@ -13,6 +14,7 @@ and ``providers_answered`` names exactly which providers contributed.
 """
 
 TOOL_CATALOG: tuple[dict[str, object], ...] = (
+    # Grouped family entries are inserted after this tuple is built.
     # ── Multi-source: every capable provider asked, answers compared ─────────
     {
         "name": "stock_quote",
@@ -270,7 +272,7 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
             "guidance-vs-actual blocks remain separate. CIK and CUSIP come from the "
             "profile. The raw original units, restatement metadata and filing "
             "provenance are preserved. Every response carries Data by Equibles, "
-            "as_of, reporting_delay and entitlement status."
+            "as_of, reporting_delay and actual key/plan access status."
         ),
     },
     {
@@ -302,12 +304,11 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "name": "stock_short_positioning",
         "capability": "FINRA short interest and facility volume, SEC FTD and weekly off-exchange volume",
         "providers": "EQUIBLES",
-        "comparison": "single-source restricted datasets, no comparison or squeeze calculation",
+        "comparison": "single-source observations, provider scores stay separately labelled",
         "notes": (
-            "Returns not_entitled before transport unless "
-            "TAPEBASIS_EQUIBLES_ENTITLEMENT=enterprise explicitly asserts the "
-            "active redistribution agreement. A real 403 has the same code; it is "
-            "never downgraded to partial standard data. Short interest is twice "
+            "With an API key, a real 403 becomes PLAN_REQUIRED; no local tier "
+            "is asserted and no result is downgraded to partial standard data. "
+            "Short interest is twice "
             "monthly, short volume covers FINRA facilities only, FTD arrives in "
             "delayed half-month batches and off-exchange observations are weekly."
         ),
@@ -316,9 +317,10 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "name": "stock_options_analytics",
         "capability": "open interest, put/call ratios, max pain, implied volatility and expected move",
         "providers": "EQUIBLES",
-        "comparison": "single-source restricted calculation, not merged with stock_options_chain",
+        "comparison": "single-source Plus/Pro calculation, not merged with stock_options_chain",
         "notes": (
-            "Enterprise redistribution configuration is mandatory. Preserves "
+            "Only a normal API key is configured locally; the plan response "
+            "decides access. Preserves "
             "summary and term structure, underlyingCloseDate, openInterestDate "
             "and the delayed flag. Max pain and expected move are provider "
             "calculations, not forecasts. No squeeze score, dealer-sign "
@@ -333,14 +335,14 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "comparison": "single-source stored history, never a live-price reconciliation leg",
         "notes": (
             "Daily, weekly or monthly bars, maximum 500 rows per call, with no "
-            "automatic pagination. Requires explicit Enterprise redistribution "
-            "configuration. Open, high, low, close and volume are split-adjusted; "
+            "automatic pagination. Only a normal API key is configured locally; "
+            "the actual plan decides access and publication rights. Open, high, "
+            "low, close and volume are split-adjusted; "
             "adjustedClose also reflects cash dividends and is not certified as "
             "a consistent total-return series. Values remain in the returned "
             "currency and are never merged with another provider."
         ),
     },
-    # ── Bloomberg-only tools: one provider asked, so one provider labelled ───
     {
         "name": "bloomberg_quote",
         "capability": "Bloomberg's own quote page for one instrument",
@@ -524,4 +526,18 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "comparison": "n/a (local metadata, no upstream call)",
         "notes": "Returns this table so an agent can plan calls without spending requests.",
     },
+)
+
+from .catalog_families import rows as _equibles_family_rows
+
+# Grouped entries hold the frozen route/filter map, with no separate free URL.
+_equibles_family_rows = tuple(_equibles_family_rows)
+_COMPLETED_CATALOG = TOOL_CATALOG
+TOOL_CATALOG = tuple(
+    row
+    for entry in _COMPLETED_CATALOG
+    for row in (
+        (*_equibles_family_rows, entry)
+        if entry["name"] == "bloomberg_quote" else (entry,)
+    )
 )

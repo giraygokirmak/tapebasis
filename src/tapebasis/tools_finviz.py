@@ -110,12 +110,11 @@ async def stock_ownership(symbol: str, limit: int = 40) -> dict[str, Any]:
     Those tables are Finviz-only: no other provider's filing population is
     treated as the same ownership observation.
 
-    With both ``TAPEBASIS_EQUIBLES_API_KEY`` and an explicit Enterprise
-    entitlement, Equibles's FINRA short-interest series is asked as well. Only
-    a ``shortPosition`` row whose ``settlementDate`` equals Finviz's latest
-    settlement date is compared, after converting Finviz's thousands to shares.
-    Insider and institutional tables never join that comparison, and without
-    the key no Equibles request is made at all.
+    With ``TAPEBASIS_EQUIBLES_API_KEY``, Equibles's FINRA short-interest series
+    is asked as well. Only a ``shortPosition`` row whose ``settlementDate``
+    equals Finviz's latest settlement date is compared, after converting
+    Finviz's thousands to shares. Insider and institutional tables never join
+    that comparison, and without the key no Equibles request is made at all.
 
     Args:
         symbol: Ticker.
@@ -133,10 +132,8 @@ async def stock_ownership(symbol: str, limit: int = 40) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
 
     async def eq_call() -> dict[str, Any] | None:
-        """Ask Equibles only after the key and Enterprise gates pass."""
+        """Ask Equibles only when its API key is configured."""
         if not equibles_reconcile.configured():
-            return None
-        if not eq_access.has_enterprise_entitlement():
             return None
         return await equibles_reconcile.fetch_short_interest_observations(ticker)
 
