@@ -30,6 +30,13 @@ Release without rebuilding or moving the tag. GHCR `1.1.3`, `1.1`, `1` and `late
 the tested root digest `sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`.
 The npm stage-only token must be revoked after this completed release. No live Equibles credential or
 Enterprise agreement was validated; endpoint behavior and actual publication rights remain unverified.
+For `1.1.4`, release preparation binds `1.1`, `1` and `latest` to a second independent manifest
+match for the verified `1.1.3` root digest
+`sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`, separately for each
+alias. The exact `1.1.4` tag must be absent or match the tested archive. The source version identities,
+normal writer and source-bound continuation carry the same exception. Publication approval, registry
+availability and the new image digest remain to be established; the still-published status above remains
+`1.1.3` until those checks pass.
 These live publication checks are separate from the Release body produced from the tag's changelog.
 The rejected `v1.1.0` run
 `44060097251` has no tested release artifacts: its Python 3.10 validation failed before the build or
@@ -110,7 +117,10 @@ publishable registry content absent. Do not move the tag or rebuild replacement 
    `1.1.2` root digest
    `sha256:bfb7bf0adcc6717c0fd3281bc71182078fc861f7b0f49fb73e78018f847dcddd`. This digest was
    independently read through GHCR's scoped pull API for `1.1.2`, `1.1`, `1` and `latest`; `1.1.3`
-   was absent. The options are valid only for their hard-coded versions.
+   was absent. Independently reviewed `1.1.4` normal publication and its package continuation advance
+   those aliases only after each one matches the live `1.1.3` root digest
+   `sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`.
+   The options are valid only for their hard-coded versions.
    An exact-version conflict, unrelated conflict, wrong predecessor, wrong version, authorization
    failure or transport failure cannot advance the affected alias. A successfully imported exact tag
    or an earlier approved alias is not retried unnecessarily. Other ordinary tag publications, other
@@ -172,8 +182,8 @@ publication jobs use non-cancelling concurrency within their class, so two packa
   results for a finite interval and require eventual verified content. GHCR distinguishes HTTP 404
   absence through its registry API and compares `Docker-Content-Digest` with the tested OCI archive.
   Unrelated error text, authorization failures and conflicting digests never authorize a write. The
-  release-bound reviewed alias exceptions for `v1.1.1`, `1.1.2` and `1.1.3` are stated above and do not apply
-  automatically elsewhere.
+  release-bound reviewed alias exceptions for `v1.1.1` and `1.1.2` through `1.1.4` are stated above
+  and do not apply automatically elsewhere.
 - Publication is sequential within the approval-gated publish job: PyPI, then npm, then GHCR. Each
   step must succeed before the next one starts. Only after those package versions resolve does the
   job publish `server.json` to the MCP Registry. A registry has no transaction that can retract an

@@ -3,7 +3,7 @@
 Tapebasis uses semantic versions. Each release section is the reviewed source of its GitHub Release summary.
 Registry availability is recorded separately where a tag was published only partially.
 
-## [Unreleased]
+## [1.1.4] - 2026-11-18
 
 ### Added
 
@@ -32,6 +32,10 @@ Registry availability is recorded separately where a tag was published only part
   provenance, error or coverage effect in either shared tool.
 - Dedicated Equibles tools, option chains, live quotes and historical prices retain their existing
   contracts. Live Equibles access and Enterprise publication rights remain unverified.
+- Raised package, MCP Registry and launcher versions to `1.1.4`. The release workflow advances
+  GHCR `1.1`, `1` and `latest` only after each alias independently matches the verified `1.1.3`
+  image digest `sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`.
+  Exact-version conflicts, other predecessors and registry lookup failures remain fatal.
 
 ## [1.1.3] - 2026-11-18
 
@@ -186,6 +190,7 @@ Registry availability is recorded separately where a tag was published only part
 - PyPI, npm and the tested GHCR image were published and verified by protected recovery.
 - MCP Registry metadata remains at this version while later package releases are completed.
 
+[1.1.4]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.0...v1.1.1

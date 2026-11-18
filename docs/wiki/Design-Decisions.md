@@ -1388,7 +1388,7 @@ The old immutable tag remains the source of its version and commit binding; read
 the Release must match. Release writes omit `target_commitish` after verifying a live immutable tag, so GitHub does
 not demand separate workflow-modification authority for an old source commit. This needs only `contents: write`, never
 a persistent personal access token or tag movement. No such helper automatically grants the required environment approval.
-Three bounded release identities have independently reviewed alias exceptions. The `v1.1.1`
+These bounded release identities have independently reviewed alias exceptions. The `v1.1.1`
 continuation can advance only `1` and `latest`, after a second lookup shows that alias at the tested
 `1.0.0` digest. The `1.1.2` normal tag writer and its package continuation can advance only `1.1`, `1`
 and `latest`, after each alias independently matches the tested `1.1.1` digest
@@ -1396,7 +1396,10 @@ and `latest`, after each alias independently matches the tested `1.1.1` digest
 copy. The `1.1.3` normal writer and its package continuation use the same aliases and option, with
 the independently read live `1.1.2` digest
 `sha256:bfb7bf0adcc6717c0fd3281bc71182078fc861f7b0f49fb73e78018f847dcddd` as their
-predecessor. Each option is accepted only for its hard-coded version; none is a future-release
+predecessor. The `1.1.4` normal writer and its package continuation use the same aliases and option
+with the independently read live `1.1.3` digest
+`sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028` as their predecessor.
+Each option is accepted only for its hard-coded version; none is a future-release
 policy. Other normal writers, other continuations and MCP-only recovery omit these predecessor
 arguments. An exact-version conflict, unrelated conflict, wrong predecessor, wrong
 version, authorization failure or transport failure never advances the affected alias. Each operation

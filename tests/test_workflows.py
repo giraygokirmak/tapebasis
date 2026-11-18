@@ -152,7 +152,7 @@ def test_package_continuation_is_distinct_and_source_bound():
     assert "--advance-major-latest-from \"$PREVIOUS_RELEASE_DIGEST\"" in " ".join(text.split())
     continuation = publish["steps"]
     special = [step for step in continuation if "reviewed predecessor" in step.get("name", "")]
-    assert len(special) == 3
+    assert len(special) == 4
     alias = next(step for step in special if "for 1 and latest" in step["name"])
     assert alias["if"] == "steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag == 'v1.1.1'"
     assert alias["run"].strip().endswith('--advance-major-latest-from "$PREVIOUS_RELEASE_DIGEST"')
@@ -165,8 +165,12 @@ def test_package_continuation_is_distinct_and_source_bound():
     assert current["if"] == "steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag == 'v1.1.3'"
     assert current["run"].strip().endswith('--advance-minor-major-latest-from "$PREVIOUS_RELEASE_DIGEST"')
     assert current["env"]["PREVIOUS_RELEASE_DIGEST"] == "sha256:bfb7bf0adcc6717c0fd3281bc71182078fc861f7b0f49fb73e78018f847dcddd"
+    fix = next(step for step in special if "Complete 1.1.4 GHCR" in step["name"])
+    assert fix["if"] == "steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag == 'v1.1.4'"
+    assert fix["run"].strip().endswith('--advance-minor-major-latest-from "$PREVIOUS_RELEASE_DIGEST"')
+    assert fix["env"]["PREVIOUS_RELEASE_DIGEST"] == "sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028"
     ordinary = next(step for step in continuation if "other GHCR releases" in step.get("name", ""))
-    assert ordinary["if"] == "steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag != 'v1.1.1' && inputs.resume_tag != 'v1.1.2' && inputs.resume_tag != 'v1.1.3'"
+    assert ordinary["if"] == "steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag != 'v1.1.1' && inputs.resume_tag != 'v1.1.2' && inputs.resume_tag != 'v1.1.3' && inputs.resume_tag != 'v1.1.4'"
     assert "--advance-major-latest-from" not in ordinary["run"]
     assert "--advance-minor-major-latest-from" not in ordinary["run"]
     ghcr_steps = [step for step in continuation if "GHCR" in step.get("name", "")]
@@ -174,6 +178,7 @@ def test_package_continuation_is_distinct_and_source_bound():
         ("v1.1.1", "1 and latest"),
         ("v1.1.2", "1.1, 1 and latest"),
         ("v1.1.3", "1.1, 1 and latest"),
+        ("v1.1.4", "1.1, 1 and latest"),
         ("v1.0.0", "other GHCR"),
         ("v1.2.0", "other GHCR"),
     ):
@@ -198,6 +203,7 @@ def test_normal_tag_ghcr_steps_select_exactly_one_version_policy():
     predecessors = {
         "1.1.2": "sha256:18a54e02f28d195030cd02ee1f45088eeb05a34792d532197f143f6a73a209d7",
         "1.1.3": "sha256:bfb7bf0adcc6717c0fd3281bc71182078fc861f7b0f49fb73e78018f847dcddd",
+        "1.1.4": "sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028",
     }
     for version, digest in predecessors.items():
         bounded = next(step for step in steps if f"Complete {version} GHCR" in step.get("name", ""))
@@ -214,12 +220,14 @@ def test_normal_tag_ghcr_steps_select_exactly_one_version_policy():
     assert ordinary["if"] == (
         "steps.npm_stage.outputs.npm_staged != 'true' && "
         "needs.build.outputs.version != '1.1.2' && "
-        "needs.build.outputs.version != '1.1.3'"
+        "needs.build.outputs.version != '1.1.3' && "
+        "needs.build.outputs.version != '1.1.4'"
     )
     assert "--advance" not in ordinary["run"]
     for version, selected in (
         ("1.1.2", "Complete 1.1.2"),
         ("1.1.3", "Complete 1.1.3"),
+        ("1.1.4", "Complete 1.1.4"),
         ("1.0.0", "other GHCR"),
         ("1.2.0", "other GHCR"),
     ):

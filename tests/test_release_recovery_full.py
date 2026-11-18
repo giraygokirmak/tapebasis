@@ -586,6 +586,7 @@ if status in {"approved-alias", "approved-alias-auth"}:
         "1.1.1": {"1", "latest"},
         "1.1.2": {"1.1", "1", "latest"},
         "1.1.3": {"1.1", "1", "latest"},
+        "1.1.4": {"1.1", "1", "latest"},
     }.get(os.environ["SOURCE_VERSION"], set())
     matched = set(os.environ.get("MATCH_TAGS", "").split(","))
     predecessors = set(os.environ.get("PREDECESSOR_TAGS", "").split(","))
@@ -748,7 +749,7 @@ def test_ghcr_111_advances_only_approved_major_and_latest_aliases(tmp_path):
     assert fixture[1].read_text().count("image copy ghcr.io/example/tapebasis:1.1.1 ghcr.io/example/tapebasis:1\n") == 1
 
 
-@pytest.mark.parametrize("version", ["1.1.2", "1.1.3"])
+@pytest.mark.parametrize("version", ["1.1.2", "1.1.3", "1.1.4"])
 def test_ghcr_bounded_patch_advances_only_its_three_reviewed_aliases(tmp_path, version):
     """Each bounded patch exception advances its three aliases after a second digest check."""
     fixture = ghcr_workspace(tmp_path)
@@ -814,7 +815,7 @@ def test_ghcr_111_option_is_not_a_general_alias_exception(tmp_path, version):
     assert fixture[1].read_text() == ""
 
 
-@pytest.mark.parametrize("version", ["1.1.2", "1.1.3"])
+@pytest.mark.parametrize("version", ["1.1.2", "1.1.3", "1.1.4"])
 def test_ghcr_bounded_patch_rejects_a_wrong_predecessor_without_alias_writes(tmp_path, version):
     """An unreviewed predecessor cannot advance an existing manifest as an alias."""
     fixture = ghcr_workspace(tmp_path)
@@ -835,7 +836,7 @@ def test_ghcr_bounded_patch_rejects_a_wrong_predecessor_without_alias_writes(tmp
     assert not any(line.startswith("image import") for line in commands)
 
 
-@pytest.mark.parametrize("version", ["1.1.2", "1.1.3", "1.1.1"])
+@pytest.mark.parametrize("version", ["1.1.2", "1.1.3", "1.1.4", "1.1.1"])
 @pytest.mark.parametrize("lookup_read", ["initial", "predecessor"])
 @pytest.mark.parametrize("lookup_error", ["403", "network"])
 def test_ghcr_lookup_errors_never_authorize_affected_writes(
@@ -879,7 +880,7 @@ def test_ghcr_lookup_errors_never_authorize_affected_writes(
             assert not any(line.startswith("image") for line in commands)
 
 
-@pytest.mark.parametrize("version", ["1.1.2", "1.1.3"])
+@pytest.mark.parametrize("version", ["1.1.2", "1.1.3", "1.1.4"])
 def test_ghcr_bounded_patch_verify_mode_never_uses_advancement_option(tmp_path, version):
     """An approved publication predecessor grants no authority in verify mode."""
     fixture = ghcr_workspace(tmp_path)
@@ -914,7 +915,7 @@ def test_ghcr_111_option_rejects_a_minor_alias_conflict(tmp_path):
     assert not any(line.startswith("image") for line in commands)
 
 
-@pytest.mark.parametrize("version", ["1.1.2", "1.1.3"])
+@pytest.mark.parametrize("version", ["1.1.2", "1.1.3", "1.1.4"])
 def test_ghcr_approved_aliases_never_authorize_exact_version_replacement(tmp_path, version):
     """A conflicting immutable exact tag stops before any alias can be written."""
     fixture = ghcr_workspace(tmp_path)
