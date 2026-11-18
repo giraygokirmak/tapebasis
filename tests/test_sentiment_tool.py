@@ -188,6 +188,9 @@ async def test_combined_analysis_sentiment_leg_needs_no_token(no_token, monkeypa
             "atr": {"value": 7.4},
         }
 
+    async def fake_scanner_quote(symbol):
+        return {"ticker": symbol}
+
     async def fake_news(symbol, limit=30, include_reactions=True):
         return {"news": [{"headline": "Apple beats estimates"}], "count": 1, "as_of": "x"}
 
@@ -209,6 +212,7 @@ async def test_combined_analysis_sentiment_leg_needs_no_token(no_token, monkeypa
         )
 
     monkeypatch.setattr(tv_access, "technical_analysis", fake_technical_analysis)
+    monkeypatch.setattr(tv_access, "quote", fake_scanner_quote)
     monkeypatch.setattr(fv_access, "news", fake_news)
     monkeypatch.setattr(fv_access, "snapshot", fake_snapshot)
     monkeypatch.setattr(yh_access, "quote", fake_quote)

@@ -5,8 +5,12 @@
 **Multiple tapes, one basis.** An MCP server that serves **TradingView**, **Finviz**, **Yahoo
 Finance**, **StockAnalysis** and **Bloomberg** market data together, cross-checks every overlapping
 figure, and labels each response with the provider that actually produced it. Separate authenticated
-**Equibles** tools add fundamentals, ownership and licensed positioning without merging them into
-those comparisons.
+**Equibles** tools add fundamentals, ownership and licensed positioning. Beyond those dedicated tools,
+two opt-in adapters run in `stock_earnings` and `stock_ownership`: an EPS estimate compares only when
+all reporting context matches, and short positions compare only on the same FINRA settlement date.
+Without `TAPEBASIS_EQUIBLES_API_KEY`, those adapters make no request and add no scope or coverage
+change. Equibles never joins general live-price arbitration or substitutes its historical prices,
+different-period estimates, other filing populations or option summaries for another observation.
 
 </div>
 
@@ -61,7 +65,7 @@ Every tool result carries exactly one of nine values. It states **coverage**, ne
 | `YAHOO`        | Only Yahoo Finance answered. Served, but **not** corroborated.             |
 | `SA`           | Only StockAnalysis answered. Served, but **not** corroborated; US equities and ETFs only. |
 | `BLOOMBERG`    | Only Bloomberg answered. Served, but **not** corroborated; its quote can be delayed. |
-| `EQUIBLES`     | One or more named Equibles datasets answered. Single-source, **never merged** with another provider; `attribution`, `as_of`, `reporting_delay` and `entitlement` are mandatory. |
+| `EQUIBLES`     | One or more named Equibles datasets answered. Single-source, **never merged** with another provider; `attribution`, `as_of`, `reporting_delay` and `entitlement` are mandatory. Two configured adapters may compare an exactly equivalent EPS estimate or same-date short position |
 | `NONE`         | No provider could supply the primary value; a separately labelled `news` block can still be available. |
 
 `ALL` means "every provider asked answered", not "they agree". Agreement is a separate axis, and it
@@ -253,6 +257,10 @@ is a decimal ratio based on the newest target and only the same SSR's `lastClose
 null, and another provider's price is never borrowed. These populations are not combined, are not
 contributors to a common denominator and do not form consensus. A forecast-page failure is an auxiliary
 `analyst_forecasts` error and does not change primary quote coverage or remove scanner distributions.
+The direct `data` payload repeats provider-specific target, rating-analyst, Buy/Hold/Sell,
+visible-firm and action-row counts; each has its own source and population, null means unreported,
+and zero remains a real count. `combined_analysis.data` mirrors the TradingView counts and complete
+five-bucket distribution.
 
 `stock_prices` exposes per-symbol `misses` and typed `errors`, so one failed ticker does not sink or
 silently vanish from the batch. A returned row without a usable price is `NO_DATA`, not an answer.

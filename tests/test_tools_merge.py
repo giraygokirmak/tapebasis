@@ -201,6 +201,42 @@ async def test_quote_exposes_provider_specific_analyst_counts(fake_providers, mo
         "TRADINGVIEW", "FINVIZ"
     ]
 
+    # Direct payload counts keep the three rating categories and each distinct
+    # population; none is an EPS estimate or a target-estimate contributor.
+    assert result["data"]["tradingview_price_target_estimate_count"] == 39
+    assert result["data"]["tradingview_rating_analyst_count"] == 50
+    assert result["data"]["tradingview_rating_buy_count"] == 12
+    assert result["data"]["tradingview_rating_hold_count"] == 10
+    assert result["data"]["tradingview_rating_sell_count"] == 3
+    assert result["data"]["finviz_rating_firm_count"] == 16
+    assert result["data"]["finviz_rating_action_count"] == 20
+    assert result["fields"]["tradingview_rating_analyst_count"]["supplied"] == [
+        "TRADINGVIEW"
+    ]
+    assert result["fields"]["finviz_rating_firm_count"]["supplied"] == ["FINVIZ"]
+
+
+@pytest.mark.asyncio
+async def test_quote_keyless_equibles_never_joins_scope_or_coverage(
+    fake_providers, monkeypatch
+):
+    """An unconfigured licensed provider cannot alter quote coverage."""
+    from tapebasis import equibles_reconcile
+
+    monkeypatch.delenv("TAPEBASIS_EQUIBLES_API_KEY", raising=False)
+
+    async def refuse(*_args, **_kwargs):
+        raise AssertionError("stock_quote must never ask Equibles for a price")
+
+    monkeypatch.setattr(equibles_reconcile, "fetch_analyst_observations", refuse)
+    monkeypatch.setattr(equibles_reconcile, "fetch_short_interest_observations", refuse)
+    result = await tools_market.stock_quote("AAPL")
+    assert result["providers_answered"] == ["TRADINGVIEW", "FINVIZ", "YAHOO"]
+    assert result["data_provider"] == "PARTIAL"
+    assert "EQUIBLES" not in result["sources"]
+    assert all(error["provider"] != "EQUIBLES" for error in result["errors"])
+    assert not any("EQUIBLES" in row.get("values", {}) for row in result["comparisons"])
+
 
 @pytest.mark.asyncio
 async def test_forecast_failure_does_not_suppress_quote_or_invent_a_count(

@@ -128,6 +128,13 @@ Without the key, standard calls fail locally with `NOT_CONFIGURED`; restricted c
 with `not_entitled` when the assertion is absent. Upstream `401` additionally marks the key unusable.
 Output on every returned envelope, including preflight denial and transport failure, preserves
 `Data by Equibles`, `as_of`, per-dataset `freshness` and `reporting_delay`, and `entitlement`.
+
+The same key optionally enables an exact-context EPS-estimate comparison in `stock_earnings`; the
+same-date short-interest comparison in `stock_ownership` additionally needs `enterprise`. These are
+conditional shared-field adapters, not a live-price provider. With the key absent no adapter is
+called, no Equibles request or provider scope appears, and shared tools keep the coverage their other
+providers earn. Hermetic tests cover this wiring; live access and publication rights are not thereby
+verified.
 Malformed caller arguments instead fail before envelope construction. Secret-bearing upstream error text is not
 repeated, redirects are refused and cache identity changes when a key rotates. See
 [Response Contract](Response-Contract) and [Tools Reference](Tools-Reference).

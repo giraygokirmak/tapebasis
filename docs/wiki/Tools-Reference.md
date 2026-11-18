@@ -95,6 +95,15 @@ failure. Scanner data, including its range and distribution, and any successful 
 remain available. The absent forecast count and `forecast_source` stay null. Analyst counts and rating
 distributions do not join a consensus or an agreement verdict.
 
+`data` repeats the counts so a payload-only reader need not walk the envelope:
+`tradingview_price_target_estimate_count`, `tradingview_rating_analyst_count`,
+`tradingview_rating_buy_count`, `tradingview_rating_hold_count`,
+`tradingview_rating_sell_count`, `finviz_rating_firm_count` and
+`finviz_rating_action_count`. The TradingView Sell value adds only the scanner's own underperform and
+sell categories; the full five-key distribution stays in `analyst_targets`. Each supplied count has
+its own single-source `fields` entry. An unavailable count stays null and has no `fields` entry, and
+an entirely unanswered quote still returns an empty `data` rather than seven nulls.
+
 The `session` key in `data` and at the envelope level names the window `data.price` is a print from:
 `pre_market`, `regular`, `post_market` or `overnight`, and `data.price_field` names the provider field it
 was read from. Each provider's live print is resolved before comparison, because the obvious price field
@@ -318,6 +327,17 @@ from TradingView or Yahoo). Finviz never serves as a fallback for the next date:
 have no upcoming timestamp, were not attempted, or failed, `next_earnings_date` is `null`. A
 historical report cannot be reported as a future event.
 
+With `TAPEBASIS_EQUIBLES_API_KEY` configured, Equibles's analyst estimates become an additional leg.
+An `eps_estimate_<period>` value is compared at 0.1 % tolerance only when metric, period, statistic,
+unit, basis and dimensions match exactly and one candidate matches. The ordinary Finviz row carries no
+unit, basis or dimensions, so it produces a `declined_comparisons` entry explaining the missing proof,
+not an agreement or a conflict. `eps_estimate_analyst_counts` keys single-source Equibles EPS
+contributor counts by that provider's own period label, with `population:
+eps_estimate_contributors`. Only numeric `dimAnalystCount` supplies a count; the `analyst` display
+string is never parsed and a missing count is null rather than zero. These are neither rating
+analysts nor price-target estimators. Without the key, no Equibles request is made and the earnings
+envelope's providers and coverage are unchanged.
+
 ### `stock_extended_hours`
 
 Pre-/post-market price from every independent source that publishes one: TradingView's
@@ -458,6 +478,12 @@ The price leg is genuinely multi-source. `data.sentiment.provider`, `data.sentim
 `sentiment_source` name the news-sentiment backend. `fields` does not currently carry separate
 analysis or sentiment descriptors.
 
+`data.analyst_targets` carries the TradingView analyst block, alongside the direct
+`tradingview_price_target_estimate_count`, `tradingview_rating_analyst_count`,
+`tradingview_rating_buy_count`, `tradingview_rating_hold_count`,
+`tradingview_rating_sell_count` and five-key `tradingview_rating_distribution`. The target and rating
+populations remain distinct, a missing target count is null, and real zero rating buckets stay zero.
+
 `data.news` uses the same merged latest-10 feed as `stock_news` instead of a
 Marketaux-only list. Consensus, matching and `duplicates_collapsed` behave the
 same way; the news block carries its own `data_provider` so a failed technical
@@ -465,10 +491,20 @@ call cannot suppress it.
 
 ---
 
-## Finviz-only (7)
+## Finviz-led (7)
 
-Served, labelled `FINVIZ`, explicitly single-source. No other provider has a comparable dataset, so
+Served and labelled `FINVIZ`, explicitly single-source. No other provider has a comparable dataset, so
 those legs are marked `NOT_ATTEMPTED`, which is **not** an error and is excluded from `errors`.
+
+`stock_ownership` has one exception to that single-source statement, and only for short interest:
+with both an Equibles key and an explicit Enterprise entitlement it compares Finviz's latest
+`short_interest_shares_k * 1000` with an Equibles `shortPosition` carrying the same FINRA
+`settlementDate`, in shares. The result is `data.short_interest_consensus`, with any comparison and
+single-field provenance added to `comparisons` and `fields`. A different or ambiguous settlement date
+is `not_comparable` and reports both sides' dates. The insider and institutional tables are never
+merged with another filing population and the envelope remains `FINVIZ`; no key means no Equibles
+request. Options summary analytics are not option contract rows and do not enter
+`stock_options_chain`.
 
 | Tool | Capability | Notes |
 | --- | --- | --- |
@@ -764,7 +800,7 @@ silently downgraded to another provider or to an empty success.
 | 13F, N-PORT, insider or Form 144 flows | `stock_ownership_flows` | No |
 | Short, FTD or off-exchange history | `stock_short_positioning` | No, Enterprise |
 | Equibles stored OHLCV | `stock_price_history` | No, Enterprise |
-| Filings, ownership, peers | `stock_filings`, `stock_ownership`, `stock_peers` | No, Finviz |
+| Filings, ownership, peers | `stock_filings`, `stock_ownership`, `stock_peers` | No, Finviz; only same-date short interest may add Equibles |
 | Government bond yields | `bloomberg_markets` | No, Bloomberg-only |
 | Bloomberg's own quote reading | `bloomberg_quote` | No: one provider asked, delay-labelled |
 | Crypto / futures scans | `crypto_*`, `futures_*` | No |

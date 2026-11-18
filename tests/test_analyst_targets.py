@@ -11,11 +11,13 @@ import json
 
 import pytest
 
+from tapebasis import tools_tradingview
 from tapebasis.providers.finviz.core.services import quote_service
 from tapebasis.providers.finviz.core.services.html_utils import (
     parse_analyst_ratings,
 )
 from tapebasis.providers.tradingview import native
+from tapebasis.symbols import Resolution
 
 
 def _finviz_ratings_html() -> str:
@@ -422,3 +424,150 @@ def test_scanner_columns_use_the_forecast_page_rating_field_mapping():
     assert sum(expected.values()) == 72
     assert "recommendation_strong_buy" not in native.QUOTE_COLUMNS
     assert "recommendation_strong_sell" not in native.QUOTE_COLUMNS
+
+
+async def _combined_analysis_fixture(monkeypatch, quote, forecast):
+    """Return a combined_analysis envelope with hermetic provider payloads."""
+    from tapebasis import fv_access, news, tv_access, yh_access
+
+    async def technical(symbol, exchange="NASDAQ", timeframe="1D"):
+        """Return a minimal technical analysis payload."""
+        return {"symbol": symbol, "price_data": {"current_price": 331.9}}
+
+    async def local_sentiment(symbol, limit=20):
+        """Return a locally scored sentiment payload."""
+        return {"provider": "local-vader", "sentiment_score": 0.3}
+
+    async def snapshot(symbol):
+        """Return a Finviz price snapshot."""
+        return {"numeric": {"Price": 331.9}}
+
+    async def yahoo_quote(symbol):
+        """Return a Yahoo price quote."""
+        return {"price": 331.9}
+
+    async def resolve_yahoo(symbol):
+        """Return a resolved Yahoo symbol without discovery requests."""
+        return Resolution(
+            query=symbol,
+            provider="YAHOO",
+            symbol="AAPL",
+            method="explicit",
+            confidence=1.0,
+        )
+
+    async def scanner_quote(symbol):
+        """Return the supplied scanner row keyed by its resolved symbol."""
+        return {**quote, "ticker": symbol}
+
+    async def forecasts(symbol):
+        """Return the supplied forecast row or raise its test failure."""
+        if isinstance(forecast, BaseException):
+            raise forecast
+        return forecast
+
+    async def empty_news(symbol, **kwargs):
+        """Return an empty news envelope without contacting a news provider."""
+        return {"block": {
+            "items": [],
+            "count": 0,
+            "limit": 10,
+            "unique_stories": 0,
+            "errors": [],
+            "data_provider": "NONE",
+            "providers_answered": [],
+            "endpoints": {},
+            "shortfall_reason": "",
+        }}
+
+    monkeypatch.setattr(tv_access, "technical_analysis", technical)
+    monkeypatch.setattr(tv_access, "quote", scanner_quote)
+    monkeypatch.setattr(tv_access, "analyst_forecasts", forecasts)
+    monkeypatch.setattr(tools_tradingview, "_sentiment_payload", local_sentiment)
+    monkeypatch.setattr(tools_tradingview, "_yahoo_resolution", resolve_yahoo)
+    monkeypatch.setattr(fv_access, "snapshot", snapshot)
+    monkeypatch.setattr(yh_access, "quote", yahoo_quote)
+    monkeypatch.setattr(news, "fetch_news", empty_news)
+    return await tools_tradingview.combined_analysis("AAPL")
+
+
+@pytest.mark.asyncio
+async def test_combined_analysis_preserves_distinct_analyst_populations(monkeypatch):
+    """The composite exposes real scanner buckets and the forecast target count."""
+    quote = {
+        "currency": "USD",
+        "price_target_average": 348.519916,
+        "price_target_low": 240.0,
+        "price_target_high": 500.0,
+        "recommendation_total": 50,
+        "recommendation_mark": 1.61,
+        "recommendation_buy": 25,
+        "recommendation_over": 12,
+        "recommendation_hold": 10,
+        "recommendation_under": 1,
+        "recommendation_sell": 2,
+    }
+    forecast = {
+        "price_target_estimates_num": 39,
+        "recommendation_total": 99,
+        "recommendation_mark": 4.99,
+        "source": "https://www.tradingview.com/symbols/NASDAQ-AAPL/forecast-price-target/",
+    }
+    result = await _combined_analysis_fixture(monkeypatch, quote, forecast)
+    block = result["analyst_targets"]["TRADINGVIEW"]
+    assert block["price_target_estimate_count"] == 39
+    assert block["rating_analyst_count"] == 50
+    assert block["mean_recommendation"] == 1.61
+    assert block["rating_distribution"] == {
+        "strong_buy": 25,
+        "buy": 12,
+        "hold": 10,
+        "sell": 1,
+        "strong_sell": 2,
+    }
+    assert block["rating_distribution_method"] == "scanner_rating_buckets"
+    assert block["source"] == "scanner.tradingview.com"
+    assert block["price_target_period"] == "1 year"
+    assert block["rating_period"] == "past 3 months"
+    assert block["forecast_source"] == forecast["source"]
+    assert result["data"]["analysis"]["price_data"]["current_price"] == 331.9
+
+    # The payload mirrors the same counts for a caller that reads only ``data``.
+    assert result["data"]["analyst_targets"] == block
+    assert result["data"]["tradingview_price_target_estimate_count"] == 39
+    assert result["data"]["tradingview_rating_analyst_count"] == 50
+    assert result["data"]["tradingview_rating_buy_count"] == 12
+    assert result["data"]["tradingview_rating_hold_count"] == 10
+    assert result["data"]["tradingview_rating_sell_count"] == 1
+    assert result["data"]["tradingview_rating_distribution"] == {
+        "strong_buy": 25, "buy": 12, "hold": 10, "sell": 1, "strong_sell": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_combined_analysis_forecast_failure_keeps_zero_and_null_distinct(monkeypatch):
+    """A real zero Sell bucket survives while an unavailable target count is null."""
+    from tapebasis.providers_state import ProviderError
+
+    quote = {
+        "recommendation_total": 4,
+        "recommendation_buy": 2,
+        "recommendation_over": 1,
+        "recommendation_hold": 1,
+        "recommendation_under": 0,
+        "recommendation_sell": 0,
+    }
+    failure = ProviderError("TRADINGVIEW", "forecast unavailable", code="UPSTREAM_ERROR")
+    result = await _combined_analysis_fixture(monkeypatch, quote, failure)
+    block = result["analyst_targets"]["TRADINGVIEW"]
+    assert block["price_target_estimate_count"] is None
+    assert block["rating_analyst_count"] == 4
+    assert block["rating_distribution"]["sell"] == 0
+    assert block["forecast_source"] is None
+    assert result["data"]["sentiment"]["sentiment_score"] == 0.3
+    error = next(error for error in result["errors"] if error["provider"] == "TRADINGVIEW")
+    assert error["detail"]["capability"] == "analyst_forecasts"
+    assert result["data_provider"] == "ALL"
+    assert result["data"]["tradingview_price_target_estimate_count"] is None
+    assert result["data"]["tradingview_rating_analyst_count"] == 4
+    assert result["data"]["tradingview_rating_sell_count"] == 0

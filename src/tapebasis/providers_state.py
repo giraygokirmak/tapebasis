@@ -47,9 +47,11 @@ Bloomberg in the documented order: a live feed, but the narrowest coverage (US
 equities and ETFs, no indices, FX, crypto, commodities or foreign listings), so it should not
 outrank a broader feed on a tie.
 
-Equibles is deliberately outside general price reconciliation. Its official,
+Equibles is outside general price and freshness arbitration. Its official,
 authenticated REST tools preserve single-provider datasets with attribution,
 observation timestamps, reporting delays and explicit entitlement status.
+Capability-specific adapters may compare a documented, equivalent period or
+observation without making Equibles a global live-quote provider.
 """
 from __future__ import annotations
 
@@ -85,16 +87,22 @@ class Verification(str, Enum):
     UNAVAILABLE = "UNAVAILABLE"
 
 
-#: Every provider label that participates in reconciliation, in display order.
-#: Bloomberg and StockAnalysis are last because they are the legs whose
-#: coverage is narrowest or whose prints can be structurally older: order only
-#: matters for display and for the documented tie-break.
-# Equibles is a catalogue provider below, not another market-comparison leg.
-# Keeping it out of this order preserves every existing quote/freshness loop;
-# its six isolated tools use DataProvider.EQUIBLES directly.
+#: General market-comparison providers, in display order. Bloomberg and
+#: StockAnalysis are last because their coverage is narrowest or their prints
+#: can be structurally older. Equibles is never part of this live-price list.
 PROVIDER_ORDER: tuple[str, ...] = (
     "TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"
 )
+
+#: Every provider label an explicitly configured capability may reconcile.
+#: Equibles appears only here and only when a tool creates its authenticated
+#: attempt. It is absent from symbol discovery, health HTTP fan-out and prices.
+RECONCILIATION_PROVIDER_ORDER: tuple[str, ...] = (*PROVIDER_ORDER, "EQUIBLES")
+
+#: Providers for which a tool may arbitrate a market print by timestamp.
+#: Equibles historical observations do not enter this arbitration merely
+#: because they appeared next to another provider's reading.
+FRESHNESS_PROVIDER_ORDER: tuple[str, ...] = PROVIDER_ORDER
 
 #: Human-readable name for each provider, used in notices and docs.
 PROVIDER_NAMES: dict[str, str] = {
@@ -156,9 +164,10 @@ PROVIDER_MEANING: dict[DataProvider, str] = {
         "`print_time` before calling a price live."
     ),
     DataProvider.EQUIBLES: (
-        "Data came from EQUIBLES only. It is single-source and NOT corroborated, "
-        "and it is never merged with another provider. Keep the 'Data by "
-        "Equibles' attribution, as_of timestamp and reporting delay with the data."
+        "Data came from EQUIBLES only. It is single-source and NOT corroborated. "
+        "Keep the 'Data by Equibles' attribution, as_of timestamp and reporting "
+        "delay with the data. Separate Equibles-only datasets never imply that "
+        "their values were compared with another provider."
     ),
     DataProvider.NONE: (
         "No provider could supply this data. Do not present any value for it."

@@ -116,6 +116,41 @@ TradingView's auxiliary forecast-page failure adds an error with `detail.capabil
 analyst_forecasts` but does not change primary quote coverage or `data_provider`; a missing forecast
 count remains null while scanner fields stay available.
 
+For payload-only readers, `stock_quote.data` also repeats the counts as provider-prefixed fields with
+their own single-source provenance; `combined_analysis.data` mirrors the TradingView counts and its
+five-key distribution in the same way. A real zero bucket differs from a null missing observation,
+and a `NONE` quote has no analyst keys in its empty `data`.
+
+**An analyst count is only ever its declared population.** Price-target estimators, rating analysts,
+visible rating firms, EPS-estimate contributors and rating action rows are five different scopes.
+`stock_earnings` may additionally carry single-source
+`eps_estimate_analyst_counts[eps_estimate_<period>]` from Equibles, keyed by its own period. Only a
+numeric `dimAnalystCount` supplies the count: the human-readable `analyst` string is retained but not
+parsed. A missing count is null, a supplied zero remains zero, and EPS contributors never enter a
+rating or price-target denominator.
+
+### Optional Equibles comparison scope
+
+`PROVIDER_ORDER` names the ordinary market legs. `RECONCILIATION_PROVIDER_ORDER` additionally
+contains `EQUIBLES`, but it admits no request on its own: only `stock_earnings` and the optional
+short-interest cross-check in `stock_ownership` create an authenticated Equibles attempt, after
+configuration and entitlement gates pass. The six Equibles-only tools remain separate.
+
+Without `TAPEBASIS_EQUIBLES_API_KEY`, no adapter function is called. Consequently `EQUIBLES` does not
+appear in `providers_answered`, `sources`, `errors`, `fields` or `comparisons` for those tools, and
+other agreeing providers retain their existing `ALL` or `PARTIAL` label. Nothing interprets the
+absence as a failed provider. With a key, only a proven-equivalent observation joins a comparison:
+
+* An EPS estimate requires an exact metric/period/statistic/unit/basis/dimensions context. Otherwise
+  `declined_comparisons` names the field and reason. Neither `match: true` nor `match: false` is
+  asserted on insufficient proof.
+* Short positions require exactly one Equibles row with Finviz's same FINRA settlement date after
+  converting thousands into shares. Any other period is `not_comparable`; no ownership or filing
+  population is merged.
+
+Historical stored prices never enter live-quote arbitration, and option-summary analytics never
+become contract rows.
+
 News `providers_answered` means providers that supplied at least one valid headline, not merely a
 successful HTTP response. `provider_calls.answered` preserves the lower-level call result. Stories
 are newest first, defaulting to 10 and capped at 50 on request. Unknown publication times sort last

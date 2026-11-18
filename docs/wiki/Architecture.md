@@ -87,6 +87,7 @@ src/tapebasis/
 ├── bb_access.py          typed access to bloomberg.com (reconciliation leg, curl_cffi)
 ├── sa_access.py          typed access to stockanalysis.com (US equities and ETFs)
 ├── eq_access.py          official Equibles REST allowlist, secret/quota/freshness logic
+├── equibles_reconcile.py optional exact-context EPS and same-date short-interest adapters
 ├── tools_equibles.py     six isolated Equibles tools and their entitlement responses
 ├── catalog.py            plain-data tool catalogue (providers + comparison strategy)
 ├── tools_market.py       the 9 multi-source market tools
@@ -138,14 +139,27 @@ Provider code does not import anything from the orchestration layer. That one-wa
 keeps the boundary real rather than decorative. It is why the token-free sentiment fallback lives in
 `tools_tradingview.py` and not inside `marketaux_service.py`.
 
-### Equibles is an isolated provider, not another comparison leg
+### Equibles is isolated, with two guarded shared-field adapters
+
+The six dedicated Equibles tools remain isolated. In addition, `equibles_reconcile.py` offers two
+narrow adapters to shared tools: exact-context EPS estimates in `stock_earnings`, and
+same-settlement-date short interest in `stock_ownership`. They are omitted entirely when
+`TAPEBASIS_EQUIBLES_API_KEY` is absent, and the latter also requires Enterprise entitlement, so
+keyless responses have no Equibles request, scope, provenance or coverage effect. Their ordering
+label lives in `RECONCILIATION_PROVIDER_ORDER` only; `PROVIDER_ORDER` and `DEFAULT_ORDER` remain the
+general market list. Neither adapter can supply a live price, option contract or ownership
+population. See [Design Decisions](Design-Decisions#equibles-joins-exactly-two-shared-fields-guarded-by-equivalence)
+for the equivalence rules and declined-comparison behavior.
+
+### Dedicated Equibles tools
 
 `tools_equibles.py` does not call `symbols.resolve()` or `reconcile.ask()`. It normalizes only a
 mechanical US ticker, builds a fixed set of named datasets and asks `eq_access.get()` once per
 selected block. A block's raw REST object keeps its original values, units, filing and observation
 provenance. `DataProvider.EQUIBLES` is used directly; deliberately, `EQUIBLES` is neither in
 `PROVIDER_ORDER` nor `DEFAULT_ORDER`, so the existing comparison/freshness implementation does not
-acquire a new leg.
+acquire a new leg. Only a capability that explicitly creates an Equibles attempt can reconcile it,
+using the separate `RECONCILIATION_PROVIDER_ORDER` sequence. leg.
 
 `eq_access.ROUTES` is both the allowlist of documented paths and the authority for Tapebasis's
 local redistribution policy. The exact entitlement tier is `standard` by default; restricted routes

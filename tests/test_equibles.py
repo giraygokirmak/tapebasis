@@ -42,11 +42,20 @@ def _no_call(*_args, **_kwargs):
 def test_equibles_is_a_provider_but_never_a_market_fanout_leg():
     """A narrow licensed provider must not silently join live price arbitration."""
     from tapebasis import tools_market
-    from tapebasis.providers_state import DataProvider, PROVIDER_MEANING
+    from tapebasis.providers_state import (
+        DataProvider,
+        PROVIDER_MEANING,
+        PROVIDER_ORDER,
+        RECONCILIATION_PROVIDER_ORDER,
+    )
 
     assert DataProvider.EQUIBLES.value == "EQUIBLES"
     assert "EQUIBLES" not in tools_market.ALL_PROVIDERS
-    assert "never merged" in PROVIDER_MEANING[DataProvider.EQUIBLES]
+    assert "EQUIBLES" not in PROVIDER_ORDER
+    # Capability adapters may reconcile it explicitly; the general market and
+    # health fan-out lists stay free of it either way.
+    assert RECONCILIATION_PROVIDER_ORDER == (*PROVIDER_ORDER, "EQUIBLES")
+    assert "single-source" in PROVIDER_MEANING[DataProvider.EQUIBLES]
 
 
 @pytest.mark.parametrize(

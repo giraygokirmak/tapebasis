@@ -28,7 +28,7 @@ from .providers_state import (
     error_code,
     provider_from_answered,
 )
-from .reconcile import ask, field_source, finalize, providers_in, single
+from .reconcile import _error_dict, ask, field_source, finalize, providers_in, single
 from .providers.tradingview.core.services import (
     bitcoin_market_service,
     futures_service,
@@ -777,6 +777,84 @@ async def egx_market_overview(timeframe: str = "1D", limit: int = 10) -> dict[st
 # ── Dual/cross-checked composite ─────────────────────────────────────────────
 
 
+def _tradingview_analyst_targets(
+    quote: dict[str, Any], forecast: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Return TradingView's target and rating populations without combining them.
+
+    Rating totals and five buckets come from the scanner. The one-year price
+    target estimate count comes only from forecast page data. Missing forecast
+    coverage leaves that count null and never substitutes the rating total.
+    """
+    forecast = forecast or {}
+    return {
+        "currency": quote.get("currency"),
+        "price_target_average": quote.get("price_target_average"),
+        "price_target_low": quote.get("price_target_low"),
+        "price_target_high": quote.get("price_target_high"),
+        "price_target_estimate_count": forecast.get("price_target_estimates_num"),
+        "price_target_period": "1 year",
+        "rating_analyst_count": quote.get("recommendation_total"),
+        "rating_period": "past 3 months",
+        "mean_recommendation": quote.get("recommendation_mark"),
+        "rating_distribution": {
+            "strong_buy": quote.get("recommendation_buy"),
+            "buy": quote.get("recommendation_over"),
+            "hold": quote.get("recommendation_hold"),
+            "sell": quote.get("recommendation_under"),
+            "strong_sell": quote.get("recommendation_sell"),
+        },
+        "rating_distribution_method": "scanner_rating_buckets",
+        "source": "scanner.tradingview.com",
+        "forecast_source": forecast.get("source"),
+    }
+
+
+async def _combined_analyst_targets(
+    symbol: str, exchange: str
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Return the namespaced analyst block and any supplement-specific errors.
+
+    Scanner and forecast failures do not change the primary composite coverage.
+    Each capability gets its own error, and absent data remains null.
+    """
+    resolved_symbol = f"{exchange.upper()}:{symbol}"
+    errors: list[dict[str, Any]] = []
+    quote: dict[str, Any] | None = None
+    forecast: dict[str, Any] | None = None
+
+    async def fetch_quote() -> None:
+        """Populate the scanner quote or append its analyst capability error."""
+        nonlocal quote
+        try:
+            quote = await tv_access.quote(resolved_symbol)
+        except Exception as exc:  # noqa: BLE001 - preserve the primary analysis
+            error = _error_dict(TRADINGVIEW, exc)
+            error["detail"] = {
+                **(error.get("detail") or {}),
+                "capability": "analyst_quote",
+            }
+            errors.append(error)
+
+    async def fetch_forecast() -> None:
+        """Populate forecast counts or append their capability-specific error."""
+        nonlocal forecast
+        try:
+            forecast = await tv_access.analyst_forecasts(resolved_symbol)
+        except Exception as exc:  # noqa: BLE001 - preserve the primary analysis
+            error = _error_dict(TRADINGVIEW, exc)
+            error["detail"] = {
+                **(error.get("detail") or {}),
+                "capability": "analyst_forecasts",
+            }
+            errors.append(error)
+
+    await asyncio.gather(fetch_quote(), fetch_forecast())
+    if quote is None:
+        return None, errors
+    return _tradingview_analyst_targets(quote, forecast), errors
+
+
 async def combined_analysis(symbol: str, exchange: str = "NASDAQ", timeframe: str = "1D") -> dict[str, Any]:
     """Technical analysis, news and sentiment in one call, price cross-checked.
 
@@ -799,7 +877,10 @@ async def combined_analysis(symbol: str, exchange: str = "NASDAQ", timeframe: st
 
     Returns:
         Envelope with ``data.analysis``, ``data.sentiment``, ``data.news`` and
-        ``data.price_cross_check``.
+        ``data.price_cross_check``. The top-level ``analyst_targets.TRADINGVIEW``
+        block preserves the separate scanner rating and forecast target analyst
+        populations. Analyst supplement failures leave the primary analysis in
+        place and are reported with their own capability labels.
     """
     ticker = strip_exchange(symbol).upper()
     yh_res = await _yahoo_resolution(symbol)
@@ -819,9 +900,10 @@ async def combined_analysis(symbol: str, exchange: str = "NASDAQ", timeframe: st
             raise NotApplicable(YAHOO, yh_res.note or f"no Yahoo symbol for {symbol}")
         return await yh_access.quote(yh_res.symbol)
 
-    pair, news = await asyncio.gather(
+    pair, news, (analyst_targets, analyst_errors) = await asyncio.gather(
         ask(tv_call, fv_call, yh_call),
         symbol_news.fetch_news(ticker),
+        _combined_analyst_targets(ticker, exchange),
     )
 
     from .reconcile import compare_values
@@ -850,6 +932,29 @@ async def combined_analysis(symbol: str, exchange: str = "NASDAQ", timeframe: st
             tolerance_pct=0.5,
         ),
     }
+    # Mirror the analyst populations under ``data`` so a caller reading only the
+    # payload sees them, while the top-level block keeps the full per-provider
+    # detail. Each naming scheme states its own population: the one-year target
+    # estimators, the past-three-month rating analysts, and the five real rating
+    # categories. None of them is an EPS-estimate count or a rating-firm count.
+    if analyst_targets is not None:
+        distribution = analyst_targets.get("rating_distribution") or {}
+        data["analyst_targets"] = analyst_targets
+        data.update({
+            "tradingview_price_target_estimate_count": analyst_targets.get(
+                "price_target_estimate_count"
+            ),
+            "tradingview_rating_analyst_count": analyst_targets.get(
+                "rating_analyst_count"
+            ),
+            "tradingview_rating_buy_count": distribution.get("buy"),
+            "tradingview_rating_hold_count": distribution.get("hold"),
+            "tradingview_rating_sell_count": distribution.get("sell"),
+            "tradingview_rating_distribution": {
+                key: distribution.get(key)
+                for key in ("strong_buy", "buy", "hold", "sell", "strong_sell")
+            },
+        })
     response = finalize(
         pair,
         sources={
@@ -857,7 +962,13 @@ async def combined_analysis(symbol: str, exchange: str = "NASDAQ", timeframe: st
             FINVIZ: f"https://finviz.com/stock?t={to_finviz(ticker)}",
             YAHOO: f"https://query1.finance.yahoo.com/v8/finance/chart/{yh_res.symbol}",
         },
-        extra={"sentiment_source": sentiment_source},
+        extra={
+            "sentiment_source": sentiment_source,
+            "analyst_targets": {
+                TRADINGVIEW: analyst_targets,
+            } if analyst_targets is not None else {},
+        },
+        additional_errors=analyst_errors,
         data=data,
         health_warn=MONITOR.warnings_for(providers_in(pair) or (TRADINGVIEW, FINVIZ)),
         degraded=any(

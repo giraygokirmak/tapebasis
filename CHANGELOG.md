@@ -3,6 +3,36 @@
 Tapebasis uses semantic versions. Each release section is the reviewed source of its GitHub Release summary.
 Registry availability is recorded separately where a tag was published only partially.
 
+## [Unreleased]
+
+### Added
+
+- `stock_earnings` optionally adds Equibles analyst estimates when
+  `TAPEBASIS_EQUIBLES_API_KEY` is set. EPS estimates join `comparisons` only under an exact metric,
+  period, statistic, unit, basis and dimension match; insufficient proof goes to
+  `declined_comparisons` instead of an agreement or disagreement verdict. Numeric
+  `dimAnalystCount` appears separately as single-source EPS-estimate contributor counts keyed by
+  period; display strings are not parsed and no count stays null.
+- `stock_ownership` optionally compares the same FINRA settlement-date short position with
+  Equibles after converting Finviz thousands into shares. It requires the Enterprise entitlement,
+  exposes `short_interest_consensus`, leaves the other filing populations single-source and never
+  changes the envelope's `FINVIZ` label.
+- `stock_quote.data` and `combined_analysis.data` directly expose distinct TradingView target,
+  rating-analyst, Buy/Hold/Sell counts and Finviz visible-firm/action counts. The composite also
+  mirrors the five real rating categories. Counts are never mixed across populations; a missing
+  count is null and a supplied zero stays zero.
+- Hermetic integration tests assert keyless zero transport, unchanged `ALL`/`PARTIAL`, exact EPS
+  equivalence, settlement-date mismatch, declined comparisons and zero-versus-null counts.
+
+### Changed
+
+- General market `PROVIDER_ORDER`, `ALL_PROVIDERS`, `DEFAULT_ORDER` and freshness arbitration now
+  exclude Equibles permanently. `RECONCILIATION_PROVIDER_ORDER` admits its label only for explicit
+  configured capability adapters. Without a key there is no Equibles request, providers list,
+  provenance, error or coverage effect in either shared tool.
+- Dedicated Equibles tools, option chains, live quotes and historical prices retain their existing
+  contracts. Live Equibles access and Enterprise publication rights remain unverified.
+
 ## [1.1.3] - 2026-11-18
 
 ### Added

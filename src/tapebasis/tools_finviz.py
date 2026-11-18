@@ -11,10 +11,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from . import fv_access, news as symbol_news
+from . import eq_access, equibles_reconcile, fv_access, news as symbol_news
 from .health import FINVIZ, MONITOR
 from .providers_state import DataProvider, NoDataError, envelope, error_code
-from .reconcile import field_source, finalize, single
+from .reconcile import EQUIBLES, field_source, finalize, single
 from .symbols import strip_exchange, to_finviz
 
 
@@ -103,11 +103,19 @@ async def stock_filings(
 
 
 async def stock_ownership(symbol: str, limit: int = 40) -> dict[str, Any]:
-    """Insider trades, institutional holders and short interest (Finviz-only).
+    """Insider trades, institutional holders and short interest.
 
-    Combines several Finviz datasets that no other provider here offers:
-    Form-4 insider transactions with monthly buy/sell aggregates, institutional
-    positions, and FINRA short-interest history.
+    Finviz supplies the Form-4 insider transactions with monthly buy/sell
+    aggregates, institutional positions and FINRA short-interest history.
+    Those tables are Finviz-only: no other provider's filing population is
+    treated as the same ownership observation.
+
+    With both ``TAPEBASIS_EQUIBLES_API_KEY`` and an explicit Enterprise
+    entitlement, Equibles's FINRA short-interest series is asked as well. Only
+    a ``shortPosition`` row whose ``settlementDate`` equals Finviz's latest
+    settlement date is compared, after converting Finviz's thousands to shares.
+    Insider and institutional tables never join that comparison, and without
+    the key no Equibles request is made at all.
 
     Args:
         symbol: Ticker.
@@ -115,13 +123,24 @@ async def stock_ownership(symbol: str, limit: int = 40) -> dict[str, Any]:
 
     Returns:
         Envelope labelled ``FINVIZ`` with ``insider``, ``institutional`` and
-        ``short_interest`` blocks (whichever Finviz could serve).
+        ``short_interest`` blocks (whichever Finviz could serve), plus
+        ``short_interest_consensus`` describing the same-settlement-date
+        cross-check when Equibles was asked.
     """
     ticker = strip_exchange(symbol).upper()
     fv_symbol = to_finviz(ticker)
     blocks: dict[str, Any] = {}
     errors: list[dict[str, Any]] = []
 
+    async def eq_call() -> dict[str, Any] | None:
+        """Ask Equibles only after the key and Enterprise gates pass."""
+        if not equibles_reconcile.configured():
+            return None
+        if not eq_access.has_enterprise_entitlement():
+            return None
+        return await equibles_reconcile.fetch_short_interest_observations(ticker)
+
+    eq_task = asyncio.create_task(eq_call())
     for name, coro in (
         ("insider", fv_access.insider(fv_symbol, limit=limit)),
         ("institutional", fv_access.institutional(fv_symbol, limit=min(limit, 100))),
@@ -133,6 +152,19 @@ async def stock_ownership(symbol: str, limit: int = 40) -> dict[str, Any]:
             code = error_code(exc)
             message = getattr(exc, "message", None) or str(exc)
             errors.append({"provider": FINVIZ, "code": code, "message": message, "dataset": name})
+
+    try:
+        eq_payload = await eq_task
+    except Exception as exc:  # noqa: BLE001
+        # A failed optional cross-check must not suppress Finviz's own tables,
+        # and a restricted plan is reported rather than silently reduced.
+        eq_payload = None
+        errors.append({
+            "provider": EQUIBLES,
+            "code": error_code(exc),
+            "message": getattr(exc, "message", None) or str(exc),
+            "dataset": "short_interest_consensus",
+        })
 
     if not blocks:
         return envelope(
@@ -152,6 +184,19 @@ async def stock_ownership(symbol: str, limit: int = 40) -> dict[str, Any]:
             for error in errors
         ],
     )
+    # The envelope stays FINVIZ: the ownership tables are single-source, and the
+    # optional Equibles reading is one field's cross-check, not co-ownership of
+    # the whole response.
+    consensus = equibles_reconcile.compare_short_interest(
+        blocks.get("short_interest"), eq_payload
+    )
+    response.setdefault("data", {})["short_interest_consensus"] = consensus
+    response.setdefault("comparisons", []).extend(consensus["comparisons"])
+    response.setdefault("fields", {}).update(consensus["fields"])
+    if eq_payload and eq_payload.get("observations"):
+        response.setdefault("sources", {})[EQUIBLES] = (
+            eq_payload.get("source") or "api.equibles.com short interest"
+        )
     response["errors"].extend(errors)
     return response
 

@@ -1581,6 +1581,53 @@ mocks. The suite automatically refuses any unfaked `api.equibles.com` transport.
 or Enterprise agreement was available, so live endpoint behavior and publication rights are not
 claimed as verified.
 
+---
+
+## Equibles joins exactly two shared fields, guarded by equivalence
+
+**Decision:** `PROVIDER_ORDER`, `tools_market.ALL_PROVIDERS`, `DEFAULT_ORDER` and
+`FRESHNESS_PROVIDER_ORDER` keep only the general market legs. Equibles stays out of live-price
+ordering, health HTTP fan-out and symbol discovery. A separate
+`RECONCILIATION_PROVIDER_ORDER = (*PROVIDER_ORDER, "EQUIBLES")` drives comparison and provenance
+ordering, so an explicitly created capability attempt can be compared without inheriting a market
+leg anywhere else. Period- and filing-scoped sidecars stay independent of the quote winner.
+
+Only two shared observations are admitted:
+
+- `stock_earnings` compares a Finviz quarterly `epsEstimate` with an Equibles EPS estimate when
+  metric, period, statistic, unit, basis and dimensions match exactly and exactly one candidate
+  matches. The raw Finviz row publishes no unit, basis or dimensions, so such a row is listed in
+  `declined_comparisons` with that reason instead of producing agreement or disagreement. Equibles's
+  numeric `dimAnalystCount` is carried separately as
+  `eps_estimate_analyst_counts[eps_estimate_<period>]`, single-source and keyed by the provider's own
+  period. The `analyst` display string is never parsed, a missing count stays null and a real zero
+  stays zero.
+- `stock_ownership` compares the latest Finviz `short_interest_shares_k * 1000` with Equibles
+  `shortPosition` only when the FINRA `settlementDate` is identical. The converted unit is shares
+  and the observation date is the settlement date. A missing or ambiguous counterpart is
+  `not_comparable` and shows both sides' dates, never a new current price or ownership population.
+  Insider and institutional table remain Finviz-only and the envelope remains `FINVIZ`.
+
+Both adapters require `TAPEBASIS_EQUIBLES_API_KEY` before their fetch function is even scheduled; an
+unconfigured deployment sends no Equibles request, supplies no Equibles attempt, adds no Equibles
+entry to `providers_answered`, `sources`, `fields` or `errors`, and leaves `ALL`/`PARTIAL` exactly as
+the other providers determine it. The short-interest adapter additionally requires the explicit
+Enterprise entitlement. Equibles's own six datasets stay single-source.
+
+Historical OHLCV is never a live price, another fiscal period's EPS is never this period's EPS
+estimate, a different filing population is never the same ownership observation, and option summary
+analytics are never option contract rows.
+
+**Why:** a blanket "never merged" rule hid genuinely identical observations, while name-based
+merging would manufacture consensus from unrelated populations. Dynamic provider scope makes the
+licensed provider's absence cost nothing and its presence prove itself field by field. Returning
+`declined_comparisons` with a reason is deliberately different from both `match: true` and
+`match: false`: an unproven basis is not evidence of a provider conflict.
+
+**Validation boundary:** the equivalence, settlement-date, keyless-no-transport, coverage-preserving
+and null-versus-zero behavior is tested hermetically in `test_equibles_integration.py`. Live
+Equibles credentials and Enterprise publication rights remain unverified.
+
 ## Related
 
 - [Architecture](Architecture): how these decisions are implemented

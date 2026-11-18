@@ -30,12 +30,14 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Sequence
 
 from .providers_state import (
+    FRESHNESS_PROVIDER_ORDER,
     DataProvider,
     NoDataError,
     NotApplicable,
     PROVIDER_MEANING,
     PROVIDER_NAMES,
     PROVIDER_ORDER,
+    RECONCILIATION_PROVIDER_ORDER,
     ProviderError,
     envelope,
     provider_from_answered,
@@ -67,6 +69,13 @@ FINVIZ = "FINVIZ"
 YAHOO = "YAHOO"
 SA = "SA"
 BLOOMBERG = "BLOOMBERG"
+EQUIBLES = "EQUIBLES"
+
+
+def provider_sort_key(provider: str) -> tuple[int, str]:
+    """Sort capability-specific providers after the general market providers."""
+    labels = RECONCILIATION_PROVIDER_ORDER
+    return (labels.index(provider) if provider in labels else len(labels), provider)
 
 #: Tie-break order when no provider reports a usable print time, or two report
 #: the identical instant. Fixed and documented rather than "whichever was asked
@@ -148,11 +157,18 @@ class Pair:
 
     @property
     def sa(self) -> Attempt:
+        """Return the StockAnalysis attempt, unasked when absent."""
         return self._get(SA)
 
     @property
     def bb(self) -> Attempt:
+        """Return the Bloomberg attempt, unasked when absent."""
         return self._get(BLOOMBERG)
+
+    @property
+    def eq(self) -> Attempt:
+        """Return the Equibles attempt, unasked when absent."""
+        return self._get(EQUIBLES)
 
     def _get(self, provider: str) -> Attempt:
         return self.attempts.get(
@@ -175,7 +191,7 @@ class Pair:
     def answered(self) -> list[str]:
         """Provider labels that actually produced a value, in display order."""
         present = [p for p, a in self.attempts.items() if a.ok]
-        return sorted(present, key=lambda p: PROVIDER_ORDER.index(p) if p in PROVIDER_ORDER else 99)
+        return sorted(present, key=provider_sort_key)
 
     @property
     def asked(self) -> list[str]:
@@ -195,7 +211,7 @@ class Pair:
         ]
         return sorted(
             asked,
-            key=lambda p: PROVIDER_ORDER.index(p) if p in PROVIDER_ORDER else 99,
+            key=provider_sort_key,
         )
 
     @property
@@ -267,12 +283,16 @@ async def ask(
     yahoo_fn: Callable[[], Awaitable[Any]] | None = None,
     bb_fn: Callable[[], Awaitable[Any]] | None = None,
     sa_fn: Callable[[], Awaitable[Any]] | None = None,
+    eq_fn: Callable[[], Awaitable[Any]] | None = None,
 ) -> Pair:
-    """Run every supplied provider call concurrently.
+    """Run every supplied provider call concurrently and return their attempts.
 
     A ``None`` callable means "this provider has no endpoint for this request"
     and is recorded as ``NOT_ATTEMPTED`` rather than as a failure, so it never
-    shows up in ``errors`` or drags the response down to ``NONE``.
+    shows up in ``errors`` or drags the response down to ``NONE``. Equibles has
+    no implicit call: a capability supplies ``eq_fn`` only after its own key,
+    symbol and entitlement gates pass, otherwise it is entirely outside the
+    request's provider scope.
     """
 
     def _skip(provider: str) -> Attempt:
@@ -292,6 +312,7 @@ async def ask(
         (YAHOO, yahoo_fn),
         (SA, sa_fn),
         (BLOOMBERG, bb_fn),
+        (EQUIBLES, eq_fn),
     ]
 
     async def _plan(label: str, fn: Callable[[], Awaitable[Any]] | None) -> Attempt:
@@ -309,7 +330,7 @@ def single(provider: str, value: Any = None, *, error: dict[str, Any] | None = N
     """Build a single-source pair (the other providers are NOT_ATTEMPTED)."""
     ok = error is None
     attempts: dict[str, Attempt] = {}
-    for label in PROVIDER_ORDER:
+    for label in RECONCILIATION_PROVIDER_ORDER:
         if label == provider:
             attempts[label] = Attempt(provider, ok, value=value, error=error)
         else:
@@ -474,7 +495,7 @@ def compare_values(
         "tolerance_pct": tolerance_pct,
         "pairs": [],
     }
-    labels = [p for p in PROVIDER_ORDER if p in present]
+    labels = [p for p in RECONCILIATION_PROVIDER_ORDER if p in present]
     if len(labels) < 2:
         return row
     if not_comparable_reason is not None:
@@ -655,6 +676,7 @@ class FieldSpec:
     absolute_floor: float = 0.0
     yh_get: Callable[[dict[str, Any]], Any] | None = None
     bb_get: Callable[[dict[str, Any]], Any] | None = None
+    eq_get: Callable[[dict[str, Any]], Any] | None = None
     sa_get: Callable[[dict[str, Any]], Any] | None = None
     #: When set, readings whose observation times differ by more than this many
     #: seconds are reported as *not comparable* instead of as a disagreement.
@@ -691,6 +713,7 @@ class FieldSpec:
             YAHOO: self.yh_get,
             SA: self.sa_get,
             BLOOMBERG: self.bb_get,
+            EQUIBLES: self.eq_get,
         }.get(provider)
         return getter(payload) if getter else None
 
@@ -790,14 +813,20 @@ def field_source(
     keyed by provider; a reader who wants the upstream finds it in
     ``sources[field_source()["source"]]``.
     """
-    supplied_labels = [p for p in PROVIDER_ORDER if p in set(supplied or compared)]
+    supplied_labels = [
+        p for p in RECONCILIATION_PROVIDER_ORDER if p in set(supplied or compared)
+    ]
     extra_supplied = [
-        p for p in (supplied or compared) if p not in PROVIDER_ORDER
+        p for p in (supplied or compared)
+        if p not in RECONCILIATION_PROVIDER_ORDER
     ]
     supplied_labels.extend(p for p in extra_supplied if p not in supplied_labels)
-    compared_labels = [p for p in PROVIDER_ORDER if p in set(compared)]
+    compared_labels = [
+        p for p in RECONCILIATION_PROVIDER_ORDER if p in set(compared)
+    ]
     compared_labels.extend(
-        p for p in compared if p not in PROVIDER_ORDER and p not in compared_labels
+        p for p in compared
+        if p not in RECONCILIATION_PROVIDER_ORDER and p not in compared_labels
     )
     if source and source not in supplied_labels:
         supplied_labels.insert(0, source)
@@ -903,7 +932,7 @@ def merge_many(
     """
     present = {p: v for p, v in payloads.items() if v is not None}
     answered = [
-        p for p in PROVIDER_ORDER if p in present
+        p for p in RECONCILIATION_PROVIDER_ORDER if p in present
     ]
     if not present:
         return Merged(provider=DataProvider.NONE)
@@ -1126,6 +1155,8 @@ def finalize(
     yh_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     sa_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     bb_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    eq_norm: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    eq_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     tv_time: Any = None,
     fv_time: Any = None,
     yahoo_time: Any = None,
@@ -1150,10 +1181,11 @@ def finalize(
     ``pair.errors`` rather than replacing those primary-provider failures.
     Other extra keys are merged into the envelope as before.
 
-    ``tv_norm``/``fv_norm``/``yh_norm``/``sa_norm``/``bb_norm`` map a raw
-    provider payload into the normalised field dict that ``specs`` read from;
-    when given, every remaining normalised field is attached to the output
-    labelled with its source provider.
+    ``tv_norm``/``fv_norm``/``yh_norm``/``sa_norm``/``bb_norm``/``eq_norm``
+    map a raw provider payload into the normalised field dict that ``specs``
+    read from; when given, every remaining normalised field is attached to the
+    output labelled with its source provider. ``eq_norm`` is inert unless the
+    calling capability actually created an Equibles attempt.
 
     ``tv_time``/``fv_time``/``yahoo_time``/``sa_time``/``bb_time`` are the
     **market print** timestamps (not fetch times). When providers answered, every
@@ -1179,6 +1211,7 @@ def finalize(
         (YAHOO, pair.yh, yh_norm, yh_shape),
         (SA, pair.sa, sa_norm, sa_shape),
         (BLOOMBERG, pair.bb, bb_norm, bb_shape),
+        (EQUIBLES, pair.eq, eq_norm, eq_shape),
     ):
         payload = attempt.payload
         if payload is not None and norm is not None:
@@ -1195,8 +1228,15 @@ def finalize(
         (YAHOO, yahoo_time, payloads.get(YAHOO)),
         (SA, sa_time, payloads.get(SA)),
         (BLOOMBERG, bb_time, payloads.get(BLOOMBERG)),
+        (EQUIBLES, None, payloads.get(EQUIBLES)),
     ):
         stamp = explicit
+        if label == EQUIBLES and explicit is None:
+            # Equibles datasets can contribute a shared historical or forecast
+            # field, but never become a live price or session print. Its
+            # dataset-specific observation timestamp stays with its sidecar,
+            # not in the main clock-based winner decision.
+            stamp = None
         if stamp is None and payload is not None:
             stamp = payload.get("price_timestamp")
         if stamp is not None:
@@ -1257,7 +1297,7 @@ def finalize(
     # on either side, and reporting "no usable timestamp" there is noise about
     # a decision that was never in question.
     if merged.freshness and any(
-        merged.freshness.get(p.lower()) for p in PROVIDER_ORDER
+        merged.freshness.get(p.lower()) for p in FRESHNESS_PROVIDER_ORDER
     ):
         merged_extra.setdefault("freshness", merged.freshness)
 

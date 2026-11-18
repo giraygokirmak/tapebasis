@@ -19,7 +19,15 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from . import bb_access, fv_access, sa_access, tv_access, yh_access
+from . import (
+    bb_access,
+    eq_access,
+    equibles_reconcile,
+    fv_access,
+    sa_access,
+    tv_access,
+    yh_access,
+)
 from .freshness import parse_market_timestamp
 from .health import MONITOR
 from .merge_helpers import (
@@ -57,6 +65,7 @@ from .sessions import (
 _SESSION_NAMES = SESSION_NAMES
 from .reconcile import (
     BLOOMBERG,
+    EQUIBLES,
     FINVIZ,
     SA,
     TRADINGVIEW,
@@ -79,18 +88,10 @@ from .symbols import (
     to_finviz,
 )
 
-#: Every provider the market tools ask. They are peers, not fallbacks: a tool
-#: either asks all of them or records ``NOT_ATTEMPTED`` for the ones that have
-#: no endpoint. Bloomberg and StockAnalysis are the other two legs: they are
-#: asked in parallel like the rest, and the known delay of the former and the
-#: US-only coverage of the latter are handled by the print-time guards and the
-#: resolution notes rather than by keeping them out of the comparison.
-#:
-#: Derived from :data:`tapebasis.providers_state.PROVIDER_ORDER`, which contains
-#: only the general market fan-out. Equibles is deliberately outside that list:
-#: its separate single-provider fundamental and positioning tools never merge
-#: into a live price or use this general provider set.
-ALL_PROVIDERS = PROVIDER_ORDER
+#: Providers in the ordinary market fan-out. Equibles is deliberately absent:
+#: an explicit configured adapter adds it only to earnings or short interest.
+MARKET_PROVIDERS = PROVIDER_ORDER
+ALL_PROVIDERS = MARKET_PROVIDERS
 
 #: Read a numeric environment override without letting a typo crash the import.
 def _env_number(name: str, default: float) -> float:
@@ -597,6 +598,14 @@ def _analyst_target_blocks(
             "price_target_estimate_count": forecast.get("price_target_estimates_num"),
             "price_target_period": "1 year",
             "rating_analyst_count": quote.get("recommendation_total"),
+            "rating_buy_count": quote.get("recommendation_over"),
+            "rating_hold_count": quote.get("recommendation_hold"),
+            "rating_sell_count": (
+                quote.get("recommendation_under") + quote.get("recommendation_sell")
+                if isinstance(quote.get("recommendation_under"), (int, float))
+                and isinstance(quote.get("recommendation_sell"), (int, float))
+                else None
+            ),
             "rating_period": "past 3 months",
             "mean_recommendation": quote.get("recommendation_mark"),
             "rating_distribution": {
@@ -636,6 +645,28 @@ def _analyst_target_blocks(
             "ratings": targets.get("ratings") or [],
         }
     return blocks
+
+
+def _analyst_summary(blocks: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Return provider-scoped analyst counts for direct reading under ``data``.
+
+    Each count keeps the population it describes. TradingView's one-year target
+    contributors and its past-three-month rating contributors are separate;
+    Finviz's visible rating firms and action rows are separate again. A missing
+    observation stays null instead of becoming zero or another population's
+    total.
+    """
+    tv = blocks.get(TRADINGVIEW) or {}
+    fv = blocks.get(FINVIZ) or {}
+    return {
+        "tradingview_price_target_estimate_count": tv.get("price_target_estimate_count"),
+        "tradingview_rating_analyst_count": tv.get("rating_analyst_count"),
+        "tradingview_rating_buy_count": tv.get("rating_buy_count"),
+        "tradingview_rating_hold_count": tv.get("rating_hold_count"),
+        "tradingview_rating_sell_count": tv.get("rating_sell_count"),
+        "finviz_rating_firm_count": fv.get("rating_firm_count"),
+        "finviz_rating_action_count": fv.get("rating_action_count"),
+    }
 
 
 # ── Quote ────────────────────────────────────────────────────────────────────
@@ -801,6 +832,16 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             "price_timestamp": payload.get("update_time"),
             "description": payload.get("description"),
             "sector": payload.get("sector"),
+            "price_target_estimate_count": (tv_forecast or {}).get("price_target_estimates_num"),
+            "rating_analyst_count": payload.get("recommendation_total"),
+            "rating_buy_count": payload.get("recommendation_over"),
+            "rating_hold_count": payload.get("recommendation_hold"),
+            "rating_sell_count": (
+                payload.get("recommendation_under") + payload.get("recommendation_sell")
+                if isinstance(payload.get("recommendation_under"), (int, float))
+                and isinstance(payload.get("recommendation_sell"), (int, float))
+                else None
+            ),
             "industry": payload.get("industry"),
             "dividend_yield": payload.get("dividends_yield_current"),
             "eps_ttm": payload.get("earnings_per_share_basic_ttm"),
@@ -990,6 +1031,20 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         additional_errors=[forecast_error] if forecast_error else [],
         **_health({"providers": providers_in(pair) or ALL_PROVIDERS}),
     )
+    # The NONE contract keeps ``data`` empty: analyst keys that would all be
+    # null must not turn an unanswered quote into a populated payload.
+    if result.get("data"):
+        blocks = _analyst_target_blocks(pair, tv_forecast)
+        data = dict(result["data"])
+        summary = _analyst_summary(blocks)
+        data.update(summary)
+        for name, observation in summary.items():
+            if observation is None:
+                continue
+            source = TRADINGVIEW if name.startswith("tradingview_") else FINVIZ
+            result.setdefault("fields", {})[name] = field_source(source, supplied=[source])
+        result["data"] = data
+
     # The session of the print that was actually served, mirrored at the
     # envelope level as well as inside ``data`` so it is visible however the
     # caller walks the response. Without it a caller cannot tell the regular
@@ -1300,7 +1355,7 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
     def asked_for_symbol(symbol: str) -> list[str]:
         """Return providers this batch requested for one symbol."""
         asked: set[str] = set()
-        for provider in ALL_PROVIDERS:
+        for provider in MARKET_PROVIDERS:
             if not resolved[symbol][provider].found:
                 continue
             if provider == TRADINGVIEW:
@@ -1322,7 +1377,7 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         ]
         for provider in ALL_PROVIDERS
     }
-    for provider in ALL_PROVIDERS:
+    for provider in MARKET_PROVIDERS:
         symbol_errors, batch_errors = _batch_error_map(provider, pair, asked_by_provider)
         for symbol in requested:
             if symbol in symbol_errors:
@@ -2390,9 +2445,18 @@ async def stock_earnings(symbol: str) -> dict[str, Any]:
     Args:
         symbol: Ticker.
 
+    When ``TAPEBASIS_EQUIBLES_API_KEY`` is configured, Equibles's analyst
+    estimates are asked too. An EPS estimate value enters ``comparisons`` only
+    when metric, period, statistic, unit, basis and dimensions match exactly;
+    otherwise the candidate is listed in ``declined_comparisons`` with a reason
+    instead of being called an agreement or a conflict. Without a key no
+    request is made and Equibles stays outside the provider scope entirely.
+
     Returns:
-        Envelope with ``data.next_earnings_date``, the Finviz tables and a
-        ``date_comparison`` block.
+        Envelope with ``data.next_earnings_date``, the Finviz tables, a
+        ``date_comparison`` block and ``eps_estimate_analyst_counts`` (the
+        single-source Equibles EPS-estimate contributor counts, keyed by that
+        provider's period label, null when the provider supplies no count).
     """
     resolved = await _symbols_for(symbol)
     ticker = strip_exchange(symbol).upper()
@@ -2415,7 +2479,27 @@ async def stock_earnings(symbol: str) -> dict[str, Any]:
             raise NotApplicable(YAHOO, resolved["YAHOO"].note or "no Yahoo symbol")
         return await yh_access.quote(resolved["YAHOO"].symbol)
 
-    pair = await ask(tv_call, fv_call, yh_call)
+    async def eq_call() -> dict[str, Any]:
+        """Ask Equibles only when a key exists, for EPS estimates alone.
+
+        The key is checked before any transport is constructed, so an
+        unconfigured deployment sends no request and adds no provider scope.
+        """
+        if not equibles_reconcile.configured():
+            raise NotApplicable(
+                EQUIBLES, "TAPEBASIS_EQUIBLES_API_KEY is not configured"
+            )
+        if not resolved["FINVIZ"].found:
+            raise NotApplicable(EQUIBLES, "Equibles carries US-listed tickers only")
+        return await equibles_reconcile.fetch_analyst_observations(ticker)
+
+    kwargs: dict[str, Any] = {}
+    if equibles_reconcile.configured() and resolved["FINVIZ"].found:
+        kwargs["eq_fn"] = eq_call
+    pair = await ask(tv_call, fv_call, yh_call, **kwargs)
+
+    eq_payload = pair.payload(EQUIBLES) if "eq_fn" in kwargs else None
+    eq_reconciled = equibles_reconcile.compare_earnings(pair.fv.payload, eq_payload)
 
     fv_data = fv_earnings_fields(pair.fv.payload) if pair.fv.payload else {}
     tv_row = pair.tv.payload or {}
@@ -2454,16 +2538,27 @@ async def stock_earnings(symbol: str) -> dict[str, Any]:
         "revisions": fv_data.get("revisions") or [],
         "price_reactions": fv_data.get("price_reactions") or [],
         "date_comparison": comparison,
+        # Equibles's numeric ``dimAnalystCount`` is the only EPS-estimate
+        # contributor count published here. It is single-source, keyed by the
+        # provider's own period label, and never merged with rating analysts,
+        # price-target estimators or visible rating firms. A missing count
+        # stays null rather than becoming zero.
+        "eps_estimate_analyst_counts": eq_reconciled["eps_estimate_analyst_counts"],
+        "declined_comparisons": eq_reconciled["declined_comparisons"],
         "resolutions": resolved["resolutions"],
     }
-    return finalize(
+    data.update(eq_reconciled["data"])
+    sources = {
+        TRADINGVIEW: "scanner.tradingview.com earnings calendar",
+        FINVIZ: f"https://finviz.com/stock?t={resolved['FINVIZ'].symbol or ticker}&ty=ea",
+        YAHOO: f"https://query1.finance.yahoo.com/v8/finance/chart/{resolved['YAHOO'].symbol}",
+    }
+    if eq_payload:
+        sources[EQUIBLES] = eq_payload.get("source") or "api.equibles.com analyst estimates"
+    result = finalize(
         pair,
         specs=(),
-        sources={
-            TRADINGVIEW: "scanner.tradingview.com earnings calendar",
-            FINVIZ: f"https://finviz.com/stock?t={resolved['FINVIZ'].symbol or ticker}&ty=ea",
-            YAHOO: f"https://query1.finance.yahoo.com/v8/finance/chart/{resolved['YAHOO'].symbol}",
-        },
+        sources=sources,
         extra={"earnings": data},
         data=data,
         health_warn=MONITOR.warnings_for(providers_in(pair) or ALL_PROVIDERS),
@@ -2471,6 +2566,9 @@ async def stock_earnings(symbol: str) -> dict[str, Any]:
             issue["provider"] in providers_in(pair) for issue in MONITOR.issues()
         ),
     )
+    result.setdefault("fields", {}).update(eq_reconciled["fields"])
+    result.setdefault("comparisons", []).extend(eq_reconciled["comparisons"])
+    return result
 
 
 # ── Extended hours ───────────────────────────────────────────────────────────

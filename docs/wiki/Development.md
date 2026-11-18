@@ -39,6 +39,7 @@ Finviz page would fail for reasons unrelated to the code.
 | `test_tools_merge.py` | also: the live print replaces the stale regular field, and a row's price, change and previous close describe one session |
 | `test_health.py` | Probe verdicts, fingerprints, drift detection, `rate_limits` block |
 | `test_equibles.py` | Hermetic official-REST transport, Bearer secrecy, route and redistribution controls, per-dataset freshness, no-retry quota blocking under concurrency and multiple event loops |
+| `test_equibles_integration.py` | Keyless shared tools make no Equibles call and keep their coverage; exact EPS contexts and matching FINRA settlement dates compare, insufficient context is declined, counts keep zero/null scopes |
 | `test_sentiment.py` | Local scoring: direction, neutrality, determinism, aggregation |
 | `test_sentiment_tool.py` | Token-free path, backend switching, no fabricated scores, separate news provenance |
 | `test_symbol_news.py` | News matching and consensus, Finviz clocks, newest-first limits and all news-bearing tool integrations |

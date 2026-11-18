@@ -308,6 +308,9 @@ async def test_combined_analysis_aggregates_news_without_erasing_price_errors(mo
     async def technical(symbol, exchange="NASDAQ", timeframe="1D"):
         return {"price_data": {"current_price": 200.0}, "rsi": {"value": 40.0}}
 
+    async def scanner_quote(symbol):
+        return {"ticker": symbol}
+
     async def sentiment(symbol, limit=20):
         return {"provider": "local-vader", "sentiment_score": 0.3}
 
@@ -330,6 +333,7 @@ async def test_combined_analysis_aggregates_news_without_erasing_price_errors(mo
                           "shortfall_reason": "available feeds supplied 1 unique valid story"}}
 
     monkeypatch.setattr(tv_access, "technical_analysis", technical)
+    monkeypatch.setattr(tv_access, "quote", scanner_quote)
     monkeypatch.setattr(tools_tradingview, "_sentiment_payload", sentiment)
     monkeypatch.setattr(fv_access, "snapshot", snapshot)
     monkeypatch.setattr(yh_access, "quote", quote)
