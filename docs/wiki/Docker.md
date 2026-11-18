@@ -34,13 +34,17 @@ the tested root digest, and authorization, transport, malformed-response or mism
 job. Each absent tag has at most one write, followed by bounded read-back checks that never write
 again. The release-bound exceptions each require their own option and exact reviewed predecessor
 digest. For `v1.1.1`, `--advance-major-latest-from` permits only `1` and `latest`. For
-`1.1.2` through `1.1.4`, `--advance-minor-major-latest-from` permits only `1.1`, `1` and `latest`. The
+`1.1.2` through `1.1.4`, `--advance-minor-major-latest-from` permits only their own minor alias, `1`
+and `latest`. `1.2.0` separately permits only `1.2`, `1` and `latest`. The
 applicable mutable alias must independently match the reviewed predecessor immediately before its
 copy. A wrong version, unrelated conflict, exact-version conflict, authorization failure or other
-lookup error never authorizes that write. The protected normal `1.1.2` through `1.1.4` tag publications
-and their explicit continuations use their respective reviewed predecessors. For `1.1.4` this is the
-verified `1.1.3` root digest
-`sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`.
+lookup error never authorizes that write. The protected normal tag publications and their explicit
+continuations use their respective reviewed predecessors. For `1.1.4` this is the verified `1.1.3`
+root digest
+`sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`. For `1.2.0` this is
+the verified `1.1.4` root digest
+`sha256:c16423260ee6a777f2fa79e9b799da7e9552b136593d314e09243121b1397597`, independently read
+from GHCR's `1.1`, `1` and `latest` aliases on 2026-11-18. Both `1.2` and `1.2.0` were absent.
 Other ordinary releases and MCP-only recovery do not receive these options.
 The reviewed predecessors and current status are recorded in [Releasing](Releasing).
 Do not assume aliases move only in version order. Matching existing images are verified rather than

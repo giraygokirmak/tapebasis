@@ -1399,6 +1399,10 @@ the independently read live `1.1.2` digest
 predecessor. The `1.1.4` normal writer and its package continuation use the same aliases and option
 with the independently read live `1.1.3` digest
 `sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028` as their predecessor.
+The `1.2.0` normal writer and its package continuation can independently advance only `1.2`, `1` and
+`latest` from the verified `1.1.4` digest
+`sha256:c16423260ee6a777f2fa79e9b799da7e9552b136593d314e09243121b1397597`. Read-only GHCR checks on
+2026-11-18 matched `1.1`, `1` and `latest` to that predecessor; `1.2` and `1.2.0` were absent.
 Each option is accepted only for its hard-coded version; none is a future-release
 policy. Other normal writers, other continuations and MCP-only recovery omit these predecessor
 arguments. An exact-version conflict, unrelated conflict, wrong predecessor, wrong
@@ -1556,6 +1560,7 @@ official `access` field and no legacy `entitlement` alias.
 before the provider could answer. It also confused a cryptographic authentication fact with separate
 operator obligations concerning use and redistribution. The operator remains responsible for those
 obligations; Tapebasis's hermetic suite makes no claim to have validated a real account or contract.
+A separate opt-in live check is not a contractual entitlement or a substitute for that operator review.
 
 The frozen route map is exclusively an allowlist, not a plan authority. Options require the plan
 Equibles documents for them, currently Plus or Pro. General live-price arbitration does not call
@@ -1590,9 +1595,11 @@ providers represented in the local catalogue, not providers contacted or exclusi
 legs.
 
 **Validation boundary:** all transport, concurrency, access and freshness tests are hermetic
-mocks. The suite automatically refuses any unfaked `api.equibles.com` transport. No real credential
-or paid plan was available, so live endpoint behavior and publication rights are not
-claimed as verified.
+mocks. The suite automatically refuses any unfaked `api.equibles.com` transport. A separate opt-in
+check on 2026-11-18 used an authorized process-environment credential for one company-profile request
+and one raw options-chain request without recording the credential. The profile returned
+`access: configured`; the chain returned `PLAN_REQUIRED`. These two observations are not validation of
+every route, a successful Plus or Pro options response, or the operator's publication rights.
 
 ---
 
@@ -1638,8 +1645,9 @@ licensed provider's absence cost nothing and its presence prove itself field by 
 `match: false`: an unproven basis is not evidence of a provider conflict.
 
 **Validation boundary:** the equivalence, settlement-date, keyless-no-transport, coverage-preserving
-and null-versus-zero behavior is tested hermetically in `test_equibles_integration.py`. Live
-Equibles credentials, actual plans and publication rights remain unverified.
+and null-versus-zero behavior is tested hermetically in `test_equibles_integration.py`. The two
+explicit live checks described above did not exercise these shared comparisons, prove paid options
+coverage or establish publication rights.
 
 ## Related
 

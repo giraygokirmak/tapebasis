@@ -444,8 +444,10 @@ Configuration and access:
   never becomes empty or substituted data. If some datasets in an existing multi-block tool succeed,
   `access.status` is `partially_available` and `plan_required_datasets` names the denied blocks.
 - The account's documented Free, Plus or Pro plan must permit its request. Normal Bearer keys are
-  not intrinsically limited to Free. Tapebasis does not verify a real account or publication rights
-  in its hermetic tests. The operator remains responsible for permitted use and redistribution.
+  not intrinsically limited to Free. An opt-in check on 2026-11-18 succeeded for a company profile,
+  while the account returned `PLAN_REQUIRED` for an options chain. No successful paid options
+  response or publication right is thereby established. Hermetic tests do not verify a real account;
+  the operator remains responsible for permitted use and redistribution.
 - Redirects, undocumented paths, unknown filters, credential query parameters and CSV/binary output
   are refused. Live transcripts bypass the cache. General live-price tools do not call Equibles.
 
@@ -470,7 +472,7 @@ and reset metadata, never retries, and blocks new Equibles requests until reset.
 ### Ops
 
 - `tapebasis_health`, run the probes now (`refresh=True`) or read the cached verdict. The Equibles
-  probe checks local key and tier configuration plus the last real response's public quota headers;
+  probe checks local key and the last real response's public quota headers;
   it deliberately spends no upstream quota.
 - `tapebasis_tool_map`, every tool with its providers and comparison strategy, without any
   upstream call.

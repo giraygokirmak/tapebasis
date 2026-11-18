@@ -3,7 +3,8 @@
 ## Requirements
 
 - Python 3.10 – 3.13
-- No API keys, no database, no external services
+- No API keys, database or external services for the general market tools; dedicated Equibles tools
+  require their own Bearer key
 
 ## Install
 
@@ -23,7 +24,7 @@ npx tapebasis --help
 
 The launcher has no runtime dependencies of its own, forwards arguments and environment, and works over stdio. Set `TAPEBASIS_UVX` if uvx is not on the client's `PATH`. It prints an installation link when uv is missing. On Windows it invokes an executable directly, without a command shell.
 
-The `v1.1.4` wheel, sdist and npm launcher are published. `pip install tapebasis` and `uvx tapebasis` work directly. GHCR serves the `1.1.4` image for `linux/amd64` and `linux/arm64`. MCP Registry metadata and the reviewed GitHub Release are published for this version. Approval required npm staging followed by a source-bound continuation, but every registry was independently matched to the tested artifact. Live Equibles credentials and publication rights were not validated. See [Releasing](Releasing) for run IDs and the new image digest.
+The `v1.1.4` wheel, sdist and npm launcher are published. `pip install tapebasis` and `uvx tapebasis` work directly. GHCR serves the `1.1.4` image for `linux/amd64` and `linux/arm64`. MCP Registry metadata and the reviewed GitHub Release are published for this version. Approval required npm staging followed by a source-bound continuation, but every registry was independently matched to the tested artifact. A later live check confirmed one Equibles company-profile request, while the current account returned `PLAN_REQUIRED` for the options chain. This does not establish Plus or Pro coverage or publication rights. See [Releasing](Releasing) for run IDs and the new image digest.
 
 Package names and Git tags do not prove that every registry carries the same release. Consult the
 reviewed [changelog](https://github.com/giraygokirmak/tapebasis/blob/main/CHANGELOG.md) for summaries

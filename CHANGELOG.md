@@ -5,6 +5,8 @@ Registry availability is recorded separately where a tag was published only part
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-18
+
 ### Added
 
 - Added 14 `equibles_*` family tools, bringing the MCP surface to 55 tools. They expose 188
@@ -14,7 +16,8 @@ Registry availability is recorded separately where a tag was published only part
 - Grouped calls preserve raw named datasets with `Data by Equibles`, observation freshness,
   reporting delay and `access`. Each dataset makes one authenticated GET with no automatic
   pagination or provider fallback. Live transcripts bypass cache; options retain the actual paid-plan
-  requirement and `equibles_options(dataset="chain")` returns the raw chain.
+  requirement and `equibles_options(dataset="chain")` returns the raw chain when the account's plan
+  permits it.
 - Account-owned portfolio/organization/custom-data/web-feed trackers and binary/CSV assets stay
   excluded. Institution-copy backtests and direct two-institution portfolio comparison are not added.
   Provider ratings, predictions, squeeze scores and AI briefs remain source-labelled, not Tapebasis
@@ -35,8 +38,18 @@ Registry availability is recorded separately where a tag was published only part
   settlement-date short-position comparison. Keyless general tools still make no Equibles request
   and gain no Equibles provider scope. Analyst populations stay separate, and Equibles never becomes
   a general live-price arbitration leg.
-- Updated README, wiki, `.env.example` and packaged-server tool count together. No live Equibles key,
-  account plan or publication right is claimed as validated; this entry is not a version release.
+- Updated README, wiki, `.env.example` and packaged-server tool count together. Raised package,
+  launcher and MCP Registry versions to `1.2.0`. An opt-in live check on 2026-11-18 succeeded for
+  `equibles_company(dataset="profile")` with `access: configured`, and returned `PLAN_REQUIRED` for
+  `equibles_options(dataset="chain")`. This confirms neither a successful paid-plan options response
+  nor redistribution rights; all 188 routes retain hermetic HTTP-level regression coverage.
+- For this release only, GHCR `1.2`, `1` and `latest` may advance after each alias independently
+  matches the verified `1.1.4` digest
+  `sha256:c16423260ee6a777f2fa79e9b799da7e9552b136593d314e09243121b1397597`. Read-only checks on
+  2026-11-18 found this predecessor on the existing `1.1`, `1` and `latest` aliases and no `1.2` or
+  `1.2.0` manifest. Exact
+  version replacement, omitted predecessor checks and later-release alias exceptions remain forbidden.
+  Package, image, MCP Registry and GitHub Release completion require the protected tag publication.
 
 ## [1.1.4] - 2026-11-18
 
@@ -242,6 +255,7 @@ Registry availability is recorded separately where a tag was published only part
 - PyPI, npm and the tested GHCR image were published and verified by protected recovery.
 - MCP Registry metadata remains at this version while later package releases are completed.
 
+[1.2.0]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.4...v1.2.0
 [1.1.4]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.1...v1.1.2

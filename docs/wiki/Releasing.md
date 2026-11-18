@@ -29,7 +29,7 @@ and npm content against the original artifacts, and completed GHCR, the MCP Regi
 Release without rebuilding or moving the tag. GHCR `1.1.3`, `1.1`, `1` and `latest` independently match
 the tested root digest `sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`.
 The npm stage-only token must be revoked after this completed release. No live Equibles credential or
-Equibles enterprise agreement was validated; endpoint behavior and actual publication rights remain unverified.
+enterprise agreement was validated during `1.1.3`; later checks do not change this historical limitation.
 For `1.1.4`, tag run `44292749356` validated and built the source artifacts, published the PyPI wheel
 and sdist, and staged npm. After npm approval, continuation run `44297676282` bound the original source
 ZIP to digest `sha256:119b8f290c1cf91473fa6191fb39c0e3772a2673e381351cb4f95f4aec56a066`, verified
@@ -40,7 +40,8 @@ reviewed `1.1.3` predecessor digest
 `1` and `latest` now match the tested root image-index digest
 `sha256:c16423260ee6a777f2fa79e9b799da7e9552b136593d314e09243121b1397597`; exact `1.1.3`
 remains on its prior digest. The stage-only token can be revoked now that the approval and continuation
-are complete. No live Equibles credential or enterprise agreement was verified.
+are complete. No live Equibles credential or enterprise agreement was verified during this release;
+separate later checks are not attributed to its original publication.
 These live publication checks are separate from the Release body produced from the tag's changelog.
 The rejected `v1.1.0` run
 `44060097251` has no tested release artifacts: its Python 3.10 validation failed before the build or
@@ -124,7 +125,11 @@ publishable registry content absent. Do not move the tag or rebuild replacement 
    was absent. Independently reviewed `1.1.4` normal publication and its package continuation advance
    those aliases only after each one matches the live `1.1.3` root digest
    `sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`.
-   The options are valid only for their hard-coded versions.
+   Independently reviewed `1.2.0` normal publication and its package continuation advance only `1.2`,
+   `1` and `latest`, each after a second live match to the verified `1.1.4` root digest
+   `sha256:c16423260ee6a777f2fa79e9b799da7e9552b136593d314e09243121b1397597`. Read-only GHCR
+   inspection on 2026-11-18 found `1.1`, `1` and `latest` at that predecessor and both `1.2` and
+   `1.2.0` absent. The options are valid only for their hard-coded versions.
    An exact-version conflict, unrelated conflict, wrong predecessor, wrong version, authorization
    failure or transport failure cannot advance the affected alias. A successfully imported exact tag
    or an earlier approved alias is not retried unnecessarily. Other ordinary tag publications, other
@@ -186,8 +191,8 @@ publication jobs use non-cancelling concurrency within their class, so two packa
   results for a finite interval and require eventual verified content. GHCR distinguishes HTTP 404
   absence through its registry API and compares `Docker-Content-Digest` with the tested OCI archive.
   Unrelated error text, authorization failures and conflicting digests never authorize a write. The
-  release-bound reviewed alias exceptions for `v1.1.1` and `1.1.2` through `1.1.4` are stated above
-  and do not apply automatically elsewhere.
+  release-bound reviewed alias exceptions for `v1.1.1`, `1.1.2` through `1.1.4` and `1.2.0` are
+  stated above and do not apply automatically elsewhere.
 - Publication is sequential within the approval-gated publish job: PyPI, then npm, then GHCR. Each
   step must succeed before the next one starts. Only after those package versions resolve does the
   job publish `server.json` to the MCP Registry. A registry has no transaction that can retract an

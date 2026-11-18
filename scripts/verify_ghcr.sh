@@ -3,8 +3,8 @@
 # Missing tags have one write. An explicit reviewed predecessor digest can
 # authorize only selected aliases to advance under publication. Exact-version
 # tags and all other conflicts remain fatal. The bounded 1.1.2 through 1.1.4
-# options hard-code their release identities; they do not create a general
-# future minor-alias policy.
+# and 1.2.0 options hard-code their release identities; they do not create a
+# general future minor-alias policy.
 # The full release identity is bound to the source artifacts by the protected
 # publish job before this helper runs.
 set -euo pipefail
@@ -17,7 +17,7 @@ if [ "$#" -eq 4 ] && [ "$MODE" = publish-missing ]; then
     if [ "$3" = --advance-major-latest-from ] && [ "$VERSION" = 1.1.1 ]; then
         ADVANCE_FROM="$4"
         ADVANCE_ALIASES="${VERSION%%.*}:latest"
-    elif [ "$3" = --advance-minor-major-latest-from ] && { [ "$VERSION" = 1.1.2 ] || [ "$VERSION" = 1.1.3 ] || [ "$VERSION" = 1.1.4 ]; }; then
+    elif [ "$3" = --advance-minor-major-latest-from ] && { [ "$VERSION" = 1.1.2 ] || [ "$VERSION" = 1.1.3 ] || [ "$VERSION" = 1.1.4 ] || [ "$VERSION" = 1.2.0 ]; }; then
         ADVANCE_FROM="$4"
         ADVANCE_ALIASES="${VERSION%.*}:${VERSION%%.*}:latest"
     else
