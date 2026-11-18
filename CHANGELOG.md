@@ -51,6 +51,19 @@ Registry availability is recorded separately where a tag was published only part
   version replacement, omitted predecessor checks and later-release alias exceptions remain forbidden.
   Package, image, MCP Registry and GitHub Release completion require the protected tag publication.
 
+### Publication status
+
+- Protected tag run `44356014425` validated and built the release artifacts, published the PyPI wheel
+  and sdist, then staged the tested npm tarball for maintainer approval. After two-factor npm approval,
+  source-bound continuation `44362229941` verified the original PyPI and npm contents and completed
+  GHCR, MCP Registry and the reviewed GitHub Release. The immutable `v1.2.0` tag remains on commit
+  `539835d30611ce4f455bf55c64a337d10ff03bbe`; the source artifact ZIP digest is
+  `sha256:e4dc03de497c3e08fc0293e5d5233153532d68f46787fe9532332b5d2008671d`.
+- GHCR `1.2.0`, `1.2`, `1` and `latest` independently match the tested multi-platform root index
+  digest `sha256:91e9f419c8abff54ab9f35285e6306731df1736b8db43959f0d45b0805647c39`. The `1.1` and
+  `1.1.4` tags remain on their prior digest. Independent post-publication checks verified the PyPI
+  bytes, npm SHA-512 integrity, MCP metadata and reviewed Release body against the original artifacts.
+
 ## [1.1.4] - 2026-11-18
 
 ### Added

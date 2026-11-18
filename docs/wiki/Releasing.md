@@ -1,5 +1,25 @@
 # Releasing
 
+The `v1.2.0` publication is complete on immutable tag commit
+`539835d30611ce4f455bf55c64a337d10ff03bbe`. Protected tag run `44356014425` validated the source on
+all supported Python versions, built the tested artifacts, published the PyPI wheel and sdist, then
+staged the npm tarball. After the maintainer's two-factor npm approval, continuation run `44362229941`
+bound the original artifact ZIP to digest
+`sha256:e4dc03de497c3e08fc0293e5d5233153532d68f46787fe9532332b5d2008671d`, verified PyPI and npm
+without uploading either package again, and completed GHCR, MCP Registry and the reviewed GitHub Release.
+Independent read-back checks verified every package against those original files. GHCR `1.2.0`, `1.2`,
+`1` and `latest` match root index digest
+`sha256:91e9f419c8abff54ab9f35285e6306731df1736b8db43959f0d45b0805647c39`; `1.1` and `1.1.4`
+remain on their prior digest. The GitHub `release` environment secret `TAPEBASIS_NPM_STAGE_TOKEN`
+was removed after these checks; this removes its stored GitHub copy, not evidence that the underlying
+npm token was revoked. The maintainer must revoke that token separately in npm's Access Tokens settings
+and leave future versions without a stage-only token until another release needs one. The approved
+`v1.1.4` predecessor was checked per mutable alias, and no exact-version tag
+was replaced. Package publication does not assert Equibles redistribution rights; their separate live
+boundary remains recorded below.
+
+## Earlier releases
+
 The `v1.0.0` wheel, sdist and npm launcher are published and match the original tag-run artifacts.
 GHCR serves `1.0.0`, `1.0`, `1` and `latest` for `linux/amd64` and `linux/arm64`, all with the tested
 root digest `sha256:4ff12fdcdc79e7c5cd065a3ffb685dcbe6daee518442b7751e0479e0da1e3167`.
