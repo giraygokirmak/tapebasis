@@ -23,12 +23,12 @@ npx tapebasis --help
 
 The launcher has no runtime dependencies of its own, forwards arguments and environment, and works over stdio. Set `TAPEBASIS_UVX` if uvx is not on the client's `PATH`. It prints an installation link when uv is missing. On Windows it invokes an executable directly, without a command shell.
 
-The `v1.0.0` wheel, sdist and npm launcher are published. `pip install tapebasis` and `uvx tapebasis` work directly. GHCR serves the `1.0.0` image for `linux/amd64` and `linux/arm64`. MCP Registry metadata is still being recovered from a partial release and will appear once the protected recovery workflow completes.
+The `v1.1.3` wheel, sdist and npm launcher are published. `pip install tapebasis` and `uvx tapebasis` work directly. GHCR serves the `1.1.3` image for `linux/amd64` and `linux/arm64`. MCP Registry metadata and the reviewed GitHub Release are published for this version. Approval required npm staging followed by a source-bound continuation, but no replacement package the tested artifacts. Live Equibles credentials and Enterprise publication rights were not validated.
 
 Package names and Git tags do not prove that every registry carries the same release. Consult the
 reviewed [changelog](https://github.com/giraygokirmak/tapebasis/blob/main/CHANGELOG.md) for summaries
-and [Releasing](Releasing) for partial-publication recovery. In particular, `1.1.3` is in development
-and is not an available package or image yet.
+and [Releasing](Releasing) for publication status and partial-release recovery. The release tag alone
+never proves that the staged npm approval and protected continuation have completed.
 
 ### Checkout
 

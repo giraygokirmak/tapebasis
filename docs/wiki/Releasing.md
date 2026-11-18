@@ -18,11 +18,19 @@ metadata and the ordinary GitHub Release. GHCR `1.1.1`, `1.1`, `1` and `latest` 
 the tested root digest
 `sha256:18a54e02f28d195030cd02ee1f45088eeb05a34792d532197f143f6a73a209d7`. The release environment's
 stage-only token remains limited to the single package but must be revoked when staging is no longer
-needed. The `1.1.2` source version was not published; its status remains historical and must not be
-rewritten. The current `1.1.3` source adds the Equibles integration and is also not published while
-this completed `v1.1.1` status is recorded separately from the existing Release body. No live
-Equibles credential or Enterprise agreement has been validated, and registry publication still needs
-the protected release steps and maintainer approval described below.
+needed. These `1.1.1` status references are historical: later `1.1.2` publication moved those mutable
+aliases. Run `44153330154` completed the original `1.1.2` source artifacts in npm, GHCR, the MCP
+Registry and its GitHub Release.
+For `1.1.3`, tag run `44266286296` validated and built the artifacts, published the PyPI wheel and sdist,
+then staged npm and deliberately skipped GHCR, MCP and GitHub Release writes. After the maintainer's npm
+two-factor approval, continuation run `44269347824` bound the source ZIP to digest
+`sha256:913618ae71494eeb71f72d5d355084def07fd286835b9ca4d34750fa64dbc5d0`, verified the live PyPI
+and npm content against the original artifacts, and completed GHCR, the MCP Registry and the GitHub
+Release without rebuilding or moving the tag. GHCR `1.1.3`, `1.1`, `1` and `latest` independently match
+the tested root digest `sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`.
+The npm stage-only token must be revoked after this completed release. No live Equibles credential or
+Enterprise agreement was validated; endpoint behavior and actual publication rights remain unverified.
+These live publication checks are separate from the Release body produced from the tag's changelog.
 The rejected `v1.1.0` run
 `44060097251` has no tested release artifacts: its Python 3.10 validation failed before the build or
 protected publication started. No package, image, MCP entry or ordinary GitHub Release is published for
@@ -221,7 +229,10 @@ OIDC publisher. This is a bootstrap limitation, not a permanent token requiremen
 1. Verify `npm view tapebasis version` reports that the package does not exist. If someone else has
    claimed it, choose another available unscoped name and update `package.json`, the lockfile,
    `server.json`, install examples and release checker together. Do not publish over another package.
-2. Run the full test and package gate from a clean checkout at the intended release commit.
+2. Run the full test and package gate from a clean checkout at the intended release commit. These
+   authenticated release actions use the configured `git credential` helper and the repository's release
+   scripts directly. Do not require sudo, install Homebrew, or reproduce a GitHub `workflow_dispatch`
+   through browser HTML forms. Pass human approvals only through the protected GitHub and npm controls.
 3. With the npm account that will own the package, run `npm login` interactively. Then publish the
    already tested tarball with `npm publish ./tapebasis-1.0.0.tgz --access public --otp=<current-code>`.
    Complete interactive two-factor authentication as prompted. This is an explicit maintainer action,

@@ -37,6 +37,20 @@ Registry availability is recorded separately where a tag was published only part
   Equibles tools and the nine provider labels alongside their security, freshness, quota and health
   semantics.
 
+### Publication status
+
+- The immutable tag run `44266286296` validated and built the source artifacts and published the PyPI
+  wheel and sdist. It then staged npm with no GHCR, MCP Registry or GitHub Release write. After the
+  maintainer approved npm with two-factor authentication, continuation run `44269347824` verified the
+  original source ZIP digest
+  `sha256:913618ae71494eeb71f72d5d355084def07fd286835b9ca4d34750fa64dbc5d0` and the live PyPI and npm
+  bytes, without uploading them again. It completed MCP Registry publication and the GitHub Release.
+- GHCR `1.1.3`, `1.1`, `1` and `latest` independently match the tested image root digest
+  `sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`. The immutable tag remains
+  on the original tested `5a82429360673432338509bc9708f7a2fb25fb62` source commit.
+- The npm staging token must be revoked now that this release has completed. No live Equibles credential
+  or Enterprise agreement was validated, so endpoint behavior and redistribution rights remain unverified.
+
 ### Release process
 
 - Bound the approved `1.1.3` GHCR `1.1`, `1` and `latest` alias advancement to a second live manifest
