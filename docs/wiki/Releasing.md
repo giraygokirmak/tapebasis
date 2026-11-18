@@ -30,13 +30,17 @@ Release without rebuilding or moving the tag. GHCR `1.1.3`, `1.1`, `1` and `late
 the tested root digest `sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`.
 The npm stage-only token must be revoked after this completed release. No live Equibles credential or
 Enterprise agreement was validated; endpoint behavior and actual publication rights remain unverified.
-For `1.1.4`, release preparation binds `1.1`, `1` and `latest` to a second independent manifest
-match for the verified `1.1.3` root digest
-`sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`, separately for each
-alias. The exact `1.1.4` tag must be absent or match the tested archive. The source version identities,
-normal writer and source-bound continuation carry the same exception. Publication approval, registry
-availability and the new image digest remain to be established; the still-published status above remains
-`1.1.3` until those checks pass.
+For `1.1.4`, tag run `44292749356` validated and built the source artifacts, published the PyPI wheel
+and sdist, and staged npm. After npm approval, continuation run `44297676282` bound the original source
+ZIP to digest `sha256:119b8f290c1cf91473fa6191fb39c0e3772a2673e381351cb4f95f4aec56a066`, verified
+existing PyPI and npm content and completed GHCR, the MCP Registry and the GitHub Release without
+rebuilding or moving the tag. The independent manifest matches for `1.1`, `1` and `latest` applied the
+reviewed `1.1.3` predecessor digest
+`sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`. GHCR `1.1.4`, `1.1`,
+`1` and `latest` now match the tested root image-index digest
+`sha256:c16423260ee6a777f2fa79e9b799da7e9552b136593d314e09243121b1397597`; exact `1.1.3`
+remains on its prior digest. The stage-only token can be revoked now that the approval and continuation
+are complete. No live Equibles credential or Enterprise agreement was verified.
 These live publication checks are separate from the Release body produced from the tag's changelog.
 The rejected `v1.1.0` run
 `44060097251` has no tested release artifacts: its Python 3.10 validation failed before the build or

@@ -37,6 +37,23 @@ Registry availability is recorded separately where a tag was published only part
   image digest `sha256:08ded4615b33333c7c0ca988916da4c94f1339b53d664bdaea5b1d4c6f6f9028`.
   Exact-version conflicts, other predecessors and registry lookup failures remain fatal.
 
+### Publication status
+
+- The immutable tag run `44292749356` validated and built the source artifacts, published the PyPI
+  wheel and sdist, and staged npm. Artifact `14422891104` was independently downloaded and checked
+  against its declared size and SHA-256 digest
+  `sha256:119b8f290c1cf91473fa6191fb39c0e3772a2673e381351cb4f95f4aec56a066`.
+- Continuation run `44297676282` verified the original tested artifact, compared existing PyPI and npm
+  content without re-upload, advanced the reviewed GHCR aliases and completed MCP Registry metadata
+  and the reviewed GitHub Release. The npm approval supplied through the registry made its live
+  `1.1.4` integrity equal to the tested tarball.
+- GHCR `1.1.4`, `1.1`, `1` and `latest` independently match the tested multi-platform root index
+  digest `sha256:c16423260ee6a777f2fa79e9b799da7e9552b136593d314e09243121b1397597`. The exact
+  `1.1.3` tag remains on the earlier digest; `v1.1.4` remains on the tested source commit
+  `ea9166664f9c534eb602bdba929e5ccaaf0bca55`.
+- The release environment's npm stage-only token can be revoked now that the staged approval and
+  continuation are complete. No live Equibles credential or Enterprise publication rights were verified.
+
 ## [1.1.3] - 2026-11-18
 
 ### Added
