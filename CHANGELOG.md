@@ -39,6 +39,11 @@ Registry availability is recorded separately where a tag was published only part
 
 ### Release process
 
+- Bound the approved `1.1.3` GHCR `1.1`, `1` and `latest` alias advancement to a second live manifest
+  match for the independently verified `1.1.2` predecessor digest
+  `sha256:bfb7bf0adcc6717c0fd3281bc71182078fc861f7b0f49fb73e78018f847dcddd`. Normal publication and
+  its source-bound continuation use this reviewed exception; wrong predecessors, other versions,
+  unrelated conflicts and lookup failures remain fatal.
 - No live Equibles key or Enterprise agreement was available during validation. Endpoint behavior and
   actual Enterprise publication rights are therefore not claimed as verified. Tagging, package
   publication and registry availability remain separate protected release steps; this version bump

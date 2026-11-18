@@ -32,13 +32,14 @@ Before every write, `scripts/verify_ghcr.sh` reads the registry manifest with a 
 An explicit HTTP 404 permits an import or a copy from the exact source image. Other tags must report
 the tested root digest, and authorization, transport, malformed-response or mismatch failures stop the
 job. Each absent tag has at most one write, followed by bounded read-back checks that never write
-again. There are two release-bound exceptions, each requiring its own option and exact reviewed
+again. There are three release-bound exceptions, each requiring its own option and exact reviewed
 predecessor digest. For `v1.1.1`, `--advance-major-latest-from` permits only `1` and `latest`. For
-`1.1.2`, `--advance-minor-major-latest-from` permits only `1.1`, `1` and `latest`. The applicable
-mutable alias must independently match the reviewed predecessor immediately before its copy. A wrong
-version, unrelated conflict, exact-version conflict, authorization failure or other lookup error never
-authorizes that write. The protected normal `1.1.2` tag publication and its explicit continuation use
-the same predecessor; other ordinary releases and MCP-only recovery do not receive these options.
+`1.1.2` and `1.1.3`, `--advance-minor-major-latest-from` permits only `1.1`, `1` and `latest`. The
+applicable mutable alias must independently match the reviewed predecessor immediately before its
+copy. A wrong version, unrelated conflict, exact-version conflict, authorization failure or other
+lookup error never authorizes that write. The protected normal `1.1.2` and `1.1.3` tag publications
+and their explicit continuations use their respective reviewed predecessors; other ordinary releases
+and MCP-only recovery do not receive these options.
 The reviewed predecessors and current status are recorded in [Releasing](Releasing).
 Do not assume aliases move only in version order. Matching existing images are verified rather than
 copied again.

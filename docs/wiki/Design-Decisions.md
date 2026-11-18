@@ -1388,14 +1388,17 @@ The old immutable tag remains the source of its version and commit binding; read
 the Release must match. Release writes omit `target_commitish` after verifying a live immutable tag, so GitHub does
 not demand separate workflow-modification authority for an old source commit. This needs only `contents: write`, never
 a persistent personal access token or tag movement. No such helper automatically grants the required environment approval.
-Two bounded release identities have independently reviewed alias exceptions. The `v1.1.1`
+Three bounded release identities have independently reviewed alias exceptions. The `v1.1.1`
 continuation can advance only `1` and `latest`, after a second lookup shows that alias at the tested
 `1.0.0` digest. The `1.1.2` normal tag writer and its package continuation can advance only `1.1`, `1`
 and `latest`, after each alias independently matches the tested `1.1.1` digest
 `sha256:18a54e02f28d195030cd02ee1f45088eeb05a34792d532197f143f6a73a209d7` immediately before its
-copy. The old option is accepted only for `1.1.1`, and the new option only for `1.1.2`; neither is a
-future-release policy. Other normal writers, other continuations and MCP-only recovery omit both
-predecessor arguments. An exact-version conflict, unrelated conflict, wrong predecessor, wrong
+copy. The `1.1.3` normal writer and its package continuation use the same aliases and option, with
+the independently read live `1.1.2` digest
+`sha256:bfb7bf0adcc6717c0fd3281bc71182078fc861f7b0f49fb73e78018f847dcddd` as their
+predecessor. Each option is accepted only for its hard-coded version; none is a future-release
+policy. Other normal writers, other continuations and MCP-only recovery omit these predecessor
+arguments. An exact-version conflict, unrelated conflict, wrong predecessor, wrong
 version, authorization failure or transport failure never advances the affected alias. Each operation
 still performs at most one write per tag, followed by read-only verification of the new target.
 An exact tag imported before a later failure and any earlier approved alias remain verified content,

@@ -97,7 +97,12 @@ publishable registry content absent. Do not move the tag or rebuild replacement 
    fatal. Independently reviewed `1.1.2` normal tag publication and its package continuation may
    advance `1.1`, `1` and `latest` from that same reviewed `1.1.1` digest by supplying
    `--advance-minor-major-latest-from`. Each alias requires its own second manifest match immediately
-   before one copy to the tested new image. The options are valid only for their hard-coded version.
+   before one copy to the tested new image. Independently reviewed `1.1.3` normal publication and its
+   package continuation use the same option for those aliases only after each one matches the live
+   `1.1.2` root digest
+   `sha256:bfb7bf0adcc6717c0fd3281bc71182078fc861f7b0f49fb73e78018f847dcddd`. This digest was
+   independently read through GHCR's scoped pull API for `1.1.2`, `1.1`, `1` and `latest`; `1.1.3`
+   was absent. The options are valid only for their hard-coded versions.
    An exact-version conflict, unrelated conflict, wrong predecessor, wrong version, authorization
    failure or transport failure cannot advance the affected alias. A successfully imported exact tag
    or an earlier approved alias is not retried unnecessarily. Other ordinary tag publications, other
@@ -159,7 +164,7 @@ publication jobs use non-cancelling concurrency within their class, so two packa
   results for a finite interval and require eventual verified content. GHCR distinguishes HTTP 404
   absence through its registry API and compares `Docker-Content-Digest` with the tested OCI archive.
   Unrelated error text, authorization failures and conflicting digests never authorize a write. The
-  release-bound reviewed alias exceptions for `v1.1.1` and `1.1.2` are stated above and do not apply
+  release-bound reviewed alias exceptions for `v1.1.1`, `1.1.2` and `1.1.3` are stated above and do not apply
   automatically elsewhere.
 - Publication is sequential within the approval-gated publish job: PyPI, then npm, then GHCR. Each
   step must succeed before the next one starts. Only after those package versions resolve does the
