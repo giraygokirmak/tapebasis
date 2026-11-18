@@ -617,6 +617,9 @@ print("sha256:" + "a" * 64)
 ''')
     (binary / "regctl").write_text('''#!/usr/bin/env bash
 printf "%s\\n" "$*" >> "$CALLS"
+if [ "$1" = registry ] && [ "$2" = login ]; then
+  cat >/dev/null
+fi
 if [ "$1" = image ]; then
   if [ -n "${PUBLISH_FAIL:-}" ]; then exit 1; fi
   target="$3"
