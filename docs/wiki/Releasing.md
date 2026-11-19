@@ -149,7 +149,13 @@ publishable registry content absent. Do not move the tag or rebuild replacement 
    `1` and `latest`, each after a second live match to the verified `1.1.4` root digest
    `sha256:c16423260ee6a777f2fa79e9b799da7e9552b136593d314e09243121b1397597`. Read-only GHCR
    inspection on 2026-11-18 found `1.1`, `1` and `latest` at that predecessor and both `1.2` and
-   `1.2.0` absent. The options are valid only for their hard-coded versions.
+   `1.2.0` absent. The options are valid only for their hard-coded versions. Independently reviewed `1.2.1` normal
+    publication and its package continuation advance only `1.2`, `1` and `latest`, each after a
+    second live match to the verified `1.2.0` root digest
+    `sha256:91e9f419c8abff54ab9f35285e6306731df1736b8db43959f0d45b0805647c39`. Read-only GHCR
+    GHCR inspection on 2026-11-19 found `1.2`, `1`, `1.2.0` and `latest` at that predecessor and
+    `1.2.1` absent. The options are valid only for their hard-coded versions.
+    absent.
    An exact-version conflict, unrelated conflict, wrong predecessor, wrong version, authorization
    failure or transport failure cannot advance the affected alias. A successfully imported exact tag
    or an earlier approved alias is not retried unnecessarily. Other ordinary tag publications, other
@@ -211,8 +217,8 @@ publication jobs use non-cancelling concurrency within their class, so two packa
   results for a finite interval and require eventual verified content. GHCR distinguishes HTTP 404
   absence through its registry API and compares `Docker-Content-Digest` with the tested OCI archive.
   Unrelated error text, authorization failures and conflicting digests never authorize a write. The
-  release-bound reviewed alias exceptions for `v1.1.1`, `1.1.2` through `1.1.4` and `1.2.0` are
-  stated above and do not apply automatically elsewhere.
+  release-bound reviewed alias exceptions for `v1.1.1`, `1.1.2` through `1.1.4`, `1.2.0` and
+  `1.2.1` are stated above and do not apply automatically elsewhere.
 - Publication is sequential within the approval-gated publish job: PyPI, then npm, then GHCR. Each
   step must succeed before the next one starts. Only after those package versions resolve does the
   job publish `server.json` to the MCP Registry. A registry has no transaction that can retract an

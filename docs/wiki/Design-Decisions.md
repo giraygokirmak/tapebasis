@@ -1409,6 +1409,10 @@ The `1.2.0` normal writer and its package continuation can independently advance
 `latest` from the verified `1.1.4` digest
 `sha256:c16423260ee6a777f2fa79e9b799da7e9552b136593d314e09243121b1397597`. Read-only GHCR checks on
 2026-11-18 matched `1.1`, `1` and `latest` to that predecessor; `1.2` and `1.2.0` were absent.
+The `1.2.1` normal writer and its package continuation can independently advance only `1.2`, `1`
+and `latest` from the verified `1.2.0` digest
+`sha256:91e9f419c8abff54ab9f35285e6306731df1736b8db43959f0d45b0805647c39`. Read-only GHCR checks on
+2026-11-19 matched `1.2`, `1`, `1.2.0` and `latest` to that predecessor; `1.2.1` was absent.
 Each option is accepted only for its hard-coded version; none is a future-release
 policy. Other normal writers, other continuations and MCP-only recovery omit these predecessor
 arguments. An exact-version conflict, unrelated conflict, wrong predecessor, wrong

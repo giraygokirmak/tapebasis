@@ -399,8 +399,18 @@ jobs:
           bash ./scripts/verify_ghcr.sh "$VERSION" publish-missing
           --advance-minor-major-latest-from "$PREVIOUS_RELEASE_DIGEST"
 
+      - name: Complete 1.2.1 GHCR with a reviewed predecessor for 1.2, 1 and latest
+        if: steps.npm_stage.outputs.npm_staged != 'true' && needs.build.outputs.version == '1.2.1'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+          PREVIOUS_RELEASE_DIGEST: sha256:91e9f419c8abff54ab9f35285e6306731df1736b8db43959f0d45b0805647c39
+        run: >-
+          bash ./scripts/verify_ghcr.sh "$VERSION" publish-missing
+          --advance-minor-major-latest-from "$PREVIOUS_RELEASE_DIGEST"
+
       - name: Complete other GHCR releases without replacing matching tags
-        if: steps.npm_stage.outputs.npm_staged != 'true' && needs.build.outputs.version != '1.1.2' && needs.build.outputs.version != '1.1.3' && needs.build.outputs.version != '1.1.4' && needs.build.outputs.version != '1.2.0'
+        if: steps.npm_stage.outputs.npm_staged != 'true' && needs.build.outputs.version != '1.1.2' && needs.build.outputs.version != '1.1.3' && needs.build.outputs.version != '1.1.4' && needs.build.outputs.version != '1.2.0' && needs.build.outputs.version != '1.2.1'
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.build.outputs.version }}
@@ -667,7 +677,7 @@ jobs:
           --advance-major-latest-from "$PREVIOUS_RELEASE_DIGEST"
 
       - name: Complete other GHCR releases from source OCI archives without replacing matches
-        if: steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag != 'v1.1.1' && inputs.resume_tag != 'v1.1.2' && inputs.resume_tag != 'v1.1.3' && inputs.resume_tag != 'v1.1.4' && inputs.resume_tag != 'v1.2.0'
+        if: steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag != 'v1.1.1' && inputs.resume_tag != 'v1.1.2' && inputs.resume_tag != 'v1.1.3' && inputs.resume_tag != 'v1.1.4' && inputs.resume_tag != 'v1.2.0' && inputs.resume_tag != 'v1.2.1'
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash ./scripts/verify_ghcr.sh "$VERSION" publish-missing
@@ -704,6 +714,15 @@ jobs:
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PREVIOUS_RELEASE_DIGEST: sha256:c16423260ee6a777f2fa79e9b799da7e9552b136593d314e09243121b1397597
+        run: >-
+          bash ./scripts/verify_ghcr.sh "$VERSION" publish-missing
+          --advance-minor-major-latest-from "$PREVIOUS_RELEASE_DIGEST"
+
+      - name: Complete 1.2.1 GHCR with a reviewed predecessor for 1.2, 1 and latest
+        if: steps.npm_stage.outputs.npm_staged != 'true' && inputs.resume_tag == 'v1.2.1'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIOUS_RELEASE_DIGEST: sha256:91e9f419c8abff54ab9f35285e6306731df1736b8db43959f0d45b0805647c39
         run: >-
           bash ./scripts/verify_ghcr.sh "$VERSION" publish-missing
           --advance-minor-major-latest-from "$PREVIOUS_RELEASE_DIGEST"

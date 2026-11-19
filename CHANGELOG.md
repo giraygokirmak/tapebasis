@@ -5,6 +5,21 @@ Registry availability is recorded separately where a tag was published only part
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-19
+
+### Added
+
+- Added Investing.com as a native `INVESTING` peer and the `investing_quote` tool, bringing the MCP
+  surface to 56 tools. Native search, including bounded cursor pagination, resolves an unambiguous
+  equity or ETF before the exact returned page repeats its symbol, exchange, currency, class,
+  instrument id and native path. Ordinary shared quote fields retain normal reconciliation and
+  freshness semantics. Analyst populations and technical summaries remain explicitly `INVESTING`
+  single-source observations, and Investing failures never hide other provider responses.
+- Ordinary stock `lastClose` is not assumed to be a previous close; only the explicit ETF
+  `keyStatistics.prevClose` can supply that baseline. Regular and extended prints retain independent
+  epoch-millisecond timestamps. Market capitalisation remains structurally `not_comparable` across
+  providers with potentially different share-count bases and as-of dates.
+
 ### Fixed
 
 - `stock_quote.data` now returns name-free, provider-prefixed rating summaries with totals and every
@@ -15,6 +30,16 @@ Registry availability is recorded separately where a tag was published only part
   descriptors accompany them. Finviz's total remains
   visible rating actions, not institutions or all analysts. `combined_analysis.data` exposes the same
   TradingView summary. No cross-provider recommendation total is inferred.
+
+### Changed
+
+- Raised package, launcher and MCP Registry versions to `1.2.1`. For this release only, GHCR `1.2`,
+  `1` and `latest` may advance after each alias independently matches the verified `1.2.0` digest
+  `sha256:91e9f419c8abff54ab9f35285e6306731df1736b8db43959f0d45b0805647c39`. Read-only checks on
+  2026-11-19 matched `1.2`, `1`, `1.2.0` and `latest` to this predecessor and found `1.2.1` absent.
+  Exact-version replacement, omitted predecessor checks and later-release alias exceptions remain
+  forbidden. Package, image, MCP Registry and GitHub Release completion require the protected tag
+  publication and any npm staging approval.
 
 ## [1.2.0] - 2026-11-18
 
@@ -279,6 +304,7 @@ Registry availability is recorded separately where a tag was published only part
 - PyPI, npm and the tested GHCR image were published and verified by protected recovery.
 - MCP Registry metadata remains at this version while later package releases are completed.
 
+[1.2.1]: https://github.com/giraygokirmak/tapebasis/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.4...v1.2.0
 [1.1.4]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/giraygokirmak/tapebasis/compare/v1.1.2...v1.1.3

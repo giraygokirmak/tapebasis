@@ -35,7 +35,7 @@ job. Each absent tag has at most one write, followed by bounded read-back checks
 again. The release-bound exceptions each require their own option and exact reviewed predecessor
 digest. For `v1.1.1`, `--advance-major-latest-from` permits only `1` and `latest`. For
 `1.1.2` through `1.1.4`, `--advance-minor-major-latest-from` permits only their own minor alias, `1`
-and `latest`. `1.2.0` separately permits only `1.2`, `1` and `latest`. The
+and `latest`. `1.2.0` and `1.2.1` separately permit only `1.2`, `1` and `latest`. The
 applicable mutable alias must independently match the reviewed predecessor immediately before its
 copy. A wrong version, unrelated conflict, exact-version conflict, authorization failure or other
 lookup error never authorizes that write. The protected normal tag publications and their explicit
@@ -45,6 +45,9 @@ root digest
 the verified `1.1.4` root digest
 `sha256:c16423260ee6a777f2fa79e9b799da7e9552b136593d314e09243121b1397597`, independently read
 from GHCR's `1.1`, `1` and `latest` aliases on 2026-11-18. Both `1.2` and `1.2.0` were absent.
+For `1.2.1` this is the verified `1.2.0` root digest
+`sha256:91e9f419c8abff54ab9f35285e6306731df1736b8db43959f0d45b0805647c39`, independently
+read from GHCR's `1.2`, `1`, `1.2.0` and `latest` references on 2026-11-19; `1.2.1` was absent.
 Other ordinary releases and MCP-only recovery do not receive these options.
 The reviewed predecessors and current status are recorded in [Releasing](Releasing).
 Do not assume aliases move only in version order. Matching existing images are verified rather than
