@@ -15,13 +15,18 @@ Registry availability is recorded separately where a tag was published only part
 
 ## [1.2.1] - 2026-11-19
 
-Publication is partial. Protected tag run `44525524919` published and verified the PyPI wheel and
-sdist on immutable commit `f1bf2ee0aa1154fcff4e23d44c2dd9e418d4ae69`, but Publish job
-`135568133543` failed at npm staging. The visible job page exposes only a generic exit code, not a
-missing-secret diagnosis. npm remains at `1.2.0`; GHCR, the MCP Registry and the GitHub Release steps
-remain incomplete. An earlier statement that the npm stage-only secret was absent during this run was
-unsupported and is withdrawn. The original tag and tested artifacts must not be replaced; protected
-package continuation remains the recovery path.
+Protected tag run `44525524919` published and verified the PyPI wheel and
+sdist on immutable commit `f1bf2ee0aa1154fcff4e23d44c2dd9e418d4ae69`, but its Publish job failed at
+npm staging and a continuation then staged npm. After the maintainer approved that staged version,
+continuation run `44541463369` bound the original source artifact ZIP to digest
+`sha256:33547ea4e4bac0b1b393fb5e93ff772dd0c02c3d4dc327f57a2c3212632b6`, verified the existing PyPI and
+npm bytes without re-uploading either, and completed GHCR, the MCP Registry and this GitHub Release.
+Independent read-back verified both packages against the original artifacts. GHCR `1.2.1`, `1.2`, `1`
+and `latest` match the tested root index digest
+`sha256:ecf86d6ec6ab0bfbcc84a1cfc7fcde2d41065312ba4474af252bf9326a5b71e9`; exact `1.2.0`
+remains on its predecessor digest. The immutable source tag and tested artifacts were not replaced.
+An earlier statement that the npm stage-only secret was absent during the tag job was unsupported and
+is withdrawn. The installed stage-only credential was not modified or deleted after its restoration.
 
 ### Added
 

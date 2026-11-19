@@ -1,12 +1,19 @@
 # Releasing
 
-The `v1.2.1` publication remains partial on immutable tag commit
+The `v1.2.1` publication began on immutable tag commit
 `f1bf2ee0aa1154fcff4e23d44c2dd9e418d4ae69`. Protected tag run `44525524919` passed all supported
 Python versions and built the source artifacts. Its approved Publish job `135568133543` uploaded the
-PyPI wheel and sdist, independently verified PyPI `1.2.1`, then failed at npm staging. Live npm still
-reports `1.2.0`; GHCR, the MCP Registry and the GitHub Release steps did not run. The source artifact
-must not be rebuilt or the tag moved. Recovery remains `resume_source_run=44525524919` with
-`resume_tag=v1.2.1` after the missing npm prerequisite is corrected and the registry state is checked.
+PyPI wheel and sdist, independently verified PyPI `1.2.1`, then failed at npm staging. The source
+artifact and tag were not rebuilt or moved. Recovery used `resume_source_run=44525524919` with
+`resume_tag=v1.2.1`. Once the npm prerequisite was restored, continuation run `44540618719` verified
+the existing PyPI content and staged npm. After the maintainer's npm two-factor approval, continuation
+run `44541463369` bound the original artifact ZIP to digest
+`sha256:33547ea4e4bac0b1b393fb5e93ff772dd0c02c3d4dc327f57a2c3212632b6`, verified both existing
+packages without another upload, and completed GHCR, the MCP Registry and the GitHub Release.
+Independent read-back verified npm and PyPI against the source artifacts. GHCR `1.2.1`, `1.2`, `1` and
+`latest` match tested root digest
+`sha256:ecf86d6ec6ab0bfbcc84a1cfc7fcde2d41065312ba4474af252bf9326a5b71e9`; `1.2.0` remains on its
+prior digest. The installed stage-only credential was not modified or deleted after its restoration.
 
 The visible job page for `135568133543` shows only `Error: Process completed with exit code 1` after
 the collapsed npm-staging command. It does not name a failing shell line, distinguish an empty secret
@@ -15,9 +22,9 @@ wrongly combined that generic failure with the `1.2.0` history below and a secre
 then declared `TAPEBASIS_NPM_STAGE_TOKEN` absent during the tag job. That conclusion was unsupported.
 Read-only name-only inspection after the run found no secret with that name in the GitHub environment
 or repository secret lists, but it neither shows the job's injected value nor disproves that the
-maintainer re-added a token. No stage-token value was read, modified or deleted during these checks. Treat
-this as an unclassified staging failure until the complete authenticated log or a fresh protected
-continuation identifies the cause.
+maintainer re-added a token. No stage-token value was read, modified or deleted during these checks.
+The original tag-run failure therefore stays unclassified in this historical record; its generic
+visible annotation must not be rewritten into a different root cause retrospectively.
 
 ## Completed v1.2.0 publication
 
