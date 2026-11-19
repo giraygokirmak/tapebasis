@@ -18,7 +18,8 @@
   symbols.resolve()  ──►  one ticker per provider, cached 1 h
       │
       ▼
-  reconcile.ask(tv_fn, fv_fn, yh_fn, sa_fn=sa_fn, bb_fn=bb_fn)  ──►  asyncio.gather, never raises
+  reconcile.ask(tv_fn, fv_fn, yh_fn, sa_fn=sa_fn, investing_fn=investing_fn,
+                bb_fn=bb_fn)  ──►  asyncio.gather, never raises
       │
       ├──► tv_access ──► providers/tradingview/native ──► scanner.tradingview.com
       │                                              ├──► data.tradingview.com (ws)
@@ -26,6 +27,7 @@
       ├──► fv_access ──► providers/finviz ─────────────► finviz.com (HTML + /api/*)
       ├──► yh_access ──► Yahoo chart API ──────────────► query1.finance.yahoo.com
       ├──► sa_access ──► StockAnalysis quote API ─────► stockanalysis.com/api/quotes/s/<t>
+      ├──► investing_access ──► curl_cffi ► Investing native search + quote/<id>
       └──► bb_access ──► curl_cffi (TLS impersonation) ► bloomberg.com/quote/<id>
 
   tools_bloomberg ──► bb_access (same adapter, one provider asked, so single-source)
@@ -87,6 +89,8 @@ src/tapebasis/
 ├── yh_access.py          typed access to the Yahoo Finance provider
 ├── bb_access.py          typed access to bloomberg.com (reconciliation leg, curl_cffi)
 ├── sa_access.py          typed access to stockanalysis.com (US equities and ETFs)
+├── investing_access.py   Investing search identity, typed page access and epoch-ms sessions
+├── tools_investing.py    direct single-source Investing quote and provider extras
 ├── eq_access.py          official Equibles REST allowlist, secret/quota/freshness logic
 ├── equibles_reconcile.py optional exact-context EPS and same-date short-interest adapters
 ├── eq_catalog.py          frozen 188-route dataset/filter catalogue and validator
@@ -123,6 +127,7 @@ access module and its own upstream:
 | Yahoo Finance | `yh_access.py` | `query1.finance.yahoo.com/v8/finance/chart` |
 | StockAnalysis | `sa_access.py` | `stockanalysis.com/api/quotes/s/<ticker>` |
 | Bloomberg | `bb_access.py` | `bloomberg.com/quote/<id>` and `/markets/rates-bonds`, through `curl_cffi` |
+| Investing.com | `investing_access.py` | Native `/instruments/search`, then the exact returned equity or ETF page through `curl_cffi` |
 
 An earlier version of this server had TradingView's price come from Yahoo's chart API. That made the
 two legs the same upstream wearing different labels: a comparison that could only ever agree. The
@@ -200,9 +205,21 @@ rather than exclusion:
   adapter is last in `DEFAULT_ORDER` so a delayed page can never win a freshness tie. Its
   `lastUpdate` is a session sentinel, so `print_time` is derived from the last intraday point and
   refused when that point does not match the quoted price.
-- **Its own transport.** It is the only adapter that needs `curl_cffi`: the site gates plain HTTP
-  clients on the TLS fingerprint, so it cannot share the `httpx` path the others use. That is also
-  why the health monitor has no probe for it.
+- **Its own transport.** It needs `curl_cffi`: the site gates plain HTTP clients on the TLS
+  fingerprint, so it cannot share the `httpx` path. Investing.com has the same transport constraint.
+  Bloomberg has no live page health probe, because coincidence on its sampled pages would not prove
+  every quote page works.
+
+### Investing is an identity-verified adapter
+
+`investing_access.py` uses `curl_cffi` with Chrome impersonation, provider pacing and short caches.
+`symbols.resolve_investing` asks Investing's native instrument search and retains the returned
+instrument id, exchange, currency, class and native page path. A guessed slug, wrong instrument
+class or ambiguous primary listing is never accepted. The quote page must repeat that identity
+before `stock_quote` or `stock_prices` compares its ordinary fields. Regular and extended print
+clocks are converted independently from epoch milliseconds. Analyst and technical blocks remain
+`INVESTING` single-source observations. `investing_quote` exposes them directly without another
+provider; search and page failures keep their typed provider code.
 
 `tools_bloomberg.py` reuses the same adapter for the case where only Bloomberg is asked, and marks
 those responses `cross_checked: false` / `reconciliation_leg: false`. See

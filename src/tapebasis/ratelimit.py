@@ -228,6 +228,14 @@ LIMITERS: dict[str, ProviderLimiter] = {
         max_inflight=_env_int("TAPEBASIS_SA_MAX_INFLIGHT", 2),
         max_retries=_env_int("TAPEBASIS_SA_MAX_RETRIES", 2),
     ),
+    # Investing gates plain HTTP clients on the TLS fingerprint. Search and page
+    # reads share this pace, with their short caches absorbing duplicate asks.
+    "INVESTING": ProviderLimiter(
+        provider="INVESTING",
+        min_interval=_env_float("TAPEBASIS_INVESTING_MIN_INTERVAL", 2.0),
+        max_inflight=_env_int("TAPEBASIS_INVESTING_MAX_INFLIGHT", 1),
+        max_retries=_env_int("TAPEBASIS_INVESTING_MAX_RETRIES", 2),
+    ),
     # Bloomberg is a reconciliation leg now, and it still has an upstream that
     # punishes bursts. Its HTML path tolerated ~5 requests 10 s apart while its
     # separate API bucket burned after ~10 rapid calls and stayed 403 for

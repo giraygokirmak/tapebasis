@@ -11,6 +11,7 @@ Providers are first-class peers, asked in parallel:
 ``FINVIZ``       finviz.com HTML and JSON islands.
 ``YAHOO``        query1.finance.yahoo.com chart API.
 ``SA``           stockanalysis.com's consolidated quote API, US equities/ETFs.
+``INVESTING``    investing.com instrument search and quote pages.
 ``BLOOMBERG``    bloomberg.com public quote pages, a leg with a known delay.
 ``EQUIBLES``     authenticated SEC-derived fundamentals and licensed positioning.
 
@@ -38,11 +39,17 @@ Both facts are reported in the payload (``exchange_delay``, ``print_time``,
 ``comparisons[].pairs[].not_comparable``), so an agent can tell a real
 cross-check from a delayed duplicate.
 
+Investing is a full equity and ETF leg. Its own search identifies the exact
+instrument, listing and currency before the page is read. Fields with the same
+meaning join the ordinary comparison; its analyst population and technical
+summaries stay in separately labelled blocks. The displayed ``lastClose`` is
+not assumed to be the previous close of the regular session.
+
 StockAnalysis is a full leg too, on the same terms: asked in parallel on every
 US equity/ETF quote, its readings in ``comparisons``, counted in ``ALL``. Its
 quote surface is the same consolidated tape Yahoo serves, so the two agree
 penny-for-penny by construction rather than by independent measurement; that is
-stated rather than presented as two witnesses. It sits immediately before
+stated rather than presented as two witnesses. It precedes Investing and
 Bloomberg in the documented order: a live feed, but the narrowest coverage (US
 equities and ETFs, no indices, FX, crypto, commodities or foreign listings), so it should not
 outrank a broader feed on a tie.
@@ -69,6 +76,7 @@ class DataProvider(str, Enum):
     FINVIZ = "FINVIZ"
     YAHOO = "YAHOO"
     SA = "SA"
+    INVESTING = "INVESTING"
     BLOOMBERG = "BLOOMBERG"
     EQUIBLES = "EQUIBLES"
     NONE = "NONE"
@@ -87,11 +95,11 @@ class Verification(str, Enum):
     UNAVAILABLE = "UNAVAILABLE"
 
 
-#: General market-comparison providers, in display order. Bloomberg and
-#: StockAnalysis are last because their coverage is narrowest or their prints
-#: can be structurally older. Equibles is never part of this live-price list.
+#: General market-comparison providers, in display order. Investing precedes
+#: Bloomberg so the TLS-gated page legs stay together. Equibles is never part
+#: of this live-price list.
 PROVIDER_ORDER: tuple[str, ...] = (
-    "TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"
+    "TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "INVESTING", "BLOOMBERG"
 )
 
 #: Every provider label an explicitly configured capability may reconcile.
@@ -110,6 +118,7 @@ PROVIDER_NAMES: dict[str, str] = {
     "FINVIZ": "Finviz",
     "YAHOO": "Yahoo Finance",
     "SA": "StockAnalysis",
+    "INVESTING": "Investing.com",
     "BLOOMBERG": "Bloomberg",
     "EQUIBLES": "Equibles",
 }
@@ -156,6 +165,12 @@ PROVIDER_MEANING: dict[DataProvider, str] = {
         "StockAnalysis covers US equities and ETFs; its quote surface is the same "
         "consolidated tape Yahoo serves, so read agreement between those two as "
         "weak corroboration, not two independent witnesses."
+    ),
+    DataProvider.INVESTING: (
+        "Data came from INVESTING (Investing.com) only. The other providers did "
+        "not supply this field, so the value is single-source and NOT corroborated. "
+        "Its analyst population and technical summary are provider-specific, never "
+        "a cross-provider analyst total or consensus."
     ),
     DataProvider.BLOOMBERG: (
         "Data came from BLOOMBERG only. The other providers did not supply this "

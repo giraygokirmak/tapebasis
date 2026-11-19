@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
 
 from . import __version__
-from . import bb_access, blocking_pool
+from . import bb_access, blocking_pool, investing_access
 from .health import MONITOR
 from .http_pool import aclose_all, warm_origins
 from .providers_state import PROVIDER_MEANING
@@ -129,6 +129,7 @@ async def lifespan(_server: FastMCP):
     finally:
         await MONITOR.stop()
         await bb_access.aclose()
+        await investing_access.aclose()
         await aclose_all()
         blocking_pool.shutdown()
 
@@ -148,6 +149,7 @@ def _register_all() -> dict[str, int]:
         tools_equibles_families,
         tools_finviz,
         tools_health,
+        tools_investing,
         tools_market,
         tools_tradingview,
     )
@@ -157,6 +159,7 @@ def _register_all() -> dict[str, int]:
         "finviz": tools_finviz.register(mcp),
         "tradingview": tools_tradingview.register(mcp),
         "bloomberg": tools_bloomberg.register(mcp),
+        "investing": tools_investing.register(mcp),
         "equibles": tools_equibles.register(mcp),
         "equibles_families": tools_equibles_families.register(mcp),
         "health": tools_health.register(mcp),

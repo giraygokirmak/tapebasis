@@ -198,7 +198,8 @@ def live_print(provider: str, payload: dict[str, Any]) -> dict[str, Any]:
 
     Args:
         provider: The provider label, as :mod:`tapebasis.providers_state` uses
-            it (``TRADINGVIEW``, ``FINVIZ``, ``YAHOO``, ``SA``, ``BLOOMBERG``).
+            it (``TRADINGVIEW``, ``FINVIZ``, ``YAHOO``, ``SA``, ``INVESTING``,
+            ``BLOOMBERG``).
         payload: That provider's shaped quote.
 
     Returns:
@@ -217,6 +218,8 @@ def live_print(provider: str, payload: dict[str, Any]) -> dict[str, Any]:
         return _yahoo(payload)
     if provider == "SA":
         return _stockanalysis(payload)
+    if provider == "INVESTING":
+        return _investing(payload)
     if provider == "BLOOMBERG":
         return _bloomberg(payload)
     return _plain(payload)
@@ -430,6 +433,46 @@ def _stockanalysis(payload: dict[str, Any]) -> dict[str, Any]:
         )
     return _pack(
         payload.get("price"), payload.get("price_timestamp"), None, "price",
+        reference_close=payload.get("previous_close"),
+        change_percent=payload.get("change_percent"),
+    )
+
+
+def _investing(payload: dict[str, Any]) -> dict[str, Any]:
+    """Investing: regular or named extended print, each with its own timestamp.
+
+    An extended quote without a usable price falls back to regular. One without
+    a usable timestamp stays an undated extended print rather than inheriting
+    the regular print's clock. ``lastClose`` is never read: its meaning as a
+    previous regular close is not established.
+    """
+    block = payload.get("extended_hours") or {}
+    prefix = "afterHours" if payload.get("extended_kind") == "aftermarket" else "premarket"
+    session = (
+        POST_MARKET if payload.get("extended_kind") == "aftermarket"
+        else PRE_MARKET
+    )
+    if payload.get("extended_kind") and _number(block.get("price")) is not None:
+        if parse_market_timestamp(block.get("price_timestamp")) is None:
+            # An unverifiable extended quote is not silently relabeled as the
+            # regular session. Preserve its price and session, but leave its
+            # clock empty so freshness arbitration cannot date it with the
+            # regular print's timestamp.
+            return _pack(
+                block.get("price"), None, session,
+                f"extended_hours.{prefix}.price",
+                reference_close=payload.get("price"),
+                change_percent=block.get("change_percent"),
+            )
+        return _pack(
+            block.get("price"), block.get("price_timestamp"), session,
+            f"extended_hours.{prefix}.price",
+            reference_close=payload.get("price"),
+            change_percent=block.get("change_percent"),
+        )
+    return _pack(
+        payload.get("price"), payload.get("price_timestamp"), REGULAR,
+        "instrument.price.last",
         reference_close=payload.get("previous_close"),
         change_percent=payload.get("change_percent"),
     )

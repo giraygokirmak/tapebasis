@@ -161,6 +161,26 @@ availability signal, and `rate_limits.BLOOMBERG` shows whether it is cooling dow
 
 ---
 
+## `investing_quote` is `NONE`, or Investing is an error in a quote response
+
+**Cause:** native search or its verified quote page refused the request, or did not establish one
+exact supported identity.
+
+| Symptom | Cause | What is preserved |
+| --- | --- | --- |
+| `UPSTREAM_BLOCKED` | Investing answered 401/403 | Other quote providers keep answering; the Investing error stays visible |
+| `RATE_LIMITED` | Investing answered 429 | The rate-limit code, never an empty search result |
+| `SCHEMA_DRIFT` | Search/page structure or its symbol, class, exchange, currency, id or path changed | No field from that page joins another provider |
+| `NO_DATA` | No exact unambiguous equity or ETF match, or no price on the verified page | No guessed slug or same-symbol listing is substituted |
+| `NOT_CONFIGURED` | `curl_cffi` is absent | Install the project's declared dependencies; Investing needs the browser TLS transport |
+
+
+For `stock_prices`, Investing's instrument identity, forecast and technical extras are
+`investing_*` fields with only `INVESTING` in `fields...supplied`. They are not compared or added
+to another provider's analyst population.
+
+---
+
 ## `stock_quote` returns `peers` with `compared: ["FINVIZ"]` inside an `ALL` response
 
 **Expected.** `stock_quote` mixes sources: price and core metrics are compared across providers, but

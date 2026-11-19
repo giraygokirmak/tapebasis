@@ -1,12 +1,16 @@
 """Tests for the upstream health monitor (mocked HTTP, no network)."""
 from __future__ import annotations
 
+import sys
+
 import httpx
 import pytest
 
 from tapebasis import health
+from tapebasis.providers_state import ProviderError
 from tapebasis.health import (
     FINVIZ,
+    INVESTING,
     TRADINGVIEW,
     STATUS_DOWN,
     STATUS_DRIFT,
@@ -198,7 +202,14 @@ def test_every_provider_has_its_own_probe():
     providers = {probe.provider for probe in health._probes()}
     assert providers == {
         TRADINGVIEW, FINVIZ, health.YAHOO, health.SA, health.EQUIBLES,
+        INVESTING,
     }
+    assert INVESTING not in health.PROVIDERS
+    assert "BLOOMBERG" not in health.PROVIDERS
+    assert INVESTING in health.MONITORED_PROVIDERS
+    assert next(
+        probe for probe in health._probes() if probe.provider == INVESTING
+    ).url == "local:investing-quote"
 
 
 def test_stockanalysis_probes_hit_stockanalysis_only():
@@ -231,6 +242,7 @@ def test_summary_includes_rate_limit_state():
     summary = monitor.summary()
     assert set(summary["providers"]) == {
         TRADINGVIEW, FINVIZ, health.YAHOO, health.SA, health.EQUIBLES,
+        INVESTING,
     }
     assert "rate_limits" in summary
     assert summary["providers"]["YAHOO"] == "UNKNOWN"
@@ -250,6 +262,268 @@ def test_stockanalysis_probe_asserts_the_price_field_not_the_status_code():
     assert health._has_key(payload, probe.required_keys[0]) is True
     # A renamed envelope field is what the probe exists to catch.
     assert health._has_key({"status": 200, "quote": {"p": 1.0}}, "data.p") is False
+
+
+def _investing_access(monkeypatch, shaped, *, link="/equities/nvidia-corp"):
+    """Install a controllable Investing access stub and return its call log."""
+    import collections.abc
+
+    from tapebasis import investing_access
+
+    calls = {"search": [], "fetch": [], "state": [], "shape": []}
+
+    async def search(symbol):
+        calls["search"].append(symbol)
+        if link is None:
+            return []
+        return [{
+            "id": 6497,
+            "symbol": "NVDA",
+            "exchange_short_name": "NASDAQ",
+            "currency_code": "USD",
+            "client_type": "stock",
+            "type": "equities",
+            "link": link,
+        }]
+    async def fetch_html(path, cache_key):
+        calls["fetch"].append((path, cache_key))
+        return "<html>fixture</html>"
+
+    def state(html):
+        calls["state"].append(html)
+        return {"props": {"pageProps": {"state": {"fixture": True}}}}
+
+    def shape_quote(state_payload, expected):
+        calls["shape"].append((state_payload, expected))
+        return dict(shaped)
+
+    monkeypatch.setattr(investing_access, "search", search)
+    monkeypatch.setattr(investing_access, "_fetch_html", fetch_html)
+    monkeypatch.setattr(investing_access, "_state", state)
+    monkeypatch.setattr(investing_access, "shape_quote", shape_quote)
+    return calls
+
+
+def _real_investing_fixture() -> str:
+    """Return the smallest complete NVDA SSR page accepted by the real decoder."""
+    import json
+
+    state = {
+        "equityStore": {
+            "instrumentId": 6497,
+            "instrument": {
+                "base": {
+                    "id": 6497,
+                    "type": "equity",
+                    "path": "/equities/nvidia-corp",
+                },
+                "name": {"symbol": "NVDA", "fullName": "NVIDIA Corporation"},
+                "exchange": {"exchange": "NASDAQ"},
+                "price": {
+                    "currency": "USD",
+                    "last": 100.0,
+                    "lastUpdateTime": 1795118400000,
+                    "lastClose": 100.0,
+                },
+            },
+        },
+    }
+    payload = json.dumps({"props": {"pageProps": {"state": state}}})
+    return f'<script id="__NEXT_DATA__" type="application/json">{payload}</script>'
+
+
+@pytest.mark.asyncio
+async def test_investing_local_probe_accepts_a_real_decoded_fixture(
+    tmp_path, monkeypatch
+):
+    """The health path works with the real state decoder and quote shaper."""
+    from tapebasis import investing_access
+
+    async def search(_symbol):
+        return [{
+            "id": 6497, "symbol": "NVDA", "exchange_short_name": "NASDAQ",
+            "currency_code": "USD", "client_type": "stock", "type": "equities",
+            "link": "/equities/nvidia-corp",
+        }]
+
+    async def fetch_html(_path, _cache_key):
+        return _real_investing_fixture()
+
+    monkeypatch.setattr(investing_access, "search", search)
+    monkeypatch.setattr(investing_access, "_fetch_html", fetch_html)
+    probe = Probe(
+        id="investing.quote_html", provider=INVESTING,
+        description="local", url="local:investing-quote",
+    )
+    result = await _monitor(tmp_path, [])._probe(probe, None)
+    assert result.status == STATUS_OK
+    assert not result.drift and not result.down
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timestamp", ["2026-11-19T20:00:00+00:00", None])
+async def test_investing_local_probe_checks_identity_and_timestamp(
+    tmp_path, monkeypatch, timestamp
+):
+    """The local route uses no httpx and requires the exact NVDA identity."""
+    from types import SimpleNamespace
+
+    shaped = {
+        "instrument_id": 6497,
+        "symbol": "NVDA",
+        "exchange": "NASDAQ",
+        "currency": "USD",
+        "asset_class": "stock",
+        "price": 100.0,
+        "price_timestamp": timestamp,
+    }
+    calls = _investing_access(monkeypatch, shaped)
+
+    class RefusingClient:
+        """Expose an async request that fails if generic HTTP is reached."""
+
+        async def request(self, *_args, **_kwargs):
+            raise AssertionError("Investing local probe used generic httpx")
+
+    client = RefusingClient()
+    monitor = _monitor(tmp_path, [])
+    probe = Probe(
+        id="investing.quote_html", provider=INVESTING,
+        description="local", url="local:investing-quote",
+    )
+    result = await monitor._probe(probe, client)
+
+    assert calls["search"] == ["NVDA"]
+    assert calls["fetch"] == [
+        ("https://www.investing.com/equities/nvidia-corp", "quote:6497")
+    ]
+    assert calls["state"] == ["<html>fixture</html>"]
+    identity = calls["shape"][0][1]
+    assert {key: identity[key] for key in (
+        "instrument_id", "symbol", "exchange", "currency", "asset_class"
+    )} == {
+        "instrument_id": 6497,
+        "symbol": "NVDA",
+        "exchange": "NASDAQ",
+        "currency": "USD",
+        "asset_class": "stock",
+    }
+    assert identity["link"] == "/equities/nvidia-corp"
+    assert identity["source"].endswith("/equities/nvidia-corp")
+    if timestamp:
+        assert result.status == STATUS_OK
+        assert result.checked_at is not None
+        assert not result.drift and not result.down
+    else:
+        assert result.status == STATUS_DRIFT
+        assert result.missing == ["price_timestamp"]
+        assert "timestamp" in result.message
+        assert result.drift and not result.down
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value", "phrase"),
+    [
+        ("symbol", "AAPL", "symbol"),
+        ("exchange", "NYSE", "exchange"),
+        ("currency", "EUR", "currency"),
+        ("instrument_id", 1, "instrument_id"),
+    ],
+)
+async def test_investing_local_probe_rejects_another_instrument(
+    tmp_path, monkeypatch, field, value, phrase
+):
+    """A well-formed quote for the wrong listing is drift, never healthy."""
+    shaped = {
+        "instrument_id": 6497,
+        "symbol": "NVDA",
+        "exchange": "NASDAQ",
+        "currency": "USD",
+        "price": 100.0,
+        "price_timestamp": "2026-11-19T20:00:00+00:00",
+        field: value,
+    }
+    _investing_access(monkeypatch, shaped)
+    monitor = _monitor(tmp_path, [])
+    probe = Probe(
+        id="investing.quote_html", provider=INVESTING,
+        description="local", url="local:investing-quote",
+    )
+    result = await monitor._probe(probe, None)
+    assert result.status == STATUS_DRIFT
+    assert result.missing == [phrase]
+    assert phrase in result.message
+    assert not result.down
+
+
+@pytest.mark.asyncio
+async def test_investing_local_probe_never_reads_the_page_when_search_has_no_link(
+    tmp_path, monkeypatch
+):
+    """A failed identity resolution reports drift without a second page fetch."""
+    from tapebasis import investing_access
+
+    calls = []
+
+    async def search(symbol):
+        """Return no exact match and preserve the real raw-list interface."""
+        calls.append(symbol)
+        return []
+
+    async def fetch_html(*_args):
+        """Refuse a page read when no exact search identity was found."""
+        raise AssertionError("quote page fetched after unresolved identity")
+
+    monkeypatch.setattr(investing_access, "search", search)
+    monkeypatch.setattr(investing_access, "_fetch_html", fetch_html)
+    monitor = _monitor(tmp_path, [])
+    probe = Probe(
+        id="investing.quote_html", provider=INVESTING,
+        description="local", url="local:investing-quote",
+    )
+    result = await monitor._probe(probe, None)
+    assert calls == ["NVDA"]
+    assert result.status == STATUS_DRIFT
+    assert "no exact NVDA/NASDAQ/USD/stock" in result.message
+    assert not result.down
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            ProviderError(
+                "INVESTING", "page keys changed", code="SCHEMA_DRIFT"
+            ),
+            STATUS_DRIFT,
+        ),
+        (type("NoDataQuote", (Exception,), {})("no price"), STATUS_DRIFT),
+        (RuntimeError("connection reset"), STATUS_DOWN),
+    ],
+)
+async def test_investing_local_probe_classifies_access_failures(
+    tmp_path, monkeypatch, error, expected
+):
+    """Schema and absent-quote errors drift; an unavailable upstream is down."""
+    from tapebasis import investing_access
+
+    async def search(_symbol):
+        """Raise the injected transport, schema or missing-data failure."""
+        raise error
+
+    monkeypatch.setattr(investing_access, "search", search)
+    monitor = _monitor(tmp_path, [])
+    probe = Probe(
+        id="investing.quote_html", provider=INVESTING,
+        description="local", url="local:investing-quote",
+    )
+    result = await monitor._probe(probe, None)
+    assert result.status == expected
+    assert result.drift == (expected == STATUS_DRIFT)
+    assert result.down == (expected == STATUS_DOWN)
+    assert result.message
 
 
 # ── watched-key drift, and accepting a new baseline ─────────────────────────

@@ -8,9 +8,9 @@ A provider that catches its own exception looks healthy from the outside. So the
 upstream **independently of the provider code paths**: it can fail even when every tool call
 succeeds, and that failure is the signal.
 
-The network probe set covers every reconciliation leg that can be probed over HTTP: TradingView,
-Finviz, Yahoo and StockAnalysis. Bloomberg is a leg too, but it cannot be safely probed, see below.
-Equibles has a local-only probe: it checks key presence and remembers public quota headers after a
+The direct network probe set covers TradingView, Finviz, Yahoo and StockAnalysis. Bloomberg is a leg
+too, but it cannot be safely probed, see below. Investing has its own local TLS-aware native search
+and quote-page probe, also described below. Equibles has a local-only probe: it checks key presence and remembers public quota headers after a
 real API response, never spending upstream quota for health or claiming to verify plan access.
 
 ## Probes
@@ -26,17 +26,20 @@ real API response, never spending upstream quota for health or claiming to verif
 | `yahoo.chart_fx` | YAHOO | the FX resolution path still answers (`EURUSD=X`) |
 | `yahoo.chart_crypto` | YAHOO | the crypto resolution path still answers (`BTC-USD`) |
 | `sa.quote_api` | SA | `data.p` present in `/api/quotes/s/aapl` |
+| `investing.quote_html` | INVESTING | Native search identifies one supported instrument, then the page repeats its id, symbol, exchange, currency and class and supplies a print clock |
 | `equibles.api_key` | EQUIBLES | Local only: key presence and last real public quota headers. No URL is contacted and no plan is inferred |
 
 Bloomberg has **no network probe**, deliberately. Its site gates plain HTTP clients on the TLS fingerprint:
 `httpx` receives a 403 robot page whatever headers it sends, while `curl_cffi` with a specific
 impersonation version gets 200. A probe built on `httpx` would therefore report `DOWN` on a perfectly
-healthy provider. The same asymmetry blocks a meaningful probe on the `curl_cffi` path, because the
-monitor's contracts are HTTP-level ones. Instead, `bloomberg_quote` / `bloomberg_markets` report the
-failure they actually hit (`UPSTREAM_BLOCKED`, `SCHEMA_DRIFT`, `NOT_CONFIGURED` when `curl_cffi` is
+healthy provider. `bloomberg_quote` / `bloomberg_markets` report the failure actually hit
+(`UPSTREAM_BLOCKED`, `SCHEMA_DRIFT`, `NOT_CONFIGURED` when `curl_cffi` is
 missing), and the tool response is the availability signal. `tapebasis_tool_map` names Bloomberg in
-`providers_answered` and warns that it is the one market leg with no network probe, so the gap is
-stated rather than implied.
+`providers_answered` and warns that its quote pages have no network probe, so the gap is
+stated rather than implied. Investing instead has a local, TLS-aware `investing.quote_html`
+probe. It reuses the exact native search and verified quote-page boundary: supported class,
+instrument id, symbol, exchange, currency, native path and print timestamps must all agree.
+It verifies that access path without claiming every other Investing listing or page is healthy.
 
 Equibles is not a reconciliation leg and its `equibles.api_key` probe deliberately never reaches a
 network URL. If `TAPEBASIS_EQUIBLES_API_KEY` is absent, its status is `NOT_CONFIGURED`; otherwise it

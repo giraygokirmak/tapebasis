@@ -245,7 +245,7 @@ bloomberg.com rejects plain HTTP clients on the TLS fingerprint.
 ## Next
 
 - [Response Contract](Response-Contract): every field explained
-- [Tools Reference](Tools-Reference): all 55 tools
+- [Tools Reference](Tools-Reference): all 56 tools
 - [Equibles Datasets](Equibles-Datasets): exact grouped dataset names, routes and filters
 - [Configuration](Configuration): environment variables
 - [Docker](Docker): prebuilt GHCR image or a local build

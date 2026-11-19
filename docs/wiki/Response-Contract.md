@@ -2,7 +2,7 @@
 
 Every tool returns the same envelope. Learn it once and every tool is readable.
 
-## The nine provider states
+## The ten provider states
 
 | `data_provider` | `verification` | Meaning | What an agent should do |
 | --- | --- | --- | --- |
@@ -12,6 +12,7 @@ Every tool returns the same envelope. Learn it once and every tool is readable.
 | `FINVIZ` | `SINGLE_SOURCE` | Only Finviz answered | Same, from the Finviz side |
 | `YAHOO` | `SINGLE_SOURCE` | Only Yahoo Finance answered | Same, from the Yahoo side |
 | `SA` | `SINGLE_SOURCE` | Only StockAnalysis answered | Same; note it covers US equities and ETFs only |
+| `INVESTING` | `SINGLE_SOURCE` | Only Investing.com answered | Same; native verified equities and ETFs only, with ambiguity and identity mismatches refused |
 | `BLOOMBERG` | `SINGLE_SOURCE` | Only Bloomberg answered | Same, but state `exchange_delay` / `print_time` before calling a price live |
 | `EQUIBLES` | `SINGLE_SOURCE` | One or more named Equibles datasets answered | Keep each dataset separate and single-source. Preserve `Data by Equibles`, `as_of`, `reporting_delay` and `access`. This label remains even when another requested dataset failed |
 | `NONE` | `UNAVAILABLE` | No provider supplied the primary value | Say the primary value is unavailable. Do not invent one; an independently labelled `news` block may still be present |
@@ -84,9 +85,10 @@ failure can therefore return `NONE` while real news remains available. If the Fi
 fails, `stock_why_moving` keeps `data: null` and exposes its independent news only at top level.
 
 **Provider-specific analyst details stay separate, with name-free summaries in `data`.**
-`stock_quote` compares `price_target_average` between TradingView and Finviz at 0.1 % tolerance,
+`stock_quote` compares `price_target_average` only between TradingView and Finviz at 0.1 % tolerance,
 accommodating Finviz's rounding. Its top-level `analyst_targets` block retains each provider's own
-figures; provider-prefixed scalar counts and rating summaries in `data` mirror only that provider.
+figures; an Investing forecast block, when supplied, stays separate and does not join that target
+comparison. Provider-prefixed scalar counts and rating summaries in `data` mirror only that provider.
 The summaries need no institution or analyst names.
 
 TradingView's one-year `price_target_estimate_count` is distinct from its past-three-month
@@ -118,6 +120,9 @@ last-label counts rather than erasing Overweight, In-line or Mkt Perform into th
 missing last labels are recorded in `unlabeled_row_count` and remain in the total.
 
 Counts and provider blocks do not form agreement, consensus or independent editorial verification.
+Investing's forecast target, Buy/Hold/Sell distribution and count-derived summary remain its own
+population. They are not added to TradingView or Finviz counts, and Investing's daily technical
+verdict is not Tapebasis `technical_analysis`.
 TradingView's auxiliary forecast-page failure adds an error with `detail.capability:
 analyst_forecasts` but does not change primary quote coverage or `data_provider`; a missing forecast
 count remains null while scanner fields stay available.
@@ -178,9 +183,10 @@ serve the field. If TradingView and Yahoo answer and Finviz has no page for the 
 response is `ALL`: every provider *asked* answered. `providers_answered` lists exactly which ones
 contributed, so coverage can be read precisely.
 
-**`ALL` can include Bloomberg and StockAnalysis.** Both are entries in `PROVIDER_ORDER`, so
-`stock_quote` and `stock_prices` ask them in parallel and they are counted in `ALL` /
-`providers_answered`.
+**`ALL` can include Investing.com, Bloomberg and StockAnalysis.** They are entries in `PROVIDER_ORDER`,
+so `stock_quote` and `stock_prices` ask every capable one in parallel and count it in `ALL` /
+`providers_answered`. Investing is ordered after StockAnalysis and before Bloomberg and admits only
+an exact native equity or ETF page.
 
 What Bloomberg never does is win a comparison it cannot make: its equity and index
 prints are exchange-delayed, so a pair of prints a delay length apart is reported as
@@ -195,11 +201,14 @@ Yahoo serves, so that pair is weak corroboration for the same reason. Anything i
 
 The `bloomberg_*` tools are the single-source case: they ask that one provider, so they return
 `BLOOMBERG` / `SINGLE_SOURCE` plus `cross_checked: false` and `reconciliation_leg: false`.
+`investing_quote` likewise asks only Investing.com and returns `INVESTING` / `SINGLE_SOURCE` with
+`cross_checked: false`, but its envelope does not add `reconciliation_leg`. Its miss or failure is
+`NONE`, with a typed error and no provider fallback.
 
 ## Fields
 
 ### `data_provider`
-`"ALL" | "PARTIAL" | "TRADINGVIEW" | "FINVIZ" | "YAHOO" | "SA" | "BLOOMBERG" | "NONE"`. The single
+`"ALL" | "PARTIAL" | "TRADINGVIEW" | "FINVIZ" | "YAHOO" | "SA" | "INVESTING" | "BLOOMBERG" | "EQUIBLES" | "NONE"`. The single
 most important field in the response.
 
 ### `verification`
@@ -236,8 +245,9 @@ provider's reading is moved to the print that provider would call current: Tradi
 `premarket_close`/`postmarket_close` when it says so in `current_session`, Yahoo's `fulldayPrice`
 when it differs from `regularMarketPrice`, StockAnalysis's `extended_hours` block when it names a
 session. `stock_quote` publishes the result as `data.session` (mirrored at the envelope level), and
-`stock_prices` per row. `pre_market`, `regular`, `post_market` and `overnight` are the values; a print
-whose session cannot be determined carries `session: null` rather than a guess.
+`stock_prices` per row. Investing selects its regular or extended print only from a verified page and
+uses that print's own epoch-ms timestamp. `pre_market`, `regular`, `post_market` and `overnight` are
+the values; a print whose session cannot be determined carries `session: null` rather than a guess.
 
 The same session owns the baseline. `change_percent` and `previous_close` describe the print beside
 them, not an older session's close, so the three numbers in a row are internally consistent: computing
@@ -255,6 +265,25 @@ window it is in, and while it lags, that statement describes a print the row is 
 therefore follows the winner's own print, so two tools asked about the same symbol at the same instant
 cannot disagree about its session. `data.price_field` names the provider field that print was read from,
 so the move away from a stale regular value is visible on the payload rather than only in the docs.
+
+### Investing identity and session boundaries
+
+Investing resolves only native equity and ETF identities in `stock_quote`, `stock_prices` and direct
+`investing_quote`. A bare query must identify one primary listing; an exact exchange can disambiguate
+venues. The fetched page must repeat the search result's numeric instrument id, symbol, exchange,
+currency, class and native path. Ambiguity, an unsupported class, or any mismatch is refused rather
+than replaced with a guessed page or another same-symbol listing.
+
+Within Investing, `instrument.price.lastUpdateTime` dates the regular quote and the selected extended
+block has its own `shown_date_time`; both are epoch milliseconds converted to UTC ISO. One timestamp
+never dates the other's print. `lastClose` stays in `investing_last_close_value` and never populates
+`previous_close`; an ETF can use only its separately published `keyStatistics.prevClose`. The direct
+tool retains the exclusion reason under `investing_previous_close_excluded`.
+
+Investing's analyst and `investing_technical_1d` extras carry `INVESTING` single-source provenance.
+They do not enter the TradingView/Finviz average-target comparison or Tapebasis `technical_analysis`,
+and analyst counts are never added. `investing_quote` returns `INVESTING` on success or `NONE` with a
+typed error on failure, never another provider's fallback number.
 
 ### `fields`
 Per-field provenance, one descriptor per key in `data`:
@@ -361,7 +390,10 @@ ceiling, or no print time to prove the observation.
 
 `not_comparable` is also used for a field that has **no shared definition**, where no timestamp check
 can help. Spot FX has no single official previous close, so `change_percent` on an FX instrument is
-always reported from every provider and never compared, with that reason stated. Every guard is
+always reported from every provider and never compared, with that reason stated. `stock_quote` treats
+`market_cap` similarly when multiple providers supply it: providers can use different share-count
+bases and as-of dates. Investing supplies `market_cap` and `pe_ratio`, but P/E keeps its ordinary 2 %
+comparison while market-cap readings stay provider-labelled and unjudged. Every guard is
 one-way: it can lose a comparison, never invent a conflict.
 
 For a multi-value pair, non-numeric values and blank symbols also stay in `pairs`, with `match:
@@ -388,6 +420,7 @@ announce that no timestamp existed:
   "finviz": "2026-11-04T10:42:00+00:00",
   "yahoo": "2026-11-03T21:00:01+00:00",
   "sa": "2026-11-03T21:00:01+00:00",
+  "investing": "2026-11-04T10:40:00+00:00",
   "bloomberg": "2026-11-04T10:27:00+00:00",
   "chosen": "FINVIZ",
   "decision": "newest",
@@ -407,7 +440,7 @@ instead of parsing `reason`:
 
 Only providers that share the newest instant are tie-break candidates, so a stale provider can never
 win a tie against fresher ones. Ties are broken by the documented order (`FINVIZ`, `TRADINGVIEW`,
-`YAHOO`, `SA`, `BLOOMBERG`); with no usable timestamp at all, the value comes from the first provider
+`YAHOO`, `SA`, `INVESTING`, `BLOOMBERG`); with no usable timestamp at all, the value comes from the first provider
 in that order that answered. The order is fixed and stated in `reason`, never implicit.
 
 ### `resolutions`
@@ -421,6 +454,7 @@ How each provider's ticker was derived for this call:
   "FINVIZ":      { "symbol": "AAPL", "method": "normalise", ... },
   "YAHOO":       { "symbol": "AAPL", "method": "alias", ... },
   "SA":          { "symbol": "aapl", "method": "mechanical", ... },
+  "INVESTING":   { "symbol": "6408", "method": "search", ... },
   "BLOOMBERG":   { "symbol": "AAPL:US", "method": "mechanical", ... }
 }
 ```
@@ -443,9 +477,10 @@ WisdomTree Japan ETF. `NDX` and `^NDX` both resolve through the registry row (`N
 
 ### `cross_checked` / `reconciliation_leg`
 Present on the `bloomberg_*` tools, both `false`: that call asked a single provider, so its payload
-was not reconciled. They describe the call, not the provider: the same provider is a full leg inside
-`stock_quote` / `stock_prices`. They are absent from every reconciled response, because there the
-answer is implied by `data_provider` and `comparisons`.
+was not reconciled. `investing_quote` also returns `cross_checked: false` but does not include
+`reconciliation_leg`. These markers describe the call, not the provider: the same provider is a
+full leg inside `stock_quote` / `stock_prices`. They are absent from every reconciled response,
+because there the answer is implied by `data_provider` and `comparisons`.
 
 ### `sources`
 Where each provider's data actually came from: upstream URL or dataset name.
@@ -455,6 +490,7 @@ Where each provider's data actually came from: upstream URL or dataset name.
   "FINVIZ": "https://finviz.com/stock?t=AAPL",
   "YAHOO": "query1.finance.yahoo.com chart API",
   "SA": "https://stockanalysis.com/api/quotes/s/aapl",
+  "INVESTING": "https://www.investing.com/equities/apple-computer-inc",
   "BLOOMBERG": "https://www.bloomberg.com/quote/AAPL:US" }
 ```
 
@@ -541,7 +577,8 @@ readings are not flagged over rounding noise.
 | session open/high/low | 0.5 % | Same session, different print moments; open is compared only where both sides publish it |
 | P/E | 2 % | Rounding in the Finviz snapshot |
 | RSI(14) | 5 % (floor 0.5) | Different lookback windows |
-| average analyst target | 0.1 % | Finviz rounds its displayed mean target; provider-specific analyst counts are not compared |
+| average analyst target | 0.1 % | TradingView/Finviz only; Finviz rounds its displayed mean target, and Investing's forecast population stays separate |
+| market cap | 2 % field tolerance, structurally `not_comparable` | Providers can use different share-count bases and as-of dates; Investing readings stay provider-labelled |
 | volume | 1 % | Intraday accumulation timing |
 | index level | 0.5 % | Same index, different print times |
 | VIX level | 3 % | A volatility gauge that moves percent-level within a minute |
@@ -590,19 +627,19 @@ is the market moving, not a provider conflict.
 {
   "data_provider": "ALL",
   "verification": "MULTI_SOURCE",
-  "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"],
-  "notice": "Every provider asked answered (TradingView, Finviz, Yahoo Finance, StockAnalysis and Bloomberg). Coverage is ALL; agreement is a separate axis. Compared fields agree within tolerance. The value shown is FINVIZ's because it printed more recently than the other providers'. Not cross-checked, because the providers' readings have no shared basis for comparison: change_percent, previous_close, volume.",
+  "providers_answered": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "INVESTING", "BLOOMBERG"],
+  "notice": "Every provider asked answered (TradingView, Finviz, Yahoo Finance, StockAnalysis, Investing.com and Bloomberg). Coverage is ALL; agreement is a separate axis. Compared fields agree within tolerance. The value shown is FINVIZ's because it printed more recently than the other providers'. Not cross-checked, because the providers' readings have no shared basis for comparison: change_percent, previous_close, volume.",
   "data": { "price": 332.33, "change_percent": 0.13, ... },   // one value per field
   "fields": { "price": { "source": "FINVIZ",
-                          "supplied": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"],
-                          "compared": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"],
+                          "supplied": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "INVESTING", "BLOOMBERG"],
+                          "compared": ["TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "INVESTING", "BLOOMBERG"],
                           "agreement": true },
               "peers": { "source": "FINVIZ", "supplied": ["FINVIZ"], "compared": [], "agreement": null } },
   "freshness": { "chosen": "FINVIZ", "decision": "newest",
                  "reason": "FINVIZ printed most recently (2026-11-04T10:42:00+00:00)" },
   "comparisons": [
     { "field": "price", "match": true,
-      "values": { "TRADINGVIEW": 331.9, "FINVIZ": 332.33, "YAHOO": 331.9, "SA": 331.9, "BLOOMBERG": 332.1 },
+      "values": { "TRADINGVIEW": 331.9, "FINVIZ": 332.33, "YAHOO": 331.9, "SA": 331.9, "INVESTING": 332.32, "BLOOMBERG": 332.1 },
       "diff_pct": 0.1294, "chosen": "FINVIZ" },
     { "field": "change_percent", "match": null, "not_comparable": true,
       "values": { "TRADINGVIEW": -1.8976, "FINVIZ": 0.13, "YAHOO": -1.8976, "SA": -1.8976 } }

@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from .http_pool import shared_client
-from .providers_state import NoDataError
+from .providers_state import NoDataError, ProviderError
 from .ratelimit import RateLimited, call
 from . import singleflight
 from .utils import BROWSER_UA
@@ -121,13 +121,24 @@ class Resolution:
     confidence: float = 0.0
     candidates: list[Candidate] = field(default_factory=list)
     note: str = ""
+    #: Provider-native identity requiring more than a ticker. Investing retains
+    #: its exact id, exchange and currency here, verified again on the page.
+    native: dict[str, Any] | None = None
+    #: A resolution time failure remains a provider failure, not a claimed miss.
+    error: dict[str, Any] | None = None
 
     @property
     def found(self) -> bool:
         return self.symbol is not None
 
     def require(self) -> str:
-        """Return the symbol or raise ``NoDataError`` (the tool-layer contract)."""
+        """Return the symbol or raise the recorded provider-specific failure."""
+        if self.error is not None:
+            raise ProviderError(
+                self.provider,
+                self.error.get("message") or "provider identity resolution failed",
+                code=self.error.get("code") or "UPSTREAM_ERROR",
+            )
         if self.symbol is None:
             raise NoDataError(self.provider, self.note or f"no match for {self.query!r}")
         return self.symbol
@@ -143,6 +154,7 @@ class Resolution:
             "method": self.method,
             "confidence": round(self.confidence, 2),
             "note": self.note,
+            **({"error": self.error} if self.error else {}),
         }
 
 
@@ -774,6 +786,87 @@ def resolve_sa(query: str, *, asset_class: str = "") -> Resolution:
     )
 
 
+# ── Investing.com ─────────────────────────────────────────────────────────────
+
+
+async def resolve_investing(query: str, *, asset_class: str = "") -> Resolution:
+    """Resolve an exact equity or ETF through Investing.com's native search.
+
+    A registry row for another asset class is a stated not-carried boundary. An
+    explicit exchange is searched as a constraint, not stripped and trusted.
+    The returned provider ticker is the numeric instrument id; the native link,
+    exchange and currency remain in ``Resolution.native`` for page verification.
+
+    Returns a resolution with no symbol for a miss, unsupported class or
+    ambiguous primary listing. Guesswork is never used to break an identity tie.
+    Transport and schema failures propagate, so they cannot silently become a
+    claimed absence and disappear from partial-failure coverage.
+    """
+    from . import investing_access as iw
+
+    provider = "INVESTING"
+    raw = query.strip()
+    registered = instrument_row(raw)
+    if registered is not None and registered.get("asset_class") not in {"stock", "etf"}:
+        return Resolution(
+            query=query,
+            provider=provider,
+            asset_class=str(registered.get("asset_class") or ""),
+            note="Investing quote integration carries equities and ETFs only",
+        )
+    exchange = raw.split(":", 1)[0] if ":" in raw else None
+    bare = raw.split(":", 1)[1] if ":" in raw else raw
+    if not bare or (":" in raw and bare.upper() in {"US", "CUR", "COM", "IND"}):
+        return Resolution(
+            query=query,
+            provider=provider,
+            note="use EXCHANGE:TICKER, not another provider's class suffix",
+        )
+    hint = asset_class or (str(registered.get("asset_class")) if registered else "")
+    rows = await iw.search(bare)
+    identity = iw.choose_instrument(
+        rows, bare, exchange=exchange, asset_class=hint
+    )
+    if identity is None:
+        matching = [
+            row
+            for row in rows
+            if iw.symbol_key(row.get("symbol") or row.get("display_symbol"))
+            == iw.symbol_key(bare)
+        ]
+        note = f"no unambiguous Investing.com equity or ETF match for {query!r}"
+        if exchange:
+            note += f" on {exchange}"
+        if matching and all(iw.asset_class_for(row) is None for row in matching):
+            note = (
+                f"Investing.com search has {query!r} only in unsupported "
+                "instrument classes; an index, commodity or future is not substituted"
+            )
+        return Resolution(
+            query=query,
+            provider=provider,
+            venue=exchange or "",
+            asset_class=hint,
+            method="search",
+            note=note,
+        )
+    return Resolution(
+        query=query,
+        provider=provider,
+        symbol=str(identity["instrument_id"]),
+        venue=identity["exchange"],
+        description=identity["name"],
+        asset_class=identity["asset_class"],
+        method="search" if not exchange else "explicit",
+        confidence=1.0,
+        native=identity,
+        note=(
+            "native search identity; the quote page must repeat its instrument id, "
+            "symbol, exchange, currency and class before comparison"
+        ),
+    )
+
+
 # ── Facade ───────────────────────────────────────────────────────────────────
 
 
@@ -787,6 +880,8 @@ async def _resolve_uncached(query: str, provider: str, asset_class: str) -> Reso
         return resolve_finviz(query, asset_class=asset_class)
     if provider == "SA":
         return resolve_sa(query, asset_class=asset_class)
+    if provider == "INVESTING":
+        return await resolve_investing(query, asset_class=asset_class)
     raise ValueError(f"unknown provider {provider!r}")
 
 
@@ -820,7 +915,8 @@ async def resolve(
 
     Args:
         query: The symbol as the caller spelled it.
-        provider: ``TRADINGVIEW``, ``FINVIZ``, ``YAHOO`` or ``SA``.
+        provider: ``TRADINGVIEW``, ``FINVIZ``, ``YAHOO``, ``SA`` or
+            ``INVESTING``.
         asset_class: Optional hint used when ranking search hits.
         refresh: Skip the cache and resolve again.
 
@@ -855,6 +951,7 @@ async def resolve_all(query: str, *, asset_class: str = "") -> dict[str, Resolut
         resolve(query, "FINVIZ", asset_class=asset_class),
         resolve(query, "YAHOO", asset_class=asset_class),
         resolve(query, "SA", asset_class=asset_class),
+        resolve(query, "INVESTING", asset_class=asset_class),
     )
     return {r.provider: r for r in results}
 
@@ -1023,6 +1120,17 @@ INSTRUMENTS: dict[str, dict[str, Any]] = {
     },
 }
 
+#: Investing has no off-network alias shortcut. Its supported rows deliberately
+#: resolve through native search, while another class is declined without a
+#: request. The column exists on every row so the boundary is explicit.
+for _row in INSTRUMENTS.values():
+    _row.setdefault(
+        "investing", None,
+    )
+    _row.setdefault(
+        "investing_note", "Investing quote integration carries equities and ETFs only",
+    )
+
 #: Canonical instruments the index-snapshot tools report, in display order. The
 #: registry is broader (it also addresses NDX for single-instrument quotes), but
 #: a market snapshot is a fixed, documented list, so it is named once here and
@@ -1034,6 +1142,7 @@ INDEX_SNAPSHOT: tuple[str, ...] = ("SPX", "COMP", "DJI", "RUT", "IWM", "VIX")
 #: boundary stated once here instead of in an if-chain at every call site.
 _DEFAULT_NOT_CARRIED = {
     "sa": "StockAnalysis's quote API carries US equities and ETFs only",
+    "investing": "Investing quote integration carries equities and ETFs only",
     "finviz": "Finviz carries US equities and ETFs only",
     "yahoo": "Yahoo Finance does not carry this instrument",
 }
@@ -1073,7 +1182,7 @@ _CLASS_NOT_CARRIED = {
 _INSTRUMENT_LOOKUP: dict[str, str] = {}
 for _canonical, _row in INSTRUMENTS.items():
     _INSTRUMENT_LOOKUP[_canonical.lower()] = _canonical
-    for _provider in ("tradingview", "finviz", "yahoo", "sa", "bloomberg"):
+    for _provider in ("tradingview", "finviz", "yahoo", "sa", "investing", "bloomberg"):
         _spelling = _row.get(_provider)
         if isinstance(_spelling, str) and _spelling:
             _bare = _spelling.split(":", 1)[-1].lower().lstrip("^").rstrip("!")
@@ -1184,6 +1293,7 @@ def registry_resolution(query: str, provider: str) -> Resolution | None:
         "FINVIZ": "finviz",
         "YAHOO": "yahoo",
         "SA": "sa",
+        "INVESTING": "investing",
         "BLOOMBERG": "bloomberg",
     }.get(provider)
     if column is None:

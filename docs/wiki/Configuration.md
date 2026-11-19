@@ -45,6 +45,13 @@ quote API, Bloomberg quote pages) passes through a per-provider limiter ([`ratel
 | `TAPEBASIS_SA_MAX_RETRIES` | `2` | Retries per StockAnalysis request |
 | `TAPEBASIS_SA_TIMEOUT` | `20` | stockanalysis.com HTTP timeout (s) |
 | `TAPEBASIS_SA_CACHE_TTL` | `20` | Quote cache lifetime (s); the upstream advertises a 3 s shared cache |
+| `TAPEBASIS_INVESTING_MIN_INTERVAL` | `2.0` | Minimum seconds between Investing request starts |
+| `TAPEBASIS_INVESTING_MAX_INFLIGHT` | `1` | Max concurrent Investing requests |
+| `TAPEBASIS_INVESTING_MAX_RETRIES` | `2` | Retries per Investing request |
+| `TAPEBASIS_INVESTING_IMPERSONATE` | `chrome124` | Browser fingerprint used by the native search and quote page |
+| `TAPEBASIS_INVESTING_TIMEOUT` | `30` | investing.com HTTP timeout (s) |
+| `TAPEBASIS_INVESTING_CACHE_TTL` | `20` | Verified quote-page cache lifetime (s) |
+| `TAPEBASIS_INVESTING_SEARCH_CACHE_TTL` | `600` | Native search-result cache lifetime (s) |
 | `TAPEBASIS_BLOOMBERG_MIN_INTERVAL` | `10.0` | Minimum seconds between Bloomberg request starts |
 | `TAPEBASIS_BLOOMBERG_MAX_INFLIGHT` | `1` | Max concurrent Bloomberg requests |
 | `TAPEBASIS_BLOOMBERG_MAX_RETRIES` | `1` | Retries per Bloomberg request |
@@ -63,7 +70,7 @@ Some behaviours are not configurable, because they are safety properties rather 
   rediscovering the block.
 - **A short TTL cache**, so a quote asked twice in one agent turn does not reach the network twice.
   Every provider has one: TradingView 15 s (scanner) and 120 s (chart), Finviz 30 s, Yahoo 15 s,
-  StockAnalysis 20 s, Bloomberg 60 s.
+  StockAnalysis 20 s, Investing 20 s for quote pages and 600 s for native search, Bloomberg 60 s.
 - **A paced request, waited for once.** A provider request waits its turn in the shared limiter, and
   the request body does not wait a second time. Waiting in both places cost a full extra
   `min_interval` on every single call.

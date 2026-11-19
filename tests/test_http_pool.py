@@ -214,10 +214,11 @@ async def test_stock_prices_stops_asking_bloomberg_when_the_budget_is_spent(
             "YAHOO": Resolution(query=symbol, provider="YAHOO", symbol=symbol),
             "SA": Resolution(query=symbol, provider="SA", symbol=symbol.lower()),
             "BLOOMBERG": Resolution(query=symbol, provider="BLOOMBERG", symbol=symbol),
+            "INVESTING": Resolution(query=symbol, provider="INVESTING"),
             "resolutions": {},
         }
 
-    async def fake_symbols_for(symbol: str) -> dict:
+    async def fake_symbols_for(symbol: str, *, include_investing: bool = False) -> dict:
         return fake_resolution(symbol)
 
     monkeypatch.setattr(tools_market, "_symbols_for", fake_symbols_for)

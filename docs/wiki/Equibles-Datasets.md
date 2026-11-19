@@ -1,6 +1,6 @@
 # Equibles frozen REST dataset reference
 
-Exact dataset names and documented filters for every grouped family tool. The full surface has 55 tools. Every dataset performs one JSON GET. No free-form URL, automatic pagination or provider fallback is accepted.
+Exact dataset names and documented filters for every grouped family tool. The full surface has 56 tools. Every dataset performs one JSON GET. No free-form URL, automatic pagination or provider fallback is accepted.
 
 
 ## `institutions`

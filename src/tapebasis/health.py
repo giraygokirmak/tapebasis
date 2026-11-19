@@ -7,8 +7,11 @@ a path, a JSON key or a status code without notice. When that happens, tools sta
 failing or silently returning zeros. Equibles instead uses documented,
 authenticated REST and has a separate local configuration probe.
 
-This module probes each upstream directly, independently of the provider code
-paths, and classifies the result:
+This module probes each upstream directly and classifies the result. Most probes
+are independent of the provider code paths. Investing reuses only its TLS-aware
+search and page access because plain ``httpx`` cannot establish the required
+browser fingerprint; that local probe still independently asserts the exact
+NVDA identity and quote timestamp contract.
 
 ``OK``        HTTP status and payload shape match the recorded baseline.
 ``DRIFT``     The upstream answered, but the status/shape no longer matches the
@@ -35,7 +38,7 @@ from typing import Any, Iterable
 
 import httpx
 
-from .providers_state import PROVIDER_ORDER
+from .providers_state import PROVIDER_ORDER, ProviderError
 from .ratelimit import call as paced_call
 from .utils import BROWSER_UA
 
@@ -44,18 +47,26 @@ FINVIZ = "FINVIZ"
 YAHOO = "YAHOO"
 SA = "SA"
 EQUIBLES = "EQUIBLES"
+INVESTING = "INVESTING"
 
-#: Every provider the monitor probes, in display order. Derived from the one
-#: provider order in :mod:`tapebasis.providers_state` rather than written out
-#: again, so the monitor's list and the reconciliation list cannot disagree:
-#: Bloomberg is excluded because its site gates plain HTTP clients on the TLS
-#: fingerprint. Equibles has a separate local probe below: it checks credentials
-#: and actual access state without spending the shared REST/MCP request quota.
-#: That probe intentionally is not in this display list, which remains the
-#: set of independently HTTP-probed reconciliation legs.
-PROVIDERS: tuple[str, ...] = tuple(
+#: Providers probed with the generic :mod:`httpx` request path below. Bloomberg
+#: and Investing are absent because their sites gate on the TLS fingerprint.
+#: Equibles instead has a quota-free local configuration check. Keeping this
+#: transport-specific set separate from the monitored set avoids treating a
+#: browser-fingerprinted local probe as though it used plain HTTP.
+PLAIN_HTTP_PROVIDERS: tuple[str, ...] = tuple(
+    p for p in PROVIDER_ORDER if p not in {"BLOOMBERG", "INVESTING", "EQUIBLES"}
+)
+
+#: Every monitored reconciliation leg. Bloomberg remains excluded because its
+#: TLS gate needs a browser probe this monitor does not yet provide. Equibles
+#: has its own local configuration result appended to the summary separately.
+MONITORED_PROVIDERS: tuple[str, ...] = tuple(
     p for p in PROVIDER_ORDER if p not in {"BLOOMBERG", "EQUIBLES"}
 )
+
+#: Backward-compatible plain-HTTP set, excluding the Investing TLS-aware route.
+PROVIDERS = PLAIN_HTTP_PROVIDERS
 
 STATUS_OK = "OK"
 STATUS_DRIFT = "DRIFT"
@@ -246,6 +257,9 @@ def _probes() -> list[Probe]:
     websocket), ``yh_access`` (Yahoo chart API), ``sa_access`` (StockAnalysis
     quote API) and ``bb_access`` (Bloomberg, which has no probe because it gates
     on the TLS fingerprint: an httpx probe there would report a false outage).
+    Investing has a local fingerprint-aware probe instead of an httpx row. It
+    shares the provider's page cache and does not repeat a real page or search
+    fetch made by another probe.
 
     A probe must exercise the endpoint the provider code actually uses, on the
     provider that uses it. Yahoo used to be probed under TRADINGVIEW because the
@@ -358,6 +372,13 @@ def _probes() -> list[Probe]:
             provider=EQUIBLES,
             description="Equibles API-key presence and last real quota state (local)",
             url="local:equibles-key-and-quota",
+        ),
+        # ── Investing: TLS-aware search and quote page ─────────────────────
+        Probe(
+            id="investing.quote_html",
+            provider=INVESTING,
+            description="investing.com NVDA search and browser-fingerprinted quote page (local)",
+            url="local:investing-quote",
         ),
         # ── StockAnalysis ───────────────────────────────────────────────────
         Probe(
@@ -525,6 +546,111 @@ class HealthMonitor:
         return {"accepted": accepted, "skipped": skipped}
 
     # ── probing ─────────────────────────────────────────────────────────────
+    async def _investing_quote_probe(self, result: ProbeResult) -> ProbeResult:
+        """Populate and return the result for the exact NVDA Investing quote.
+
+        The provider's cached search and page access avoid duplicate upstream
+        calls. A wrong identity, missing timestamp, schema error or absent
+        quote is DRIFT; transport and other failures are DOWN.
+        """
+        from . import investing_access
+
+        expected = {
+            "instrument_id": 6497,
+            "symbol": "NVDA",
+            "exchange": "NASDAQ",
+            "currency": "USD",
+            "asset_class": "stock",
+        }
+        started = time.monotonic()
+        result.checked_at = time.time()
+        try:
+            rows = await investing_access.search("NVDA")
+            identity = next(
+                (
+                    row for row in rows
+                    if row.get("id") == 6497
+                    and row.get("symbol") == "NVDA"
+                    and row.get("exchange_short_name") == "NASDAQ"
+                    and row.get("currency_code") == "USD"
+                    and row.get("client_type") == "stock"
+                ),
+                None,
+            ) if isinstance(rows, list) else None
+            if identity is None:
+                result.status = STATUS_DRIFT
+                result.drift = True
+                result.missing = ["instrument_identity"]
+                result.message = (
+                    "search('NVDA') returned no exact NVDA/NASDAQ/USD/stock "
+                    "match with id 6497; instrument resolution drifted"
+                )
+                return result
+            expected = investing_access.instrument_identity(identity)
+            if expected is None:
+                result.status = STATUS_DRIFT
+                result.drift = True
+                result.missing = ["native_quote_identity"]
+                result.message = (
+                    "the exact NVDA search hit has no usable native quote path "
+                    "or complete supported identity"
+                )
+                return result
+            html = await investing_access._fetch_html(
+                expected["source"], "quote:6497"
+            )
+            state = investing_access._state(html)
+            shaped = investing_access.shape_quote(state, expected)
+            result.latency_ms = round((time.monotonic() - started) * 1000, 1)
+            result.watched = [
+                "instrument_id", "symbol", "exchange", "currency",
+                "price_timestamp",
+            ]
+            mismatches = [
+                f"{field}={shaped.get(field)!r}, expected {value!r}"
+                for field, value in {
+                    "instrument_id": identity["id"],
+                    "symbol": identity["symbol"],
+                    "exchange": identity["exchange_short_name"],
+                    "currency": identity["currency_code"],
+                }.items()
+                if not str(shaped.get(field) or "").strip()
+                or shaped.get(field) != value
+            ]
+            if mismatches:
+                result.status = STATUS_DRIFT
+                result.drift = True
+                result.missing = [field.split("=", 1)[0] for field in mismatches]
+                result.message = "quote identity mismatch: " + "; ".join(mismatches)
+                return result
+            if not shaped.get("price_timestamp"):
+                result.status = STATUS_DRIFT
+                result.drift = True
+                result.missing = ["price_timestamp"]
+                result.message = (
+                    "shaped NVDA quote has no price timestamp; "
+                    "the quote-time schema may have changed"
+                )
+                return result
+            result.status = STATUS_OK
+            result.message = (
+                "NVDA/NASDAQ/USD, instrument 6497 and price timestamp verified"
+            )
+        except Exception as exc:  # noqa: BLE001 - a probe failure is report data
+            result.latency_ms = round((time.monotonic() - started) * 1000, 1)
+            no_data = type(exc).__name__ in {"NoDataQuote", "NoDataError"}
+            if no_data or (
+                isinstance(exc, ProviderError) and exc.code == "SCHEMA_DRIFT"
+            ):
+                result.status = STATUS_DRIFT
+                result.drift = True
+                result.message = f"{type(exc).__name__}: {exc}"
+            else:
+                result.status = STATUS_DOWN
+                result.down = True
+                result.message = f"{type(exc).__name__}: {exc}"
+        return result
+
     async def _probe(self, probe: Probe, client: httpx.AsyncClient) -> ProbeResult:
         """Run one probe, paced and bounded by that provider's limiter.
 
@@ -546,6 +672,8 @@ class HealthMonitor:
             description=probe.description,
             url=probe.url,
         )
+        if probe.url == "local:investing-quote":
+            return await self._investing_quote_probe(result)
         if probe.id == "equibles.api_key":
             # An upstream health request would count against the very daily
             # allowance this report helps preserve. Configuration and the last
@@ -821,7 +949,7 @@ class HealthMonitor:
         return {
             "providers": {
                 provider: self.provider_status(provider)
-                for provider in (*PROVIDERS, EQUIBLES)
+                for provider in (*MONITORED_PROVIDERS, EQUIBLES)
             },
             "degraded": self.degraded(),
             "issues": self.issues(),

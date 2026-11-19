@@ -107,6 +107,18 @@ def _no_stockanalysis_network(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_investing_network(monkeypatch):
+    """Fail any unfaked Investing search or page before a live TLS request."""
+    from tapebasis import investing_access
+
+    def refuse():
+        raise AssertionError("test attempted a live investing.com request")
+
+    monkeypatch.setattr(investing_access, "_session", refuse)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_equibles_network(monkeypatch):
     """Fail loudly if any test reaches api.equibles.com.
 

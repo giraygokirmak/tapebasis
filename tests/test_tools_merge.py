@@ -39,10 +39,16 @@ def fake_providers(monkeypatch, tv_quote, fv_quote, yh_quote, sa_quote):
     want the Bloomberg leg set it to a payload. ``state["sa"]`` behaves the
     same way for StockAnalysis.
     """
-    from tapebasis import bb_access, fv_access, sa_access, tv_access, yh_access
-    from tapebasis.providers_state import NoDataError
+    from tapebasis import (
+        bb_access, fv_access, investing_access, sa_access, tv_access, yh_access,
+    )
+    from tapebasis.investing_access import instrument_identity
+    from tapebasis.providers_state import NoDataError, NotApplicable
 
-    state = {"tv": tv_quote, "fv": fv_quote, "yh": yh_quote, "bb": None, "sa": None}
+    state = {
+        "tv": tv_quote, "fv": fv_quote, "yh": yh_quote, "bb": None, "sa": None,
+        "iw": None,
+    }
 
     async def tv_quote_call(symbol):
         if isinstance(state["tv"], Exception):
@@ -73,8 +79,32 @@ def fake_providers(monkeypatch, tv_quote, fv_quote, yh_quote, sa_quote):
             raise state["bb"]
         return state["bb"], f"https://www.bloomberg.com/quote/{symbol}"
 
+    async def iw_quote_call(resolution):
+        """Return the fake Investing reading for its resolved listing."""
+        if isinstance(state["iw"], Exception):
+            raise state["iw"]
+        if state["iw"] is None:
+            raise NotApplicable("INVESTING", "Investing has no identity in this fixture")
+        return state["iw"], "https://www.investing.com/equities/apple-computer-inc"
+
     async def fake_resolve(query, provider, **kwargs):
-        symbol = {"TRADINGVIEW": "NASDAQ:AAPL", "FINVIZ": "AAPL", "YAHOO": "AAPL"}.get(provider)
+        """Resolve only identities each scenario intends its provider to answer."""
+        if provider == "INVESTING":
+            if state["iw"] is None or isinstance(state["iw"], Exception):
+                return _resolved(provider, None, query=query)
+            return Resolution(
+                query=query, provider=provider, symbol="6408", venue="NASDAQ",
+                asset_class="stock", method="search", confidence=1.0,
+                native=instrument_identity({
+                    "id": 6408, "symbol": "AAPL", "exchange_short_name": "NASDAQ",
+                    "currency_code": "USD", "client_type": "stock", "type": "equities",
+                    "link": "/equities/apple-computer-inc",
+                }),
+            )
+        symbol = {
+            "TRADINGVIEW": "NASDAQ:AAPL", "FINVIZ": "AAPL", "YAHOO": "AAPL",
+            "INVESTING": None,
+        }.get(provider)
         return _resolved(provider, symbol, query=query)
 
     monkeypatch.setattr(tv_access, "quote", tv_quote_call)
@@ -82,6 +112,7 @@ def fake_providers(monkeypatch, tv_quote, fv_quote, yh_quote, sa_quote):
     monkeypatch.setattr(yh_access, "quote", yh_quote_call)
     monkeypatch.setattr(sa_access, "quote", sa_quote_call)
     monkeypatch.setattr(bb_access, "quote", bb_quote_call)
+    monkeypatch.setattr(investing_access, "quote_with_resolution", iw_quote_call)
     monkeypatch.setattr(tools_market, "resolve", fake_resolve)
     monkeypatch.setattr(
         tools_market,
@@ -411,6 +442,8 @@ async def test_symbol_finviz_does_not_carry_is_not_an_error(
             "TRADINGVIEW": _resolved(provider, "OANDA:XAUUSD", query=query),
             "FINVIZ": _resolved(provider, None, query=query),
             "YAHOO": _resolved(provider, "XAUUSD=X", query=query),
+            "SA": _resolved(provider, None, query=query),
+            "INVESTING": _resolved(provider, None, query=query),
         }[provider]
 
     monkeypatch.setattr(tv_access, "quote", tv_quote_call)
@@ -703,6 +736,8 @@ async def test_prices_expose_symbol_errors_and_keep_other_rows(
             return _resolved(provider, None, query=query)
         if provider == "BLOOMBERG":
             return _resolved(provider, "AAPL:US" if query == "AAPL" else None, query=query)
+        if provider == "INVESTING":
+            return _resolved(provider, None, query=query)
         return _resolved(
             provider,
             {"TRADINGVIEW": f"NASDAQ:{query}", "FINVIZ": query, "YAHOO": query}[provider],
@@ -1513,6 +1548,7 @@ async def test_prices_keep_provider_wide_empty_batch_as_no_data(
     monkeypatch.setattr(fv_access, "screener_rows", empty_finviz)
     fake_providers["sa"] = NoDataError("SA", "StockAnalysis returned no rows")
     fake_providers["bb"] = NoDataError("BLOOMBERG", "Bloomberg returned no rows")
+    fake_providers["iw"] = NoDataError("INVESTING", "Investing returned no rows")
     monkeypatch.setattr(tv_access, "quotes", empty_tv)
     monkeypatch.setattr(yh_access, "quote", empty_yahoo)
 
@@ -1522,7 +1558,7 @@ async def test_prices_keep_provider_wide_empty_batch_as_no_data(
     assert result["data_provider"] == "NONE"
     assert row["data_provider"] == "NONE"
     assert set(row["misses"]) == {
-        "TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "BLOOMBERG"
+        "TRADINGVIEW", "FINVIZ", "YAHOO", "SA", "INVESTING", "BLOOMBERG"
     }
     row_errors = {(error["provider"], error["symbol"]): error for error in row["errors"]}
     envelope_errors = {
@@ -1791,6 +1827,7 @@ async def test_technical_analysis_uses_the_resolved_tradingview_identity(
             "TRADINGVIEW": "NYSE:XYZ",
             "FINVIZ": "XYZ",
             "YAHOO": "XYZ",
+            "INVESTING": None,
         }
         return Resolution(
             query=query,
@@ -1833,7 +1870,10 @@ async def test_options_chain_marks_different_nearest_expiries_not_comparable(mon
     }
 
     async def fake_resolve(query, provider, **kwargs):
-        symbol = {"TRADINGVIEW": "NASDAQ:AAPL", "FINVIZ": "AAPL", "YAHOO": "AAPL"}[provider]
+        symbol = {
+            "TRADINGVIEW": "NASDAQ:AAPL", "FINVIZ": "AAPL", "YAHOO": "AAPL",
+            "INVESTING": None,
+        }[provider]
         return _resolved(provider, symbol, query=query)
 
     async def tv_quote(symbol):

@@ -1,6 +1,6 @@
 # Tools Reference
 
-55 tools. `providers` is the tool's **possible** provider set, not a promise about any single call:
+56 tools. `providers` is the tool's **possible** provider set, not a promise about any single call:
 an individual response can degrade to fewer providers if some fail. The per-call truth is always that
 response's `data_provider` plus its `providers_answered`.
 
@@ -18,12 +18,12 @@ Quote plus fundamentals snapshot for any instrument class, equity, index, FX, co
 
 | | |
 | --- | --- |
-| Providers | TradingView scanner · Finviz quote page · Yahoo chart API · StockAnalysis quote API · Bloomberg quote page |
-| Compared | price, change %, previous close, volume, session open/high/low, 52-week high/low, P/E, RSI(14), average analyst price target |
-| Tolerances | price/prev-close/52-week/session range 0.5 % · change % 2 % · P/E 2 % · RSI 5 % · volume 1 % · average target 0.1 % to accommodate Finviz's rounding |
+| Providers | TradingView scanner · Finviz quote page · Yahoo chart API · StockAnalysis quote API · Investing.com native search + verified quote page · Bloomberg quote page |
+| Compared | price, change %, previous close, volume, session open/high/low, 52-week high/low, market cap, P/E, RSI(14), average analyst price target |
+| Tolerances | price/prev-close/52-week/session range 0.5 % · change % 2 % · market cap/P/E 2 % · RSI 5 % · volume 1 % · average target 0.1 % to accommodate Finviz's rounding |
 | Observation guards | price, change %, previous close, volume, session high/low/open: `max_skew_seconds = 900` and same US/Eastern session date; change %, volume and the session range also carry an 8 h age ceiling |
 | Declared delay | Bloomberg's 15-minute equity/index delay is itself a comparability boundary: a pair that far apart is `not_comparable`, with the delay named |
-| Never compared | change % on FX, where no shared previous close exists (reported from every provider) |
+| Never compared | change % on FX, where no shared previous close exists (reported from every provider); market cap with multiple readings, because share-count bases and as-of dates can differ |
 
 Each compared field resolves to one value, the newest print, while every reading stays in
 `comparisons`. Finviz-only material rides along, labelled per field in `fields` (these listed
@@ -32,12 +32,15 @@ fundamentals snapshot, company profile, peers, the after-hours print, the classi
 (`sector`, `industry`, `country`, `market_cap_class`, `exchange`, `etf_type`) and the
 `income_breakdown` island. `resolutions` records the ticker each provider was asked for.
 
-`day_open` comes from TradingView, Yahoo and StockAnalysis: Finviz has no Open row and Bloomberg's
+`day_open` comes from TradingView, Yahoo, StockAnalysis and Investing.com: Finviz has no Open row and Bloomberg's
 page carries one only sometimes, so the field is compared where both sides publish it rather than
 against a provider that never had it. `feed_mode` (`streaming`, `delayed_streaming_900`) states the
 scanner's own delay, the same fact Bloomberg's `exchange_delay` reports for its leg. `pe_ratio` has no
 StockAnalysis getter: its quote API carries price, range, volume and the 52-week range, and P/E lives
-on a separate stock page this tool does not fetch.
+on a separate stock page this tool does not fetch. Investing supplies its own TTM `pe_ratio` through the
+verified page. `market_cap` has an Investing getter too, but multiple market-cap readings are structurally
+`not_comparable` because providers can use different share-count bases and as-of dates. Their raw values
+remain provider-labelled rather than being declared in conflict.
 
 Symbol resolution only decides who can be asked. Once a symbol resolves, an empty provider response
 remains a visible `NO_DATA` error; it is not reclassified as `NOT_ATTEMPTED` merely because the
@@ -51,8 +54,9 @@ Finviz's rounding. For AAPL on 17 November 2026, TradingView returned `348.51991
 not evidence of independent editorial or analyst coverage.
 
 The detailed `analyst_targets` block is outside `data`, with a TradingView block when its scanner
-answers and a Finviz block when its quote page answers. Other primary quote providers have no supplied
-analyst block. Provider-prefixed summaries documented below sit in `data` directly. No block or
+answers and a Finviz block when its quote page answers. An Investing block is added only when that
+provider supplies its forecast population. Other primary quote providers have no supplied analyst block.
+Provider-prefixed summaries documented below sit in `data` directly. No block or
 summary replaces one provider's count with another's:
 
 * TradingView's scanner supplies its average target, `price_target_low`, `price_target_high`, rating
@@ -170,8 +174,15 @@ the instrument registry in `symbols.py`, so `WTI` reaches TradingView as `FX:USO
 `NYSE:WTI` (an equity whose ticker happens to match), and `CL1!` reaches Yahoo as `CL=F` and
 Bloomberg as `CL1:COM`.
 
-Bloomberg and StockAnalysis are asked in parallel like the others, so `providers_answered` can hold
-every label and `comparisons[].values` every reading. Bloomberg's delayed print is bounded two ways:
+Bloomberg and StockAnalysis are asked in parallel like the others, and Investing joins only exact
+verified equity and ETF pages, so `providers_answered` can hold every label and
+`comparisons[].values` every reading. Investing sits after StockAnalysis and before Bloomberg in both
+provider display and freshness tie order. Its `lastClose` never becomes `previous_close`, and its
+regular and extended epoch-ms timestamps stay separate. Ambiguity, unsupported classes and any
+symbol/id/exchange/currency/class/page-path mismatch are refused. Its analyst and daily technical
+blocks stay `INVESTING` single-source, outside average-target and Tapebasis technical comparisons.
+
+Bloomberg's delayed print is bounded two ways:
 it is last in the freshness tie-break, and a pair a delay length apart is reported as
 `not_comparable` instead of as a disagreement. `exchange_delay` / `print_time` ride along in `data`,
 so the delay is visible without reading the comparison detail. StockAnalysis covers US equities and
@@ -204,7 +215,8 @@ Each row also names its `session`, the window its `price` is a print from, and t
 read from. The price itself is the live print rather than the obvious field: TradingView's scanner
 `close` stops moving when the regular feed's last trade falls behind the market while `premarket_close`
 keeps streaming, Yahoo's `regularMarketPrice` freezes while `fulldayPrice` does not, and StockAnalysis
-keeps the current extended print in its own block. The row's `change_percent` and `previous_close` are
+keeps the current extended print in its own block. Investing selects a verified regular or extended
+print and keeps that print's own epoch-ms timestamp. The row's `change_percent` and `previous_close` are
 measured against the same session's baseline, so the row's own three numbers are consistent. Before
 this, a pre-market price could be paired with a close two sessions old, implying a day change that
 neither the `change_percent` beside it nor any provider reported.
@@ -233,7 +245,11 @@ Bloomberg is asked about at most four tickers per call (`TAPEBASIS_BLOOMBERG_BAT
 page path is paced at 10 s per request. The rest are listed in `warnings` and are not counted as
 Bloomberg-answered for those rows: coverage stays truthful per row. StockAnalysis is asked about every
 ticker: its pacing absorbs a short list, so it needs no cap, and a symbol it does not carry is
-recorded as `NOT_ATTEMPTED` for that row.
+recorded as `NOT_ATTEMPTED` for that row. Investing is asked for every exact native equity or ETF
+identity resolved for the requested tickers, with shared pacing across search and page reads and no
+provider-specific batch cap. Its `lastClose` is never `previous_close`; regular and extended prints
+retain separate epoch-ms timestamps. Ambiguity, unsupported classes and identity mismatches are not
+resolved by substituting a same-symbol listing.
 
 ### `stock_screener`
 
@@ -297,7 +313,7 @@ to fill.
 Finviz supplies price reactions around each item; Yahoo supplies its own search feed. The TradingView
 leg is the provider's licensed Marketaux feed and needs `MARKETAUX_API_TOKEN`. The other feeds still
 contribute when that licensed leg cannot answer. StockAnalysis and Bloomberg have no symbol-news
-adapter, so they are not asked and are not credited. Top-level news coverage counts feeds with at
+adapter, so they are not asked and are not credited. Investing.com has no symbol-news adapter either. Top-level news coverage counts feeds with at
 least one valid story; `provider_calls` separately audits successful but empty upstream calls.
 
 Items reorder by `published_at`. Unknown publication times sort last. Each item
@@ -598,6 +614,35 @@ Yahoo. It is the scan/analysis endpoints that are TradingView-only.
 
 ---
 
+## Investing-only (1)
+
+`investing_quote(symbol, exchange="")` asks Investing.com and nobody else. Success is
+`data_provider: INVESTING`, `verification: SINGLE_SOURCE` and `cross_checked: false`. The direct
+contract has no `reconciliation_leg` field. Every supplied data field has `INVESTING` provenance.
+
+| | |
+| --- | --- |
+| Input | Equity or ETF ticker; an exact `EXCHANGE:TICKER` prefix or optional `exchange` argument disambiguates venues |
+| Identity | One exact native search result, then a quote page repeating its instrument id, symbol, exchange, currency, supported class and native page path |
+| Refused | Ambiguous primary listings, unsupported asset classes, guessed slugs or foreign same-symbol listings, and every search/page identity mismatch |
+| Failure | `NONE` with a typed Investing error; no fallback to another provider |
+| Timestamps | Regular `lastUpdateTime` and extended `shown_date_time` are separate epoch-ms timestamps |
+| Previous close | Never from `lastClose`; only the separately published ETF `prevClose` has verified baseline meaning |
+
+`investing_last_close_value` and `investing_previous_close_excluded` keep the displayed value and the
+exclusion reason visible. `investing_analyst` contains only Investing's forecast population, and
+`investing_technical_1d` contains its daily model. Neither is a cross-provider comparison, a combined
+analyst count or Tapebasis `technical_analysis`. Use `stock_quote` when reconciliation is wanted.
+
+The same provider is a full leg of `stock_quote` and `stock_prices` for exact native equity and ETF
+pages. `stock_quote` includes its `market_cap` and `pe_ratio` getters. Market cap with multiple
+readings is structurally `not_comparable` because share-count bases and as-of dates can differ;
+P/E uses the ordinary 2 % tolerance. The average analyst target remains a TradingView/Finviz-only
+comparison. `stock_prices` reads every resolved Investing identity under shared search/page pacing,
+with no provider-specific batch cap.
+
+---
+
 ## Bloomberg-only (2)
 
 These tools ask Bloomberg and nobody else, so their responses are single-source by construction:
@@ -650,7 +695,7 @@ as a snapshot, not a live tape.
 These tools call the documented, versioned `https://api.equibles.com/v1` REST API with a Bearer key.
 They do not scrape an Equibles page, proxy through another provider or join general market-price
 arbitration. Their raw response objects stay in separately named datasets: no value is merged with
-TradingView, Finviz, Yahoo, StockAnalysis or Bloomberg. `comparisons` remains empty and
+TradingView, Finviz, Yahoo, StockAnalysis, Investing.com or Bloomberg. `comparisons` remains empty and
 `verification` is `SINGLE_SOURCE` when at least one dataset answers. Two explicitly configured
 shared-field adapters are the only exception, described under `stock_earnings` and `stock_ownership`.
 
@@ -868,6 +913,7 @@ silently downgraded to another provider or to an empty success.
 | Other selected Equibles REST data | `equibles_*` family tools, exact `dataset` and `filters` | No; one JSON GET, no pagination/fallback |
 | Filings, ownership, peers | `stock_filings`, `stock_ownership`, `stock_peers` | No, Finviz; only same-date short interest may add Equibles |
 | Government bond yields | `bloomberg_markets` | No, Bloomberg-only |
+| Investing.com's own equity or ETF quote | `investing_quote` | No: one provider asked; exact native identity, no fallback |
 | Bloomberg's own quote reading | `bloomberg_quote` | No: one provider asked, delay-labelled |
 | Crypto / futures scans | `crypto_*`, `futures_*` | No |
 | Strategy validation | `stock_backtest`, `stock_backtest_compare` | Yes, two OHLCV feeds |

@@ -38,8 +38,11 @@ def test_the_health_monitor_probes_every_leg_it_can_reach():
     """Bloomberg is the one leg with no HTTP probe, and only for its TLS gate."""
     from tapebasis import health
 
-    assert set(health.PROVIDERS) == set(PROVIDER_ORDER) - {"BLOOMBERG"}
-    assert {"BLOOMBERG", "EQUIBLES"}.isdisjoint(health.PROVIDERS)
+    assert set(health.PROVIDERS) == set(PROVIDER_ORDER) - {
+        "BLOOMBERG", "INVESTING"
+    }
+    assert {"BLOOMBERG", "INVESTING", "EQUIBLES"}.isdisjoint(health.PROVIDERS)
+    assert "INVESTING" in health.MONITORED_PROVIDERS
     assert "EQUIBLES" not in PROVIDER_ORDER
     from tapebasis.providers_state import DataProvider
 

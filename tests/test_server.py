@@ -52,6 +52,7 @@ def test_all_tools_are_registered():
         "combined_analysis",
         "bloomberg_quote",
         "bloomberg_markets",
+        "investing_quote",
         "stock_fundamentals",
         "stock_analyst_estimates",
         "stock_ownership_flows",
@@ -67,7 +68,7 @@ def test_all_tools_are_registered():
         "equibles_international", "equibles_crypto",
     }
     assert names == expected
-    assert len(names) == 55
+    assert len(names) == 56
 
 
 def test_every_tool_has_a_description():
@@ -161,4 +162,5 @@ async def test_tool_map_names_one_source_per_tool():
     # Bloomberg is a leg of the quote tools, but it has no health probe, and
     # the map says so rather than implying it was probed.
     assert "BLOOMBERG" in response["providers_answered"]
+    assert "INVESTING" in response["providers_answered"]
     assert any("no health probe" in warning for warning in response["warnings"])

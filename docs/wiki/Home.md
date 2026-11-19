@@ -3,7 +3,7 @@
 <img src="https://raw.githubusercontent.com/giraygokirmak/tapebasis/main/docs/logo.svg" alt="Tapebasis" width="300">
 
 **Multiple tapes, one basis.** An MCP server that serves **TradingView**, **Finviz**, **Yahoo Finance**,
-**StockAnalysis** and **Bloomberg** market data together, cross-checks every overlapping figure, and
+**StockAnalysis**, **Investing.com** and **Bloomberg** market data together, cross-checks every overlapping figure, and
 labels each response with the provider that actually produced it. Separate authenticated **Equibles**
 tools provide fundamentals, ownership and restricted positioning without merging them into those
 comparisons.
@@ -20,14 +20,17 @@ ordinary tool responses. Equibles is the authenticated, documented REST exceptio
 isolated response contract.
 
 Each leg is fetched natively: TradingView's own scanner and chart websocket, Finviz's HTML and JSON
-islands, Yahoo's chart API, StockAnalysis's quote API, Bloomberg's quote pages. A provider that
-quietly proxies another is worthless as a cross-check, so none does. Bloomberg and StockAnalysis are
-the other two legs, asked in parallel with the rest. Bloomberg's equity prints are exchange-delayed,
+islands, Yahoo's chart API, StockAnalysis's quote API, Investing's native search and verified
+quote pages, Bloomberg's quote pages. A provider that quietly proxies another is worthless as
+a cross-check, so none does. Bloomberg, StockAnalysis and Investing are additional legs, asked
+in parallel with the rest. Bloomberg's equity prints are exchange-delayed,
 so a pair that far apart is reported as not comparable with the delay named instead of being counted
 as disagreement. StockAnalysis covers US equities and ETFs only and serves the same consolidated tape
-Yahoo does, so that pair is weak corroboration. See
-[Bloomberg](#bloomberg-the-leg-that-states-its-delay) and
-[StockAnalysis](#stockanalysis-the-leg-that-covers-us-equities-and-etfs).
+Yahoo does, so that pair is weak corroboration. Investing accepts an exact, unambiguous equity or ETF
+only after its page repeats the search identity; its analyst and technical extras stay
+single-source. See [Bloomberg](#bloomberg-the-leg-that-states-its-delay),
+[StockAnalysis](#stockanalysis-the-leg-that-covers-us-equities-and-etfs), and
+[Response Contract](Response-Contract) for the identity and session boundaries.
 
 **No general market tool requires an API key.** Its capabilities work out of the box;
 `MARKETAUX_API_TOKEN` only upgrades news and sentiment to a licensed feed. The separate Equibles
@@ -59,7 +62,7 @@ asks them all, compares, and tells the agent what it is holding.
 | --- | --- |
 | [Getting Started](Getting-Started) | Install, run over stdio or HTTP, first calls |
 | [Response Contract](Response-Contract) | The envelope, every field, how to read it correctly |
-| [Tools Reference](Tools-Reference) | All 55 tools, providers, and what is compared |
+| [Tools Reference](Tools-Reference) | All 56 tools, providers, and what is compared |
 | [Equibles Datasets](Equibles-Datasets) | Frozen REST routes, dataset names, exact filters and provider parameter descriptions |
 | [Architecture](Architecture) | Module layout, data flow, why the pieces sit where they do |
 | [Health Monitor](Health-Monitor) | Probes, fingerprints, drift detection, baselines |
@@ -85,6 +88,7 @@ Every tool result carries exactly one of nine values. It states **coverage**, ne
 | `FINVIZ` | Only Finviz answered. Served, but **not** corroborated. |
 | `YAHOO` | Only Yahoo Finance answered. Served, but **not** corroborated. |
 | `SA` | Only StockAnalysis answered. Served, but **not** corroborated; US equities and ETFs only. |
+| `INVESTING` | Only Investing.com answered. Served, but **not** corroborated; native verified equities and ETFs only. |
 | `BLOOMBERG` | Only Bloomberg answered. Served, but **not** corroborated; its quote can be delayed. |
 | `EQUIBLES` | One or more separate Equibles datasets answered. Single-source, never merged; preserve attribution, freshness, reporting delay and access. Partial dataset failure keeps this label. |
 | `NONE` | No provider supplied the primary value; a separately labelled `news` block may remain available. |
@@ -131,7 +135,7 @@ failed downgrades the label to `PARTIAL` rather than hiding behind `ALL`.
 
 **One value per compared field, and it is the newest print.** `data` holds a single price: the
 reading whose market print is newest. Ties are broken by the documented default order (`FINVIZ`,
-`TRADINGVIEW`, `YAHOO`, `SA`, `BLOOMBERG`); Bloomberg is last because its print can be structurally
+`TRADINGVIEW`, `YAHOO`, `SA`, `INVESTING`, `BLOOMBERG`); Bloomberg is last because its print can be structurally
 older, and StockAnalysis sits just before it because its coverage is the narrowest of the live feeds.
 Every original reading stays in `comparisons.values`, and `freshness.decision` states which rule
 applied.
@@ -238,8 +242,23 @@ the only source here of the government benchmark yield curve, and it carries no 
 time, which the response says.
 
 Access needs `curl_cffi`: bloomberg.com gates plain HTTP clients on the TLS fingerprint, so `httpx`
-gets a 403 robot page. That is also why the health monitor does not probe this provider; the tool
-response is the availability signal. Details: [Design Decisions](Design-Decisions).
+gets a 403 robot page. Bloomberg quote pages have no health-monitor probe; the tool response is the
+availability signal. Investing shares this TLS-aware transport but has a local identity-verified
+search/page probe. Details: [Design Decisions](Design-Decisions) and
+[Health Monitor](Health-Monitor).
+
+---
+
+## Investing: search first, page verification, independent extras
+
+`stock_quote` and `stock_prices` resolve Investing through its native search, then fetch exactly
+the returned page path. Symbol, supported equity or ETF class, exchange, currency, instrument id
+and path must agree before any field joins reconciliation. `INVESTING` sits after `SA` and before
+`BLOOMBERG` in the documented order. Ordinary stock `lastClose` is not assumed to be previous
+close; only an ETF's explicit `keyStatistics.prevClose` may supply that baseline.
+`investing_quote` exposes the same exact quote, analyst forecast population and daily technical
+model, all explicitly `INVESTING` single-source. Analyst counts never join another provider's
+count, and Investing-only technical values never become Tapebasis technical-analysis consensus.
 
 ---
 

@@ -5,15 +5,16 @@ violate by accident.
 
 ---
 
-## 1. Eight provider states, not two
+## 1. Ten provider states, not two
 
-**Decision:** `ALL` / `TRADINGVIEW` / `FINVIZ` / `YAHOO` / `SA` / `BLOOMBERG` / `NONE`, never a
-boolean like `verified: true`.
+**Decision:** `ALL` / `PARTIAL` / `TRADINGVIEW` / `FINVIZ` / `YAHOO` / `SA` / `INVESTING` /
+`BLOOMBERG` / `EQUIBLES` / `NONE`, never a boolean like `verified: true`.
 
 **Why:** "verified" collapses two different facts: *how many providers answered* and *whether they
 agreed*. A boolean loses the case that matters most: several answered and disagreed. With an explicit
-state per provider plus `comparisons`, that case is visible instead of hidden. Bloomberg and
-StockAnalysis were added later as further legs with their own properties, see decisions 30 and 35.
+state per provider plus `comparisons`, that case is visible instead of hidden. Bloomberg,
+StockAnalysis and Investing.com were added later as further legs with their own properties, see
+decisions 30 and 35 and the Investing decision below.
 
 **Consequence:** `ALL` means "every provider that was asked answered", not "they agree". Agreement
 lives in `comparisons[].match`. This is documented in several places because it is the single easiest
@@ -64,7 +65,7 @@ freshest print is the defensible choice, and `freshness.reason` plus the notice 
 to parse the sentence.
 
 Ties, and cases where no provider reports a usable timestamp, fall back to a fixed documented order
-(`FINVIZ`, `TRADINGVIEW`, `YAHOO`, `SA`, `BLOOMBERG`), not to whichever label happened to be first.
+(`FINVIZ`, `TRADINGVIEW`, `YAHOO`, `SA`, `INVESTING`, `BLOOMBERG`), not to whichever label happened to be first.
 Only providers that share the newest instant are tie-break candidates, so a stale provider can never
 win against fresher ones.
 
@@ -156,7 +157,7 @@ wrong answer, not a bad ticker.
 ## 10. Multiple independent legs, no proxying
 
 **Decision:** TradingView, Finviz and Yahoo each hit genuinely different upstreams through their own
-access module. Every provider added later (Bloomberg, StockAnalysis) follows the same rule.
+access module. Every provider added later (Bloomberg, StockAnalysis, Investing.com) follows the same rule.
 
 **Why:** cross-verification is only meaningful if the sources are independent. An earlier version of
 this server took TradingView's price from Yahoo's chart API: two legs, one upstream wearing two
@@ -171,6 +172,9 @@ independence claim rather than trust it.
 ## 11. Health probes bypass the provider code
 
 **Decision:** `health.py` probes upstreams directly, not through `tv_access`/`fv_access`/`yh_access`.
+Investing is the explicit exception: plain `httpx` cannot establish its required TLS browser
+fingerprint, so its local probe reuses only the TLS-aware search/page access while independently
+verifying exact NVDA identity and quote timestamp behavior.
 
 **Why:** a provider that catches its own exceptions looks healthy from outside. Probing through it
 would inherit the same blindness. Independent probes can fail while every tool call succeeds, and
@@ -575,12 +579,13 @@ behaviours are pinned by tests.
 
 ---
 
-## 35. StockAnalysis is the fifth leg, and its coverage boundary is stated
+## 35. StockAnalysis keeps its narrow coverage boundary
 
 **Decision:** stockanalysis.com is asked in parallel with the other providers on `stock_quote`,
 `stock_prices` and `stock_extended_hours`. Its readings enter `comparisons[].values` and it counts
-toward `ALL` / `providers_answered`. It sits immediately before Bloomberg in both `PROVIDER_ORDER`
-and `DEFAULT_ORDER`.
+toward `ALL` / `providers_answered`. Investing now gives native verified equity and ETF pages their
+own leg on the quote tools: it sits after StockAnalysis and before Bloomberg in both `PROVIDER_ORDER`
+and `DEFAULT_ORDER`, which remains Bloomberg last. Investing does not join `stock_extended_hours`.
 
 **Why it is a leg.** The rule this server applies is that every provider which can answer a field is
 asked, in parallel. StockAnalysis can answer price, change, previous close, the session open/high/low,
@@ -588,12 +593,12 @@ the 52-week range and volume for any US equity or ETF, so treating it as a side 
 been the exact asymmetry the rule forbids: a provider with the same data point, fetched anyway,
 left out of the comparison for no reason but that it was added later.
 
-**Why it sits before Bloomberg.** Both orders matter only for display and for the documented
-tie-break. It is a live feed, so it should outrank a leg whose prints can be structurally 15 minutes
-old. But its coverage is the narrowest of the live feeds (US equities and ETFs, no indices, FX,
-crypto or foreign listings), so on an exact print-time tie it should never take precedence over a
-provider that carries the same instrument more broadly. Last-but-one is where both statements hold,
-and it keeps Bloomberg last for the reason decision 30 gives.
+**Why the order remains explicit.** Both orders matter only for display and for the documented
+tie-break. StockAnalysis is a live feed, so it should outrank a leg whose prints can be structurally
+15 minutes old. But its coverage is narrow (US equities and ETFs, no indices, FX, crypto or foreign
+listings), so on an exact print-time tie it should not take precedence over a provider that carries
+the same instrument more broadly. Investing follows it and still precedes Bloomberg, which remains
+last for the reason decision 30 gives.
 
 **Why a not-carried instrument is not an error.** The quote API has no search endpoint and answers
 `404` for
@@ -823,7 +828,8 @@ cannot flood upstreams the limiters are pacing anyway.
 
 **Decision:** Bloomberg identity is decided in exactly one place,
 `bb_access.resolve_bloomberg()`. Every path that asks Bloomberg goes through it, including the
-cross-checked tools.
+cross-checked tools. Investing applies the same rule independently: `resolve_investing()` is the only
+native identity entry point and every quote path consumes its verified `Resolution.native` identity.
 
 **Why:** `tools_market` resolved through the instrument registry, which states `WTI` has no Bloomberg
 spot series, while `bb_access.to_bloomberg()` guessed `WTI:US` from the mechanical rule. The same
@@ -1511,6 +1517,44 @@ institution or analyst identity. Existing detail blocks stay intact. A Finviz to
 actions including previous or
 repeated actions, not a firm count. `combined_analysis.data` reuses the same neutral summary builder
 and single-source TradingView provenance; no recommendation total combines providers.
+
+---
+
+## Investing requires exact native identity, separate print clocks and isolated extras
+
+**Decision:** Investing.com is a native equity and ETF reconciliation leg of `stock_quote` and
+`stock_prices`, ordered after StockAnalysis and before Bloomberg in `PROVIDER_ORDER` and
+`DEFAULT_ORDER`. `investing_quote(symbol, exchange="")` exposes the same verified page directly with
+`INVESTING` / `SINGLE_SOURCE` and `cross_checked: false`, while returning `NONE` with a typed error
+on every miss or failure. The direct call has no provider fallback.
+
+**Why:** Investing search can return depositary receipts, cross-listings and unrelated asset classes
+with the same symbol. Search order cannot prove identity. Only an exact native primary listing is
+accepted without an exchange constraint, and the quote page must repeat the search instrument id,
+symbol, exchange, currency, supported class and native path. No `/equities/<company>` slug is
+constructed and no same-symbol foreign listing is substituted. Ambiguity, an unsupported class or a
+mismatch is refused instead of becoming a plausible quote.
+
+**Regular and extended prints are different observations.** `lastUpdateTime` dates the regular
+print and `shown_date_time` dates each extended print; both are epoch milliseconds and remain
+separate before freshness arbitration. The displayed `lastClose` is not assumed to be an arithmetic
+previous close and is retained only as `investing_last_close_value` plus an exclusion explanation.
+A separately published ETF `keyStatistics.prevClose` is the only admitted Investing baseline.
+
+**Provider-only data cannot broaden comparison silently.** Investing supplies `market_cap` and
+`pe_ratio` getters, but market cap is structurally `not_comparable` because providers can use
+different share-count bases and as-of dates; P/E keeps its ordinary comparison. The average analyst
+target comparison remains TradingView/Finviz-only. Investing's forecast population, Buy/Hold/Sell
+buckets and daily technical model stay in `investing_analyst`, prefixed count/summary fields and
+`investing_technical_1d`, never combined with other analyst populations or presented as Tapebasis
+`technical_analysis`.
+
+**Consequence:** `stock_prices` reads every resolved Investing identity with shared search/page
+pacing and no provider-specific batch cap. Health uses a local TLS-aware probe because plain
+`httpx` is refused; the probe reuses only the browser-capable access needed for transport while
+independently checking exact NVDA identity and quote timestamp behavior. This adds only the
+`investing_quote` tool and its metadata/docs, with no release, AUR or MCP registry publication
+change.
 
 ---
 

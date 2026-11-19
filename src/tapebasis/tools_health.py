@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .health import MONITOR, PROVIDERS
+from .health import MONITORED_PROVIDERS, MONITOR
 from .providers_state import DataProvider, envelope, provider_from_answered
 from .reconcile import field_source
 
@@ -132,13 +132,13 @@ async def tapebasis_tool_map() -> dict[str, Any]:
     return envelope(
         {"tools": rows, "count": len(rows), "by_provider": counts},
         provider=DataProvider.ALL,
-        providers_answered=[*PROVIDERS, "BLOOMBERG", "EQUIBLES"],
+        providers_answered=[*MONITORED_PROVIDERS, "BLOOMBERG", "EQUIBLES"],
         fields={
             name: field_source(provider, (), None, supplied=[provider])
             for name, provider in tool_providers.items()
         },
         warnings=[
-            *MONITOR.warnings_for(PROVIDERS),
+            *MONITOR.warnings_for(MONITORED_PROVIDERS),
             "`providers_answered` lists providers represented in this local "
             "catalogue, not providers contacted by this tool: no upstream call "
             "is made. Every market-comparison provider is a reconciliation leg "
@@ -149,7 +149,9 @@ async def tapebasis_tool_map() -> dict[str, Any]:
             "bloomberg_* tools ask that provider alone and are single-source by "
             "construction. Equibles is isolated rather than a reconciliation leg; "
             "its local key/quota probe spends no API quota and its raw datasets "
-            "always keep attribution, as_of and reporting delay.",
+            "always keep attribution, as_of and reporting delay. Investing "
+            "is monitored through its browser-fingerprinted local route, not "
+            "through a second generic HTTP request.",
         ],
         degraded=MONITOR.degraded(),
         sources={"catalog": "local tool metadata"},

@@ -1,7 +1,7 @@
 """Multi-source market data tools.
 
 Every tool here asks **every** provider that can serve the fact, TradingView,
-Finviz, Yahoo Finance, StockAnalysis and Bloomberg, compares the answers, and
+Finviz, Yahoo Finance, StockAnalysis, Investing.com and Bloomberg, compares the answers, and
 returns the reconciled payload with an explicit ``data_provider`` label. See
 :mod:`tapebasis.reconcile` for the rules.
 
@@ -24,6 +24,7 @@ from . import (
     eq_access,
     equibles_reconcile,
     fv_access,
+    investing_access,
     sa_access,
     tv_access,
     yh_access,
@@ -68,6 +69,7 @@ from .reconcile import (
     BLOOMBERG,
     EQUIBLES,
     FINVIZ,
+    INVESTING,
     SA,
     TRADINGVIEW,
     YAHOO,
@@ -169,15 +171,40 @@ def _resolution_block(*results) -> dict[str, Any]:
     }
 
 
-async def _symbols_for(symbol: str) -> dict[str, Any]:
-    """Resolve one user symbol into a ticker for each provider."""
+async def _symbols_for(
+    symbol: str, *, include_investing: bool = False
+) -> dict[str, Any]:
+    """Resolve provider identities and isolate Investing request failures."""
     ticker = strip_exchange(symbol).upper()
     if ":" in symbol:
         ticker = symbol.strip().upper()
-    tv_res, fv_res, yh_res = await asyncio.gather(
+
+    async def investing_resolution() -> Resolution:
+        """Return a failed resolution without cancelling the other providers."""
+        from .reconcile import _error_dict
+
+        if not include_investing:
+            return Resolution(
+                query=symbol,
+                provider=INVESTING,
+                asset_class="not_requested",
+            )
+        try:
+            return await resolve(symbol, INVESTING)
+        except Exception as exc:  # noqa: BLE001 - per-provider failure boundary
+            return Resolution(
+                query=symbol,
+                provider=INVESTING,
+                method="search",
+                note=f"Investing identity resolution failed: {exc}",
+                error=_error_dict(INVESTING, exc),
+            )
+
+    tv_res, fv_res, yh_res, iw_res = await asyncio.gather(
         resolve(symbol, TRADINGVIEW),
         resolve(symbol, FINVIZ),
         resolve(symbol, YAHOO),
+        investing_resolution(),
     )
     bb_res = _bloomberg_resolution(symbol)
     sa_res = resolve_sa(symbol)
@@ -188,8 +215,9 @@ async def _symbols_for(symbol: str) -> dict[str, Any]:
         "FINVIZ": fv_res,
         "YAHOO": yh_res,
         "SA": sa_res,
+        "INVESTING": iw_res,
         "BLOOMBERG": bb_res,
-        "resolutions": _resolution_block(tv_res, fv_res, yh_res, sa_res, bb_res),
+        "resolutions": _resolution_block(tv_res, fv_res, yh_res, sa_res, iw_res, bb_res),
     }
 
 
@@ -403,6 +431,7 @@ def _quote_specs(*, spot_fx: bool = False) -> tuple[FieldSpec, ...]:
             lambda p: p.get("price"),
             yh_get=lambda p: p.get("price"),
             sa_get=lambda p: p.get("price"),
+            investing_get=lambda p: p.get("price"),
             bb_get=lambda p: p.get("price"),
             tolerance_pct=0.5,
             # A price is only one number if the two prints describe the same
@@ -421,6 +450,7 @@ def _quote_specs(*, spot_fx: bool = False) -> tuple[FieldSpec, ...]:
             lambda p: p.get("change_percent"),
             yh_get=lambda p: p.get("change_percent"),
             sa_get=lambda p: p.get("change_percent"),
+            investing_get=lambda p: p.get("change_percent"),
             bb_get=lambda p: p.get("change_percent"),
             tolerance_pct=2.0,
             absolute_floor=0.05,
@@ -441,6 +471,7 @@ def _quote_specs(*, spot_fx: bool = False) -> tuple[FieldSpec, ...]:
             lambda p: p.get("previous_close"),
             yh_get=lambda p: p.get("previous_close"),
             sa_get=lambda p: p.get("previous_close"),
+            investing_get=lambda p: p.get("previous_close"),
             bb_get=lambda p: p.get("previous_close"),
             tolerance_pct=0.5,
             # The same hazard, one step removed: "previous close" itself rolls
@@ -465,6 +496,7 @@ def _quote_specs(*, spot_fx: bool = False) -> tuple[FieldSpec, ...]:
             lambda p: p.get("week_52_high"),
             yh_get=lambda p: p.get("week_52_high"),
             sa_get=lambda p: p.get("week_52_high"),
+            investing_get=lambda p: p.get("week_52_high"),
             bb_get=lambda p: p.get("week_52_high"),
             tolerance_pct=0.5,
         ),
@@ -474,6 +506,7 @@ def _quote_specs(*, spot_fx: bool = False) -> tuple[FieldSpec, ...]:
             lambda p: p.get("week_52_low"),
             yh_get=lambda p: p.get("week_52_low"),
             sa_get=lambda p: p.get("week_52_low"),
+            investing_get=lambda p: p.get("week_52_low"),
             bb_get=lambda p: p.get("week_52_low"),
             tolerance_pct=0.5,
         ),
@@ -488,9 +521,22 @@ def _quote_specs(*, spot_fx: bool = False) -> tuple[FieldSpec, ...]:
             tolerance_pct=0.1,
         ),
         FieldSpec(
+            "market_cap",
+            lambda p: p.get("market_cap_basic"),
+            lambda p: p.get("market_cap"),
+            investing_get=lambda p: p.get("market_cap"),
+            tolerance_pct=2.0,
+            not_comparable_reason=(
+                "Investing and the other providers can use different share-count "
+                "bases and as-of dates for market capitalisation; the readings "
+                "remain provider-labelled rather than being declared in conflict"
+            ),
+        ),
+        FieldSpec(
             "pe_ratio",
             lambda p: p.get("pe_ratio"),
             lambda p: p.get("pe_ratio"),
+            investing_get=lambda p: p.get("pe_ratio"),
             bb_get=lambda p: p.get("pe_ratio"),
             tolerance_pct=2.0,
         ),
@@ -507,6 +553,7 @@ def _quote_specs(*, spot_fx: bool = False) -> tuple[FieldSpec, ...]:
             lambda p: p.get("volume"),
             yh_get=lambda p: p.get("volume"),
             sa_get=lambda p: p.get("volume"),
+            investing_get=lambda p: p.get("volume"),
             bb_get=lambda p: p.get("volume"),
             tolerance_pct=1.0,
             # Volume accumulates through a session; a partial session and a
@@ -532,6 +579,7 @@ def _quote_specs(*, spot_fx: bool = False) -> tuple[FieldSpec, ...]:
             lambda p: p.get("day_high"),
             yh_get=lambda p: p.get("day_high"),
             sa_get=lambda p: p.get("day_high"),
+            investing_get=lambda p: p.get("day_high"),
             bb_get=lambda p: p.get("day_high"),
             tolerance_pct=0.5,
             max_skew_seconds=SKEW_LIMIT_SECONDS,
@@ -544,6 +592,7 @@ def _quote_specs(*, spot_fx: bool = False) -> tuple[FieldSpec, ...]:
             lambda p: p.get("day_low"),
             yh_get=lambda p: p.get("day_low"),
             sa_get=lambda p: p.get("day_low"),
+            investing_get=lambda p: p.get("day_low"),
             bb_get=lambda p: p.get("day_low"),
             tolerance_pct=0.5,
             max_skew_seconds=SKEW_LIMIT_SECONDS,
@@ -559,6 +608,7 @@ def _quote_specs(*, spot_fx: bool = False) -> tuple[FieldSpec, ...]:
             lambda p: p.get("day_open"),
             yh_get=lambda p: p.get("day_open"),
             sa_get=lambda p: p.get("day_open"),
+            investing_get=lambda p: p.get("day_open"),
             tolerance_pct=0.5,
             max_skew_seconds=SKEW_LIMIT_SECONDS,
             session_boundary=True,
@@ -626,6 +676,7 @@ def _analyst_target_blocks(
         targets = quote.get("analyst_targets") or {}
         numeric = quote.get("snapshot_numeric") or {}
         blocks[FINVIZ] = {
+
             "currency": None,
             "price_target_average": targets.get("price_target_average")
             if targets.get("price_target_average") is not None
@@ -648,6 +699,10 @@ def _analyst_target_blocks(
             "source": quote.get("source"),
             "ratings": targets.get("ratings") or [],
         }
+    if pair.investing.payload is not None:
+        analyst = pair.investing.payload.get("investing_analyst")
+        if isinstance(analyst, dict):
+            blocks[INVESTING] = analyst
     return blocks
 
 
@@ -663,6 +718,7 @@ def _analyst_summary(blocks: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """
     tv = blocks.get(TRADINGVIEW) or {}
     fv = blocks.get(FINVIZ) or {}
+    iw = blocks.get(INVESTING) or {}
     return {
         "tradingview_price_target_estimate_count": tv.get("price_target_estimate_count"),
         "tradingview_rating_analyst_count": tv.get("rating_analyst_count"),
@@ -684,6 +740,16 @@ def _analyst_summary(blocks: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "finviz_rating_buy_count": (fv.get("rating_distribution") or {}).get("buy"),
         "finviz_rating_hold_count": (fv.get("rating_distribution") or {}).get("hold"),
         "finviz_rating_sell_count": (fv.get("rating_distribution") or {}).get("sell"),
+        "investing_price_target_estimate_count": iw.get("price_target_estimate_count"),
+        "investing_rating_analyst_count": iw.get("rating_analyst_count"),
+        "investing_rating_buy_count": (iw.get("rating_distribution") or {}).get("buy"),
+        "investing_rating_hold_count": (iw.get("rating_distribution") or {}).get("hold"),
+        "investing_rating_sell_count": (iw.get("rating_distribution") or {}).get("sell"),
+        "investing_rating_summary": _rating_summary(
+            iw,
+            count_key="rating_analyst_count",
+            population="investing_forecast_analysts",
+        ) if iw else None,
     }
 
 
@@ -694,8 +760,9 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
     """Quote and fundamentals for one instrument, asked of every capable provider.
 
     Each provider is asked independently and natively: TradingView's scanner,
-    Finviz's quote page, Yahoo's chart API, StockAnalysis's quote API and
-    Bloomberg's quote page, in parallel. Nothing proxies another, so the
+    Finviz's quote page, Yahoo's chart API, StockAnalysis's quote API,
+    Investing's native search and identity-verified quote page, and Bloomberg's
+    quote page, in parallel. Nothing proxies another, so the
     cross-check is real. Price, change, previous close, the session's own
     open/high/low, the 52-week range, P/E, RSI, volume and the average analyst
     target are compared field by field; Finviz's deeper fundamentals, the
@@ -720,12 +787,16 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
     corroboration rather than two independent witnesses; that is stated in the
     docs and in the single-source notice. Indices, FX, crypto and foreign
     listings resolve to "not carried" for that leg, which is recorded as
-    ``NOT_ATTEMPTED`` rather than as a failure.
+    ``NOT_ATTEMPTED`` rather than as a failure. Investing accepts only exact,
+    unambiguous equity or ETF identities verified between native search and the
+    returned page. Its analyst counts and technical summaries remain named
+    single-source extras, and ordinary stock ``lastClose`` is never promoted to
+    a previous close. Its search or page failures are isolated provider errors.
 
     Symbols are resolved dynamically per provider, so ``XAUUSD`` reaches
     TradingView as ``OANDA:XAUUSD``, Yahoo as ``XAUUSD=X``, Bloomberg as
     ``XAUUSD:CUR``, and Finviz and StockAnalysis are told they do not carry spot
-    gold (rather than being sent to a 404).
+    gold; Investing likewise does not substitute its commodity listing.
 
     Args:
         symbol: Anything the instrument is commonly called (``AAPL``, ``BRK.B``,
@@ -750,12 +821,13 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         provider's own print rather than from another leg's label, so a delayed
         feed cannot describe a print it did not supply.
     """
-    resolved = await _symbols_for(symbol)
+    resolved = await _symbols_for(symbol, include_investing=True)
     ticker = strip_exchange(resolved["ticker"]).upper()
     tv_res = resolved["TRADINGVIEW"]
     fv_res = resolved["FINVIZ"]
     yh_res = resolved["YAHOO"]
     sa_res = resolved["SA"]
+    iw_res = resolved["INVESTING"]
     bb_res = resolved["BLOOMBERG"]
 
     async def tv_call() -> dict[str, Any]:
@@ -784,6 +856,20 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
                 SA, sa_res.note or f"StockAnalysis does not carry {symbol}"
             )
         return await sa_access.quote(sa_res.symbol)
+
+    async def investing_call() -> dict[str, Any]:
+        if iw_res.error:
+            raise ProviderError(
+                INVESTING,
+                iw_res.error.get("message") or "Investing identity resolution failed",
+                code=iw_res.error.get("code") or "UPSTREAM_ERROR",
+            )
+        if not iw_res.found:
+            raise NotApplicable(
+                INVESTING, iw_res.note or f"no exact Investing.com identity for {symbol}"
+            )
+        data, _source = await investing_access.quote_with_resolution(iw_res)
+        return data
 
     async def bb_call() -> dict[str, Any]:
         if not bb_res.found:
@@ -831,7 +917,10 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
     # in ``ask`` and swapping them would mislabel every reading in the response.
     # Forecast data has its own error channel and does not change pair coverage.
     pair, (tv_forecast, forecast_error) = await asyncio.gather(
-        ask(tv_call, fv_call, yh_call, bb_fn=bb_call, sa_fn=sa_call),
+        ask(
+            tv_call, fv_call, yh_call, bb_fn=bb_call, sa_fn=sa_call,
+            investing_fn=investing_call,
+        ),
         forecast_call(),
     )
 
@@ -853,6 +942,7 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             "price_timestamp": payload.get("update_time"),
             "description": payload.get("description"),
             "sector": payload.get("sector"),
+            "market_cap": payload.get("market_cap_basic"),
             "price_target_estimate_count": (tv_forecast or {}).get("price_target_estimates_num"),
             "rating_analyst_count": payload.get("recommendation_total"),
             "rating_buy_count": payload.get("recommendation_over"),
@@ -959,6 +1049,43 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             "stockanalysis_has_extended_hours": payload.get("has_extended_hours"),
         }
 
+    def investing_norm(payload: dict[str, Any]) -> dict[str, Any]:
+        """Return verified shared observations and provider-named extras."""
+        live = live_print(INVESTING, payload)
+        return {
+            "price": live["price"],
+            "change_percent": live["change_percent"],
+            "previous_close": live["reference_close"] or payload.get("previous_close"),
+            "day_open": payload.get("day_open"),
+            "day_high": payload.get("day_high"),
+            "day_low": payload.get("day_low"),
+            "week_52_high": payload.get("week_52_high"),
+            "week_52_low": payload.get("week_52_low"),
+            "volume": payload.get("volume"),
+            "market_cap": payload.get("market_cap"),
+            "pe_ratio": payload.get("pe_ratio"),
+            "price_timestamp": live["timestamp"],
+            "exchange": payload.get("exchange"),
+            "currency": payload.get("currency"),
+            "investing_instrument_id": payload.get("instrument_id"),
+            "investing_asset_class": payload.get("asset_class"),
+            "investing_is_exchange_delayed": payload.get("is_exchange_delayed"),
+            "investing_exchange_delay": payload.get("exchange_delay"),
+            "investing_extended_hours": payload.get("extended_hours"),
+            "investing_beta": payload.get("investing_beta"),
+            "investing_dividend_yield_ann": payload.get("investing_dividend_yield_ann"),
+            "investing_etf_dividend_yield": payload.get("investing_etf_dividend_yield"),
+            "investing_basic_eps_ann": payload.get("investing_basic_eps_ann"),
+            "investing_price_to_book_mrq": payload.get("investing_price_to_book_mrq"),
+            "investing_gross_margin_ttm": payload.get("investing_gross_margin_ttm"),
+            "investing_return_on_assets_ttm": payload.get("investing_return_on_assets_ttm"),
+            "investing_return_on_equity_ttm": payload.get("investing_return_on_equity_ttm"),
+            "investing_next_earnings_date": payload.get("investing_next_earnings_date"),
+            "investing_last_close_value": payload.get("investing_last_close_value"),
+            "investing_previous_close_excluded": payload.get("investing_previous_close_excluded"),
+            "investing_technical_1d": payload.get("investing_technical_1d"),
+        }
+
     def bb_norm(payload: dict[str, Any]) -> dict[str, Any]:
         # Bloomberg's print time is already derived from the intraday series by
         # ``bb_access.shape_quote`` and is passed as ``bb_time``, so it is not
@@ -1001,6 +1128,7 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         (FINVIZ, pair.fv.payload),
         (YAHOO, pair.yh.payload),
         (SA, pair.sa.payload),
+        (INVESTING, pair.investing.payload),
         (BLOOMBERG, pair.bb.payload),
     ):
         if not payload:
@@ -1016,12 +1144,13 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         # volume it never accumulates) are reported from every provider but never
         # compared. Everything else is compared.
         specs=_quote_specs(
-            spot_fx=_is_fx(tv_res, fv_res, yh_res, sa_res, bb_res)
+            spot_fx=_is_fx(tv_res, fv_res, yh_res, sa_res, iw_res, bb_res)
         ),
         tv_norm=tv_norm,
         fv_norm=fv_norm,
         yh_norm=yh_norm,
         sa_norm=sa_norm,
+        investing_norm=investing_norm,
         bb_norm=bb_norm,
         # Bloomberg's print time is derived, not read off ``lastUpdate``, so it
         # is passed explicitly rather than picked up from the shaped payload.
@@ -1040,6 +1169,9 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
             SA: f"https://stockanalysis.com/api/quotes/s/{sa_res.symbol}"
             if sa_res.found
             else "not carried by StockAnalysis",
+            INVESTING: iw_res.native.get("source")
+            if iw_res.found and iw_res.native
+            else "no exact Investing.com identity",
             BLOOMBERG: f"https://www.bloomberg.com/quote/{bb_res.symbol}"
             if bb_res.found
             else "no Bloomberg id",
@@ -1062,7 +1194,11 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         for name, observation in summary.items():
             if observation is None:
                 continue
-            source = TRADINGVIEW if name.startswith("tradingview_") else FINVIZ
+            source = (
+                TRADINGVIEW if name.startswith("tradingview_")
+                else INVESTING if name.startswith("investing_")
+                else FINVIZ
+            )
             result.setdefault("fields", {})[name] = field_source(source, supplied=[source])
         result["data"] = data
 
@@ -1158,7 +1294,8 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
 
     Each ticker is resolved per provider and looked up natively: TradingView's
     scanner, Finviz's screener, Yahoo's chart API, StockAnalysis's quote API,
-    Bloomberg's quote page. The per-row ``data_provider`` says whether that
+    Bloomberg's quote page and Investing.com's native search and verified quote
+    page. The per-row ``data_provider`` says whether that
     particular ticker was answered by every provider asked for that ticker,
     by some of them, by one, or by none; envelope coverage is PARTIAL when
     any symbol missed an attempted provider, even when another row is ALL.
@@ -1199,7 +1336,10 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         symbol: entry
         for symbol, entry in zip(
             requested,
-            await asyncio.gather(*(_symbols_for(symbol) for symbol in requested)),
+            await asyncio.gather(*(
+                _symbols_for(symbol, include_investing=True)
+                for symbol in requested
+            )),
         )
     }
 
@@ -1306,6 +1446,50 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
                 misses[symbol] = error["message"]
         return {"rows": rows, "misses": misses, "errors": errors}
 
+    async def investing_call() -> dict[str, Any]:
+        """Read one page per resolved identity while isolating ticker failures."""
+        askable = [
+            (symbol, entry[INVESTING])
+            for symbol, entry in resolved.items()
+            if entry[INVESTING].found or entry[INVESTING].error is not None
+        ]
+        if not askable:
+            raise NotApplicable(
+                INVESTING, "no exact Investing.com identity resolved for these instruments"
+            )
+
+        async def _one(symbol: str, resolution: Any):
+            """Return one verified quote or its symbol-scoped typed failure."""
+            try:
+                if resolution.error:
+                    raise ProviderError(
+                        INVESTING,
+                        resolution.error.get("message") or "Investing resolution failed",
+                        code=resolution.error.get("code") or "UPSTREAM_ERROR",
+                    )
+                row, source = await investing_access.quote_with_resolution(resolution)
+                return symbol, row, source, None
+            except Exception as exc:  # noqa: BLE001 - row isolation is intentional
+                return symbol, None, None, _batch_error(INVESTING, symbol, exc)
+
+        rows: dict[str, dict[str, Any]] = {}
+        sources: dict[str, str] = {}
+        misses: dict[str, str] = {}
+        errors: list[dict[str, Any]] = []
+        for symbol, row, source, error in await asyncio.gather(
+            *(_one(symbol, resolution) for symbol, resolution in askable)
+        ):
+            if row is not None:
+                rows[symbol] = row
+                sources[symbol] = source
+            else:
+                error = error or _batch_no_data(
+                    INVESTING, symbol, "no Investing.com quote returned"
+                )
+                errors.append(error)
+                misses[symbol] = error["message"]
+        return {"rows": rows, "sources": sources, "misses": misses, "errors": errors}
+
     async def bb_call() -> dict[str, Any]:
         if not bb_asked:
             raise NotApplicable(
@@ -1353,7 +1537,8 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         return {"rows": rows, "misses": misses, "errors": errors}
 
     pair = await ask(
-        tv_call, fv_call, yh_call, bb_fn=bb_call, sa_fn=sa_call
+        tv_call, fv_call, yh_call, bb_fn=bb_call, sa_fn=sa_call,
+        investing_fn=investing_call,
     )
 
     from .reconcile import DEFAULT_ORDER, _resolved_label, compare_values
@@ -1362,6 +1547,7 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
     fv_rows = (pair.fv.payload or {}).get("rows") or {}
     yh_rows = (pair.yh.payload or {}).get("rows") or {}
     sa_rows = (pair.sa.payload or {}).get("rows") or {}
+    iw_rows = (pair.investing.payload or {}).get("rows") or {}
     bb_rows = (pair.bb.payload or {}).get("rows") or {}
 
     bb_payload = pair.bb.payload or {}
@@ -1377,7 +1563,10 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         """Return providers this batch requested for one symbol."""
         asked: set[str] = set()
         for provider in MARKET_PROVIDERS:
-            if not resolved[symbol][provider].found:
+            if not (
+                resolved[symbol][provider].found
+                or (provider == INVESTING and resolved[symbol][provider].error)
+            ):
                 continue
             if provider == TRADINGVIEW:
                 asked.add(provider)
@@ -1386,6 +1575,11 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             elif provider == YAHOO and resolved[symbol][YAHOO].found:
                 asked.add(provider)
             elif provider == SA and symbol in sa_slugs:
+                asked.add(provider)
+            elif provider == INVESTING and (
+                resolved[symbol][INVESTING].found
+                or resolved[symbol][INVESTING].error is not None
+            ):
                 asked.add(provider)
             elif provider == BLOOMBERG and symbol in bb_asked:
                 if symbol not in budget_cutoffs:
@@ -1443,6 +1637,7 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
         )
         yh_row = yh_rows.get(symbol)
         sa_row = sa_rows.get(symbol)
+        iw_row = iw_rows.get(symbol)
         readings: dict[str, dict[str, Any]] = {}
         if tv_row:
             readings[TRADINGVIEW] = _live_reading(
@@ -1497,6 +1692,21 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
                     "volume": sa_row.get("volume"),
                 },
                 sa_row,
+            )
+        if iw_row:
+            readings[INVESTING] = _live_reading(
+                INVESTING,
+                {
+                    "previous_close": iw_row.get("previous_close"),
+                    "volume": iw_row.get("volume"),
+                    "company": iw_row.get("name"),
+                    "exchange": iw_row.get("exchange"),
+                    "currency": iw_row.get("currency"),
+                    "investing_instrument_id": iw_row.get("instrument_id"),
+                    "investing_is_exchange_delayed": iw_row.get("is_exchange_delayed"),
+                    "investing_exchange_delay": iw_row.get("exchange_delay"),
+                },
+                iw_row,
             )
         bb_row = bb_rows.get(symbol)
         if bb_row:
@@ -1605,7 +1815,7 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
                 _FX_DAY_CHANGE_REASON
                 if _is_fx(
                     entry["TRADINGVIEW"], entry["FINVIZ"], entry["YAHOO"],
-                    entry["SA"], entry["BLOOMBERG"],
+                    entry["SA"], entry["INVESTING"], entry["BLOOMBERG"],
                 )
                 else None
             ),
@@ -1630,6 +1840,19 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             )
             freshness["chosen"] = winner
 
+        if iw_row:
+            # Provider-prefixed keys cannot masquerade as shared fields. Only
+            # price and change_percent are judged below; these Investing details
+            # keep their named source and no comparison claim.
+            for key, value in iw_row.items():
+                if key in {
+                    "price", "change_percent", "previous_close", "volume",
+                    "company", "exchange", "currency", "price_timestamp",
+                    "extended_hours", "has_extended_hours",
+                }:
+                    continue
+                name = key if key.startswith("investing_") else f"investing_{key}"
+                readings[INVESTING][name] = value
         source = readings[winner]
         # The session the served price belongs to, taken from the winning
         # provider. A reading that carried no session label falls back to the
@@ -1731,6 +1954,12 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             fields["previous_close"] = previous_close_field
         if volume_field is not None:
             fields["volume"] = volume_field
+        if iw_row:
+            for key in readings[INVESTING]:
+                if key.startswith("investing_"):
+                    fields[key] = field_source(
+                        INVESTING, (), None, supplied=[INVESTING]
+                    )
         # What this row's call actually asked. Two filters, both needed:
         #
         # * a provider that resolved as not-carried was never asked
@@ -1777,6 +2006,12 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             "comparisons": {"price": price_cmp, "change_percent": change_cmp},
             "resolutions": entry["resolutions"],
         }
+        if iw_row:
+            row.update({
+                key: value
+                for key, value in readings[INVESTING].items()
+                if key.startswith("investing_")
+            })
         if readings.get(BLOOMBERG, {}).get("exchange_delay"):
             # The delay is a property of the reading, so it travels with it
             # instead of only being visible in ``comparisons``.
@@ -1841,6 +2076,7 @@ async def stock_prices(tickers: str) -> dict[str, Any]:
             FINVIZ: "finviz.com/screener/stocks",
             YAHOO: "query1.finance.yahoo.com/v8/finance/chart",
             SA: "stockanalysis.com/api/quotes/s/<ticker>",
+            INVESTING: "Investing.com search plus a verified native quote page",
             BLOOMBERG: "bloomberg.com/quote/<id>",
         },
         extra={"symbols": requested, "errors": envelope_errors},

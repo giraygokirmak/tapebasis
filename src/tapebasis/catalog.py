@@ -22,16 +22,19 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "providers": "ALL",
         "comparison": (
             "price, change %, previous close, volume, session open/high/low, "
-            "52-week high/low, P/E, RSI(14), average analyst target"
+            "52-week high/low, market cap (structurally not_comparable), P/E, RSI(14), "
+            "average analyst target (TradingView and Finviz only)"
         ),
         "notes": (
             "TradingView's scanner, Finviz's quote page, Yahoo's chart API, "
-            "StockAnalysis's quote API and Bloomberg's quote page are each asked "
-            "natively in parallel, no provider proxies another. Each compared field "
+            "StockAnalysis's quote API, Investing.com's native search and verified "
+            "quote page, and Bloomberg's quote page are each asked natively in "
+            "parallel, no provider proxies another. Each compared field "
             "resolves to ONE value: the reading "
             "from whichever provider printed more recently (see `freshness`); every "
             "original stays in `comparisons`. Ties fall back to Finviz, then "
-            "TradingView, then Yahoo, then StockAnalysis, then Bloomberg. Finviz-only "
+            "TradingView, then Yahoo, then StockAnalysis, then Investing.com, then "
+            "Bloomberg. Finviz-only "
             "fields (the 84-field "
             "snapshot, profile, peers, after-hours, and the income/segment breakdown) "
             "ride along labelled per field in `fields` (`fields.<field>.source` names the "
@@ -54,7 +57,15 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
             "covers US equities and ETFs only and its quote surface is the same "
             "consolidated tape Yahoo serves, "
             "so agreement between those two is weak corroboration rather than two "
-            "independent witnesses. The average analyst target is checked between "
+            "independent witnesses. Investing supports equity and ETF quotes only; "
+            "native search and the page must agree on instrument id, symbol, exchange, "
+            "currency, class and path, while ambiguity and unsupported classes are "
+            "rejected. Its lastClose is never previous_close, and regular and extended "
+            "prints keep separate epoch-ms timestamps. Investing market_cap is always "
+            "not_comparable because share-count bases and dates can differ; pe_ratio "
+            "uses the ordinary comparison. Its analyst and daily technical extras stay "
+            "single-source and their counts are never added to another population. The "
+            "average analyst target is checked between "
             "TradingView and Finviz at 0.1 % tolerance. Top-level `analyst_targets` "
             "keeps their different populations separate: TradingView one-year "
             "forecast and three-month rating counts, its target range and five "
@@ -80,7 +91,12 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
             "change is reported but never compared, for the same reason as in "
             "`stock_quote`. StockAnalysis answers US equities and ETFs only, so it is "
             "recorded as NOT_ATTEMPTED for anything else rather than as a failure. "
-            "Bloomberg is asked about at most 4 tickers per batch because "
+            "Investing adds native-search-verified equity and ETF pages; unsupported "
+            "classes, ambiguity and identity mismatches are refused. Its lastClose is "
+            "not previous_close, and its regular and extended epoch-ms prints retain "
+            "their own timestamps. Investing is asked about every resolved identity, "
+            "with one shared limiter pacing its search and page reads. Bloomberg is "
+            "asked about at most 4 tickers per batch because "
             "its page path is paced at 10 s per request; the rest are named in "
             "`warnings` and are not counted as Bloomberg-answered. StockAnalysis has no "
             "such cap: its pacing absorbs a short list. Every row carries "
@@ -371,6 +387,26 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
             "ordered and the response says so."
         ),
     },
+    # ── Investing-only: verified native equity or ETF, single-source ────────
+    {
+        "name": "investing_quote",
+        "capability": "one exact Investing.com equity or ETF quote with provider-only extras",
+        "providers": "INVESTING",
+        "comparison": "single-source: this tool asks only Investing.com",
+        "notes": (
+            "The optional exchange argument disambiguates multiple venues. Native search "
+            "must identify one exact primary equity or ETF, and the page must repeat its "
+            "instrument id, symbol, exchange, currency, class and native path. Ambiguity, "
+            "unsupported classes and every identity mismatch are refused; no slug or "
+            "foreign same-symbol listing is guessed. Regular and extended epoch-ms prints "
+            "keep their own timestamps, and lastClose is excluded from previous_close. "
+            "Analyst and daily technical blocks are INVESTING single-source observations, "
+            "never another provider's comparison or Tapebasis technical_analysis; analyst "
+            "counts are not summed. Success is INVESTING / SINGLE_SOURCE with "
+            "cross_checked=false; a miss or failure is NONE with a typed error, without "
+            "fallback to another provider. Use stock_quote for a corroborated quote."
+        ),
+    },
     # ── TradingView-only: served, labelled TRADINGVIEW, single-source ────────
     {
         "name": "stock_backtest",
@@ -516,7 +552,9 @@ TOOL_CATALOG: tuple[dict[str, object], ...] = (
         "comparison": "independent probes of every upstream endpoint",
         "notes": (
             "Runs in the background; drift is reported in every tool response. "
-            "`rate_limits` reports per-provider pacing and cooldown after a 429."
+            "Investing has a local TLS-aware probe that verifies an exact identity and "
+            "quote timestamp. `rate_limits` reports per-provider pacing and cooldown "
+            "after a 429."
         ),
     },
     {

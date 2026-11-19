@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Sequence
 
+from .ratelimit import RateLimited
 from .providers_state import (
     FRESHNESS_PROVIDER_ORDER,
     DataProvider,
@@ -68,6 +69,7 @@ TRADINGVIEW = "TRADINGVIEW"
 FINVIZ = "FINVIZ"
 YAHOO = "YAHOO"
 SA = "SA"
+INVESTING = "INVESTING"
 BLOOMBERG = "BLOOMBERG"
 EQUIBLES = "EQUIBLES"
 
@@ -84,8 +86,11 @@ def provider_sort_key(provider: str) -> tuple[int, str]:
 #: live feed is the reading to show. StockAnalysis sits just before it: it is a
 #: live feed like the others, but its coverage is the narrowest (US equities and
 #: ETFs), so it should never be preferred over a leg that carries the same
-#: instrument more broadly when the two tie.
-DEFAULT_ORDER: tuple[str, ...] = (FINVIZ, TRADINGVIEW, YAHOO, SA, BLOOMBERG)
+#: instrument more broadly when the two tie. Investing precedes Bloomberg, whose
+#: delayed feed never wins against another provider on the same instant.
+DEFAULT_ORDER: tuple[str, ...] = (
+    FINVIZ, TRADINGVIEW, YAHOO, SA, INVESTING, BLOOMBERG
+)
 
 #: Providers whose prints can be structurally older than a live feed's, with
 #: the delay they declare and the sentence that explains it.
@@ -159,6 +164,11 @@ class Pair:
     def sa(self) -> Attempt:
         """Return the StockAnalysis attempt, unasked when absent."""
         return self._get(SA)
+
+    @property
+    def investing(self) -> Attempt:
+        """Return the Investing attempt, unasked when absent."""
+        return self._get(INVESTING)
 
     @property
     def bb(self) -> Attempt:
@@ -236,6 +246,12 @@ class Pair:
 
 
 def _error_dict(provider: str, exc: BaseException) -> dict[str, Any]:
+    if isinstance(exc, RateLimited):
+        return {
+            "provider": provider,
+            "code": "RATE_LIMITED",
+            "message": str(exc),
+        }
     if isinstance(exc, ProviderError):
         return exc.to_dict()
     if isinstance(exc, NotApplicable):
@@ -283,6 +299,7 @@ async def ask(
     yahoo_fn: Callable[[], Awaitable[Any]] | None = None,
     bb_fn: Callable[[], Awaitable[Any]] | None = None,
     sa_fn: Callable[[], Awaitable[Any]] | None = None,
+    investing_fn: Callable[[], Awaitable[Any]] | None = None,
     eq_fn: Callable[[], Awaitable[Any]] | None = None,
 ) -> Pair:
     """Run every supplied provider call concurrently and return their attempts.
@@ -311,6 +328,7 @@ async def ask(
         (FINVIZ, fv_fn),
         (YAHOO, yahoo_fn),
         (SA, sa_fn),
+        (INVESTING, investing_fn),
         (BLOOMBERG, bb_fn),
         (EQUIBLES, eq_fn),
     ]
@@ -676,6 +694,7 @@ class FieldSpec:
     absolute_floor: float = 0.0
     yh_get: Callable[[dict[str, Any]], Any] | None = None
     bb_get: Callable[[dict[str, Any]], Any] | None = None
+    investing_get: Callable[[dict[str, Any]], Any] | None = None
     eq_get: Callable[[dict[str, Any]], Any] | None = None
     sa_get: Callable[[dict[str, Any]], Any] | None = None
     #: When set, readings whose observation times differ by more than this many
@@ -712,6 +731,7 @@ class FieldSpec:
             FINVIZ: self.fv_get,
             YAHOO: self.yh_get,
             SA: self.sa_get,
+            INVESTING: self.investing_get,
             BLOOMBERG: self.bb_get,
             EQUIBLES: self.eq_get,
         }.get(provider)
@@ -1149,11 +1169,13 @@ def finalize(
     fv_norm: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     yh_norm: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     sa_norm: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    investing_norm: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     bb_norm: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     tv_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     fv_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     yh_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     sa_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    investing_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     bb_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     eq_norm: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     eq_shape: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
@@ -1161,6 +1183,7 @@ def finalize(
     fv_time: Any = None,
     yahoo_time: Any = None,
     sa_time: Any = None,
+    investing_time: Any = None,
     bb_time: Any = None,
     now: datetime | None = None,
     sources: dict[str, str] | None = None,
@@ -1181,13 +1204,15 @@ def finalize(
     ``pair.errors`` rather than replacing those primary-provider failures.
     Other extra keys are merged into the envelope as before.
 
-    ``tv_norm``/``fv_norm``/``yh_norm``/``sa_norm``/``bb_norm``/``eq_norm``
+    ``tv_norm``/``fv_norm``/``yh_norm``/``sa_norm``/``investing_norm``/
+    ``bb_norm``/``eq_norm``
     map a raw provider payload into the normalised field dict that ``specs``
     read from; when given, every remaining normalised field is attached to the
     output labelled with its source provider. ``eq_norm`` is inert unless the
     calling capability actually created an Equibles attempt.
 
-    ``tv_time``/``fv_time``/``yahoo_time``/``sa_time``/``bb_time`` are the
+    ``tv_time``/``fv_time``/``yahoo_time``/``sa_time``/``investing_time``/
+    ``bb_time`` are the
     **market print** timestamps (not fetch times). When providers answered, every
     compared field resolves to the freshest provider's reading; all originals
     stay in ``comparisons``. ``bb_time`` is passed explicitly because Bloomberg's
@@ -1196,6 +1221,9 @@ def finalize(
     ``now`` is the reference clock for a field's absolute-age ceiling. Pass it
     when the tool can observe the real time: without it the frozen-feed guard is
     inert, which keeps test fixtures (dated in the past) deterministic.
+
+    ``merged_extra._empty_data_none`` additionally preserves an explicitly
+    unavailable ``data: null`` instead of the ordinary reconciler's empty dict.
 
     ``data``/``provider``/``answered``/``comparisons``/``fields`` override the
     reconciled payload, label, comparison verdicts and per-field provenance;
@@ -1210,6 +1238,7 @@ def finalize(
         (FINVIZ, pair.fv, fv_norm, fv_shape),
         (YAHOO, pair.yh, yh_norm, yh_shape),
         (SA, pair.sa, sa_norm, sa_shape),
+        (INVESTING, pair.investing, investing_norm, investing_shape),
         (BLOOMBERG, pair.bb, bb_norm, bb_shape),
         (EQUIBLES, pair.eq, eq_norm, eq_shape),
     ):
@@ -1227,6 +1256,7 @@ def finalize(
         (FINVIZ, fv_time, payloads.get(FINVIZ)),
         (YAHOO, yahoo_time, payloads.get(YAHOO)),
         (SA, sa_time, payloads.get(SA)),
+        (INVESTING, investing_time, payloads.get(INVESTING)),
         (BLOOMBERG, bb_time, payloads.get(BLOOMBERG)),
         (EQUIBLES, None, payloads.get(EQUIBLES)),
     ):
@@ -1314,6 +1344,8 @@ def finalize(
         extra=merged_extra,
     )
     body["notice"] = notice_for(merged)
+    if merged_extra.pop("_empty_data_none", False):
+        body["data"] = None
     if degraded:
         body["notice"] += (
             " WARNING: the provider health monitor reports an upstream change or "
