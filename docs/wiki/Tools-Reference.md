@@ -50,9 +50,10 @@ Finviz's rounding. For AAPL on 17 November 2026, TradingView returned `348.51991
 `348.52`, the same displayed average at different precision. Agreement between those web properties is
 not evidence of independent editorial or analyst coverage.
 
-`analyst_targets` is outside `data`, with a TradingView block when its scanner answers and a Finviz
-block when its quote page answers. Other primary quote providers have no supplied analyst block. It
-never replaces the count from one provider with another's:
+The detailed `analyst_targets` block is outside `data`, with a TradingView block when its scanner
+answers and a Finviz block when its quote page answers. Other primary quote providers have no supplied
+analyst block. Provider-prefixed summaries documented below sit in `data` directly. No block or
+summary replaces one provider's count with another's:
 
 * TradingView's scanner supplies its average target, `price_target_low`, `price_target_high`, rating
   mean and rating count. Its five-key `rating_distribution` follows the forecast page's actual field
@@ -66,8 +67,10 @@ never replaces the count from one provider with another's:
   `forecast_source` records the auxiliary page when it answered.
 * Finviz's snapshot contains only `Target Price` and `Recom`, respectively the mean target and mean
   recommendation. The visible `AnalystRatings` island on the same already-fetched page supplies the
-  target, recommendation, rating list and distinct `rating_firm_count`, with repeated firm actions
-  collapsed. Its separate `rating_distribution` classifies final labels from visible rows into `buy`,
+  target, recommendation and rating list. `rating_firm_count` collapses repeated non-empty firm names;
+  firm and analyst identities are not required for a row's counts. A source row with a missing firm
+  name still contributes to the rating-row total and distributions but invents no firm. The separate
+  `rating_distribution` classifies final labels from visible rows into `buy`,
   `hold`, `sell`, `no_rating` and `unclassified`; unlike Finviz's broad UI fallback, an unknown label is
   not silently called Hold. `rating_category_match` identifies `known_phrase` and audited
   `known_qualifier` matches, or `unclassified`, so a novel label such as `Speculative Buy` does not
@@ -75,8 +78,11 @@ never replaces the count from one provider with another's:
   Finviz's displayed summary, which uses its first valid rating per distinct firm. The row distribution
   is neither a distinct-firm nor a total analyst population.
   `rating_action_count`, `includes_previous_ratings`, `as_of` and source rows expose their
-  derivation. This shorter visible firm list is neither the number of analysts behind its average
-  target nor proof that TradingView's larger populations contradict it.
+  derivation. `rating_label_counts` preserves exact last-label counts, for example Overweight,
+  In-line and Mkt Perform, without institution or analyst names; `unlabeled_row_count` counts
+  missing final labels. `rating_distribution` keeps the broader category mapping. Their counts
+  reconcile to the same visible rows. This shorter visible list is neither the number of analysts
+  behind its average target nor proof that TradingView's larger populations contradict it.
 
 Every Finviz source row preserves the original `rating` and `priceTarget` strings and adds parsed
 `rating_from`, `rating_to`, `rating_category`, `rating_category_match`, `price_target_from` and
@@ -98,11 +104,27 @@ distributions do not join a consensus or an agreement verdict.
 `data` repeats the counts so a payload-only reader need not walk the envelope:
 `tradingview_price_target_estimate_count`, `tradingview_rating_analyst_count`,
 `tradingview_rating_buy_count`, `tradingview_rating_hold_count`,
-`tradingview_rating_sell_count`, `finviz_rating_firm_count` and
-`finviz_rating_action_count`. The TradingView Sell value adds only the scanner's own underperform and
-sell categories; the full five-key distribution stays in `analyst_targets`. Each supplied count has
-its own single-source `fields` entry. An unavailable count stays null and has no `fields` entry, and
-an entirely unanswered quote still returns an empty `data` rather than seven nulls.
+`tradingview_rating_sell_count`, `finviz_rating_firm_count`,
+`finviz_rating_action_count`, `finviz_rating_buy_count`, `finviz_rating_hold_count` and
+`finviz_rating_sell_count`. `tradingview_rating_summary.total` is the three-month rating-analyst
+count and its `distribution` carries Strong Buy, Buy, Hold, Sell and Strong Sell counts.
+`finviz_rating_summary.total` is the visible rating-action-row count and its `distribution` carries
+Buy, Hold, Sell, No Rating and Unclassified counts. `label_counts` preserves exact last labels, for
+example Overweight, In-line and Mkt Perform; its sum plus `unlabeled_row_count` equals the total.
+These summaries require no institution or analyst names. TradingView uses its actual five scanner
+keys for `label_counts`, and `unlabeled_row_count` is null because its scanner supplies ratings rather
+than Finviz-style label rows. The TradingView Sell scalar adds only the scanner's own underperform and
+sell categories.
+Finviz retains each repeated or previous visible action row; its total is not a firm count, an
+all-analyst count or a target-estimate population. Summary `population`, period, previous-rating
+marker and method retain those definitions.
+
+Each supplied scalar or summary has its own single-source `fields` entry. An unavailable scalar
+stays null without a `fields` entry, an unavailable summary is null, and an entirely unanswered quote
+still returns an empty `data`. A TradingView block whose rating total and all rating buckets are null
+has no rating observation, so its summary is null and has no `fields` entry. An observed empty Finviz
+rating list has zeroed counts, while an absent rating list has a null summary without provenance.
+Providers never contribute to a cross-provider recommendation total.
 
 The `session` key in `data` and at the envelope level names the window `data.price` is a print from:
 `pre_market`, `regular`, `post_market` or `overnight`, and `data.price_field` names the provider field it
@@ -481,7 +503,9 @@ analysis or sentiment descriptors.
 `data.analyst_targets` carries the TradingView analyst block, alongside the direct
 `tradingview_price_target_estimate_count`, `tradingview_rating_analyst_count`,
 `tradingview_rating_buy_count`, `tradingview_rating_hold_count`,
-`tradingview_rating_sell_count` and five-key `tradingview_rating_distribution`. The target and rating
+`tradingview_rating_sell_count`, five-key `tradingview_rating_distribution` and
+`tradingview_rating_summary`. The summary contains the three-month total and all five categories, needs
+no institution or analyst names and has its own TradingView `fields` provenance. The target and rating
 populations remain distinct, a missing target count is null, and real zero rating buckets stay zero.
 
 `data.news` uses the same merged latest-10 feed as `stock_news` instead of a

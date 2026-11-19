@@ -83,9 +83,11 @@ own `data_provider`, `providers_answered`, `errors` and technical `provider_call
 failure can therefore return `NONE` while real news remains available. If the Finviz editorial leg
 fails, `stock_why_moving` keeps `data: null` and exposes its independent news only at top level.
 
-**Provider-specific analyst targets stay outside `data`.** `stock_quote` compares
-`price_target_average` between TradingView and Finviz at 0.1 % tolerance, accommodating Finviz's
-rounding. Its top-level `analyst_targets` block instead retains each provider's own figures.
+**Provider-specific analyst details stay separate, with name-free summaries in `data`.**
+`stock_quote` compares `price_target_average` between TradingView and Finviz at 0.1 % tolerance,
+accommodating Finviz's rounding. Its top-level `analyst_targets` block retains each provider's own
+figures; provider-prefixed scalar counts and rating summaries in `data` mirror only that provider.
+The summaries need no institution or analyst names.
 
 TradingView's one-year `price_target_estimate_count` is distinct from its past-three-month
 `rating_analyst_count`. Scanner-supplied `price_target_low` / `price_target_high` and a five-key
@@ -94,8 +96,10 @@ TradingView's one-year `price_target_estimate_count` is distinct from its past-t
 `recommendation_under`, `strong_sell` = `recommendation_sell`. `source` names the scanner and
 `forecast_source` names the supplementary forecast page, when it answered.
 
-Finviz's `rating_firm_count` counts distinct firms in its shorter visible ratings table, not
-contributors to its average target. `rating_action_count` counts those source rows, and
+Finviz's `rating_firm_count` counts distinct non-empty firm names in its shorter visible ratings table,
+not contributors to its average target. A row needs no firm or analyst identity for its rating counts;
+a missing firm invents no name and does not remove the row. `rating_action_count` counts those source
+rows, and
 `rating_distribution` classifies each row's final rating label as `buy`, `hold`, `sell` or
 `no_rating`, with unrecognized final labels in `unclassified`; it is not a distinct-firm or total
 analyst population. These derived row counts can differ from Finviz's displayed summary, which uses
@@ -109,7 +113,9 @@ calculated from the newest target and only the same response's SSR `lastClose`.
 `implied_upside_unit` make that explicit. Missing, nonpositive or non-finite target or reference values
 remain null, as does an upside that cannot be represented as a finite number. Another provider's price
 is never substituted. `includes_previous_ratings`, `as_of` and the
-source list expose the derivation.
+source list expose the derivation. Finviz's `rating_label_counts` separately preserves the exact
+last-label counts rather than erasing Overweight, In-line or Mkt Perform into their broad classes;
+missing last labels are recorded in `unlabeled_row_count` and remain in the total.
 
 Counts and provider blocks do not form agreement, consensus or independent editorial verification.
 TradingView's auxiliary forecast-page failure adds an error with `detail.capability:
@@ -117,9 +123,17 @@ analyst_forecasts` but does not change primary quote coverage or `data_provider`
 count remains null while scanner fields stay available.
 
 For payload-only readers, `stock_quote.data` also repeats the counts as provider-prefixed fields with
-their own single-source provenance; `combined_analysis.data` mirrors the TradingView counts and its
+their own single-source provenance. `tradingview_rating_summary` has the three-month rating-analyst
+total and all five scanner classes. `finviz_rating_summary` has the visible-rating-row total and Buy,
+Hold, Sell, No Rating and Unclassified counts; direct Finviz Buy/Hold/Sell counts are also supplied.
+Finviz `label_counts` preserves the exact last labels without collapsing their names into the broad
+class map, and `unlabeled_row_count` reconciles blank labels to the same total. No summary requires
+institution or analyst names, merges provider populations or claims a common
+recommendation denominator. `combined_analysis.data` mirrors the TradingView counts, summary and
 five-key distribution in the same way. A real zero bucket differs from a null missing observation,
-and a `NONE` quote has no analyst keys in its empty `data`.
+and a `NONE` quote has no analyst keys in its empty `data`. An all-null TradingView rating observation
+has no summary provenance. A supplied Finviz empty-row count is zero, while a wholly absent rating
+observation leaves its summary null. An observed empty Finviz list, however, retains zeroed counts.
 
 **An analyst count is only ever its declared population.** Price-target estimators, rating analysts,
 visible rating firms, EPS-estimate contributors and rating action rows are five different scopes.

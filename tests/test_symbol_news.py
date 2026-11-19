@@ -180,6 +180,11 @@ async def test_stock_news_merges_all_real_provider_shapes(
     monkeypatch.setattr(yh_access, "news", yh_news)
     result = await tools_market.stock_news("AAPL")
     assert result["data_provider"] == "PARTIAL"
+    assert result["providers_answered"] == ["FINVIZ", "YAHOO"]
+    assert result["data"]["data_provider"] == "PARTIAL"
+    assert result["data"]["providers_answered"] == ["FINVIZ", "YAHOO"]
+    assert result["errors"][0]["provider"] == "TRADINGVIEW"
+    assert "MARKETAUX_API_TOKEN" in result["errors"][0]["message"]
     assert result["data"]["count"] == 2
     assert result["data"]["items"][0]["title"] == "Yahoo-only latest breaking Apple story"
     merged = result["data"]["items"][1]

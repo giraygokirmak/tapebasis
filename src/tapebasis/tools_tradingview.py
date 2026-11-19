@@ -19,6 +19,7 @@ import asyncio
 from typing import Any
 
 from . import blocking_pool, fv_access, news as symbol_news, sentiment, tv_access, yh_access
+from .analyst import rating_summary as _rating_summary
 from .health import FINVIZ, MONITOR, TRADINGVIEW, YAHOO
 from .providers_state import (
     DataProvider,
@@ -879,8 +880,10 @@ async def combined_analysis(symbol: str, exchange: str = "NASDAQ", timeframe: st
         Envelope with ``data.analysis``, ``data.sentiment``, ``data.news`` and
         ``data.price_cross_check``. The top-level ``analyst_targets.TRADINGVIEW``
         block preserves the separate scanner rating and forecast target analyst
-        populations. Analyst supplement failures leave the primary analysis in
-        place and are reported with their own capability labels.
+        populations. Its name-free summary exposes the three-month total and all
+        five scanner categories directly, with TradingView field provenance.
+        Analyst supplement failures leave the primary analysis in place and are
+        reported with their own capability labels.
     """
     ticker = strip_exchange(symbol).upper()
     yh_res = await _yahoo_resolution(symbol)
@@ -950,6 +953,11 @@ async def combined_analysis(symbol: str, exchange: str = "NASDAQ", timeframe: st
             "tradingview_rating_buy_count": distribution.get("buy"),
             "tradingview_rating_hold_count": distribution.get("hold"),
             "tradingview_rating_sell_count": distribution.get("sell"),
+            "tradingview_rating_summary": _rating_summary(
+                analyst_targets,
+                count_key="rating_analyst_count",
+                population="past_three_month_rating_analysts",
+            ),
             "tradingview_rating_distribution": {
                 key: distribution.get(key)
                 for key in ("strong_buy", "buy", "hold", "sell", "strong_sell")
@@ -975,6 +983,11 @@ async def combined_analysis(symbol: str, exchange: str = "NASDAQ", timeframe: st
             issue["provider"] in providers_in(pair) for issue in MONITOR.issues()
         ),
     )
+    if analyst_targets is not None:
+        if data.get("tradingview_rating_summary") is not None:
+            response.setdefault("fields", {})["tradingview_rating_summary"] = field_source(
+                TRADINGVIEW, supplied=[TRADINGVIEW]
+            )
     symbol_news.attach_news(response, news)
     return response
 

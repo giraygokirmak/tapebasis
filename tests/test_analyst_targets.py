@@ -99,6 +99,42 @@ def test_finviz_counts_distinct_visible_firms_not_rating_rows():
     assert shaped["price_target_average"] == 348.52
 
 
+def test_finviz_rating_rows_need_no_firm_or_analyst_identity():
+    """Missing identities do not reduce row totals or hide their exact labels."""
+    shaped = parse_analyst_ratings(_ratings_markup({
+        "ratings": [
+            {"rating": "Overweight", "analyst": "Visible identity is not required"},
+            {"firm": "", "rating": None},
+        ],
+        "lastClose": 100,
+    }))
+    assert shaped["rating_firms"] == 0
+    assert shaped["ratings_included"] == 2
+    assert shaped["rating_distribution"] == {
+        "buy": 1,
+        "hold": 0,
+        "sell": 0,
+        "no_rating": 0,
+        "unclassified": 1,
+    }
+    assert shaped["rating_label_counts"] == {"Overweight": 1}
+    assert shaped["unlabeled_row_count"] == 1
+    assert sum(shaped["rating_label_counts"].values()) + shaped["unlabeled_row_count"] == 2
+
+
+def test_finviz_observed_rating_collection_can_have_zero_rows():
+    """An observed empty list is zero, not the null returned for absent data."""
+    shaped = parse_analyst_ratings(_ratings_markup({"ratings": []}))
+    assert shaped["rating_firms"] == 0
+    assert shaped["ratings_included"] == 0
+    assert shaped["rating_distribution"] == {
+        "buy": 0, "hold": 0, "sell": 0, "no_rating": 0, "unclassified": 0,
+    }
+    assert shaped["rating_label_counts"] == {}
+    assert shaped["unlabeled_row_count"] == 0
+    assert shaped["ratings"] == []
+
+
 @pytest.mark.asyncio
 async def test_finviz_analyst_block_uses_the_same_quote_fetch(monkeypatch):
     """The ratings island costs no extra Finviz page request."""
@@ -130,6 +166,10 @@ def test_finviz_normalizes_transitions_and_keeps_auditable_source_text():
         "no_rating": 0,
         "unclassified": 1,
     }
+    assert shaped["rating_label_counts"] == {
+        "Buy": 1, "Mkt Perform": 1, "Special New Rating": 1,
+    }
+    assert shaped["unlabeled_row_count"] == 0
     first, second, third = shaped["ratings"]
     assert first["rating"] == "Hold to Buy"
     assert first["rating_from"] == "Hold"
@@ -265,7 +305,6 @@ def test_finviz_upside_uses_only_the_same_ssr_price_and_positive_target():
     [
         "",
         '<script data-ssr-props="ssr-island-analyst-ratings-0">bad json</script>',
-        '<script data-ssr-props="ssr-island-analyst-ratings-0">{"ratings": []}</script>',
         '<script data-ssr-props="another-island">{"ratings": [{"firm": "Bank"}]}</script>',
     ],
 )
@@ -542,6 +581,35 @@ async def test_combined_analysis_preserves_distinct_analyst_populations(monkeypa
     assert result["data"]["tradingview_rating_distribution"] == {
         "strong_buy": 25, "buy": 12, "hold": 10, "sell": 1, "strong_sell": 2,
     }
+    assert result["data"]["tradingview_rating_summary"] == {
+        "total": 50,
+        "population": "past_three_month_rating_analysts",
+        "distribution": {
+            "strong_buy": 25, "buy": 12, "hold": 10, "sell": 1, "strong_sell": 2,
+        },
+        "label_counts": {
+            "strong_buy": 25, "buy": 12, "hold": 10, "sell": 1, "strong_sell": 2,
+        },
+        "unlabeled_row_count": None,
+        "rating_period": "past 3 months",
+        "includes_previous_ratings": None,
+        "rating_distribution_method": "scanner_rating_buckets",
+    }
+    assert result["fields"]["tradingview_rating_summary"]["source"] == "TRADINGVIEW"
+
+
+@pytest.mark.asyncio
+async def test_combined_analysis_all_null_ratings_have_no_summary_provenance(monkeypatch):
+    """A scanner row with no ratings cannot create a zero-filled summary."""
+    result = await _combined_analysis_fixture(
+        monkeypatch,
+        {"currency": "USD"},
+        {"price_target_estimates_num": 39},
+    )
+    summary = result["data"]["tradingview_rating_summary"]
+    assert summary is None
+    assert "tradingview_rating_summary" not in result["fields"]
+    assert result["analyst_targets"]["TRADINGVIEW"]["price_target_estimate_count"] == 39
 
 
 @pytest.mark.asyncio

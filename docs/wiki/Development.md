@@ -30,7 +30,8 @@ Finviz page would fail for reasons unrelated to the code.
 | --- | --- |
 | `test_reconcile.py` | Fan-out, multi-provider comparison, tolerances, precedence, notice text |
 | `test_tools_merge.py` | End-to-end tool contract with faked providers (`ALL` vs single-source, `not_comparable`), plus the live print replacing the stale regular field and a row's price, change and previous close describing one session |
-| `test_analyst_targets.py` | Finviz and TradingView analyst parsers, provider-specific count populations, rating transitions, target bounds and rating buckets, finite-number guards, rate limiting and absent forecast coverage |
+| `test_analyst_targets.py` | Finviz and TradingView analyst parsers, provider-specific count populations, identity-free row counting, rating transitions, target bounds and rating buckets, finite-number guards, rate limiting and absent forecast coverage |
+| `test_rating_summaries.py` | Direct provider-specific recommendation summaries, exact-label preservation and empty versus missing observations |
 | `test_upstream_contract.py` | Regression tests for every upstream behaviour found by live probing (see below) |
 | `test_shapers.py` | Pure payload shapers |
 | `test_symbols.py` | BRK-B ↔ BRK.B, the instrument registry (completeness, no colliding spellings), index aliasing, RUT/IWM separation, NDX row boundaries, `WTI=F` futures aliases, snapshot-list exclusion, per-provider `none` resolutions |

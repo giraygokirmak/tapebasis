@@ -5,6 +5,17 @@ Registry availability is recorded separately where a tag was published only part
 
 ## [Unreleased]
 
+### Fixed
+
+- `stock_quote.data` now returns name-free, provider-prefixed rating summaries with totals and every
+  supplied class: TradingView's three-month Strong Buy through Strong Sell distribution and Finviz's
+  visible-row Buy, Hold, Sell, No Rating and Unclassified distribution. Finviz exact `label_counts`
+  preserve Overweight, In-line, Mkt Perform and other actual last labels, while blank labels remain
+  in `unlabeled_row_count`. Direct Finviz Buy/Hold/Sell counts and consistent single-source `fields`
+  descriptors accompany them. Finviz's total remains
+  visible rating actions, not institutions or all analysts. `combined_analysis.data` exposes the same
+  TradingView summary. No cross-provider recommendation total is inferred.
+
 ## [1.2.0] - 2026-11-18
 
 ### Added

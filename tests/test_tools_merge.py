@@ -210,6 +210,38 @@ async def test_quote_exposes_provider_specific_analyst_counts(fake_providers, mo
     assert result["data"]["tradingview_rating_sell_count"] == 3
     assert result["data"]["finviz_rating_firm_count"] == 16
     assert result["data"]["finviz_rating_action_count"] == 20
+    assert result["data"]["finviz_rating_buy_count"] == 7
+    assert result["data"]["finviz_rating_hold_count"] == 12
+    assert result["data"]["finviz_rating_sell_count"] == 0
+    assert result["data"]["tradingview_rating_summary"] == {
+        "total": 50,
+        "population": "past_three_month_rating_analysts",
+        "distribution": {
+            "strong_buy": 25, "buy": 12, "hold": 10, "sell": 1, "strong_sell": 2,
+        },
+        "label_counts": {
+            "strong_buy": 25, "buy": 12, "hold": 10, "sell": 1, "strong_sell": 2,
+        },
+        "unlabeled_row_count": None,
+        "rating_period": "past 3 months",
+        "includes_previous_ratings": None,
+        "rating_distribution_method": "scanner_rating_buckets",
+    }
+    finviz_summary = result["data"]["finviz_rating_summary"]
+    assert finviz_summary["total"] == 20
+    assert finviz_summary["population"] == "visible_rating_rows_final_labels"
+    assert sum(finviz_summary["distribution"].values()) == finviz_summary["total"]
+    assert finviz_summary["label_counts"]["Overweight"] == 3
+    assert sum(finviz_summary["label_counts"].values()) == finviz_summary["total"]
+    assert finviz_summary["unlabeled_row_count"] == 0
+    for key, provider in (
+        ("tradingview_rating_summary", "TRADINGVIEW"),
+        ("finviz_rating_summary", "FINVIZ"),
+        ("finviz_rating_buy_count", "FINVIZ"),
+        ("finviz_rating_hold_count", "FINVIZ"),
+        ("finviz_rating_sell_count", "FINVIZ"),
+    ):
+        assert result["fields"][key]["source"] == provider
     assert result["fields"]["tradingview_rating_analyst_count"]["supplied"] == [
         "TRADINGVIEW"
     ]
@@ -551,23 +583,54 @@ async def test_bloomberg_never_wins_the_freshness_tie_break(fake_providers):
 
 
 @pytest.mark.asyncio
-async def test_bloomberg_failure_is_an_error_not_a_lost_response(fake_providers):
-    """A blocked Bloomberg leg is reported, and it costs the ALL claim.
+async def test_bloomberg_failure_is_an_error_not_a_lost_response(
+    fake_providers, monkeypatch, _no_bloomberg_network
+):
+    """A real access-layer refusal stays visible beside successful quote legs.
 
-    Bloomberg was asked, Bloomberg failed, so the response is PARTIAL. Calling
-    that ``ALL`` would claim complete coverage while listing the failure in the
-    same payload.
+    Bloomberg was asked and failed, so the response is PARTIAL. Its typed 403
+    refusal must not be flattened to NO_DATA or hide the other readings.
     """
+    from tapebasis import bb_access
     from tapebasis.providers_state import ProviderError
 
-    # The fixture raises whatever exception object the state holds.
-    fake_providers["bb"] = ProviderError(
-        "BLOOMBERG", "HTTP 403 bot wall", code="UPSTREAM_BLOCKED"
+    class BlockedResponse:
+        """Minimal upstream refusal for the access-layer surfacing path."""
+        status_code = 403
+        text = "robot wall"
+
+    class BlockedSession:
+        """Serve only a local refusal, never a live page."""
+        async def get(self, url):
+            """Return the refused response for the expected quote URL."""
+            assert url.endswith("/quote/NVDA:US")
+            return BlockedResponse()
+
+    async def immediate(_provider, function, *args, **kwargs):
+        """Run the supplied local fake without sleeping on provider pacing."""
+        return await function()
+
+    real_fetch = _no_bloomberg_network
+    real_paced = bb_access.limiter("BLOOMBERG")
+    paced = SimpleNamespace(
+        cache_get=lambda _key, _ttl: None,
+        note_rate_limited=lambda: None,
     )
+    monkeypatch.setattr(bb_access, "_session", lambda: BlockedSession())
+    monkeypatch.setattr(bb_access, "limiter", lambda _provider: paced)
+    monkeypatch.setattr(bb_access, "call", immediate)
+    with pytest.raises(ProviderError) as blocked:
+        await real_fetch("/quote/NVDA:US", "test:NVDA:US")
+    assert blocked.value.code == "UPSTREAM_BLOCKED"
+    assert "403" in blocked.value.message
+    fake_providers["bb"] = blocked.value
     result = await tools_market.stock_quote("AAPL")
     assert result["data_provider"] == "PARTIAL"
     assert result["providers_answered"] == ["TRADINGVIEW", "FINVIZ", "YAHOO"]
     assert [e["provider"] for e in result["errors"]] == ["SA", "BLOOMBERG"]
+    error = next(e for e in result["errors"] if e["provider"] == "BLOOMBERG")
+    assert error["code"] == "UPSTREAM_BLOCKED"
+    assert "403" in error["message"]
     assert result["data"]["price"] == pytest.approx(331.9)
 
 

@@ -259,8 +259,14 @@ contributors to a common denominator and do not form consensus. A forecast-page 
 `analyst_forecasts` error and does not change primary quote coverage or remove scanner distributions.
 The direct `data` payload repeats provider-specific target, rating-analyst, Buy/Hold/Sell,
 visible-firm and action-row counts; each has its own source and population, null means unreported,
-and zero remains a real count. `combined_analysis.data` mirrors the TradingView counts and complete
-five-bucket distribution.
+and zero remains a real count. `tradingview_rating_summary` exposes the three-month analyst-rating
+total with all five buckets; `finviz_rating_summary` exposes the visible-row total with Buy, Hold,
+Sell, No Rating and Unclassified counts, plus direct Finviz Buy/Hold/Sell fields. Its `label_counts`
+also preserves exact values such as Overweight, In-line and Mkt Perform; `unlabeled_row_count`
+retains blank labels. Neither summary needs institution or analyst names, and the providers are
+never added into one recommendation total.
+`combined_analysis.data` mirrors the TradingView counts, name-free summary and complete five-bucket
+distribution.
 
 `stock_prices` exposes per-symbol `misses` and typed `errors`, so one failed ticker does not sink or
 silently vanish from the batch. A returned row without a usable price is `NO_DATA`, not an answer.

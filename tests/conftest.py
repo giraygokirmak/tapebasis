@@ -64,15 +64,19 @@ def _no_bloomberg_network(monkeypatch):
     Bloomberg is asked by ``stock_quote`` and ``stock_prices``, so a fixture
     that forgets to fake it would otherwise hit the live site (and the bot
     wall) from the test suite. Tests that exercise the page decoder patch
-    ``_fetch_html`` themselves, which overrides this.
+    ``_fetch_html`` themselves, which overrides this. The yielded original
+    function lets a focused test serve its synthetic transport refusal while
+    every other test retains this network guard.
     """
     from tapebasis import bb_access
+
+    real_fetch = bb_access._fetch_html
 
     async def refuse(path, cache_key):
         raise AssertionError(f"test attempted a live bloomberg.com fetch of {path}")
 
     monkeypatch.setattr(bb_access, "_fetch_html", refuse)
-    yield
+    yield real_fetch
 
 
 @pytest.fixture(autouse=True)
@@ -300,6 +304,16 @@ def fv_quote():
                 "unclassified": 1,
             },
             "rating_distribution_method": "visible_rating_rows_final_labels",
+            "rating_label_counts": {
+                "Buy": 4,
+                "Overweight": 3,
+                "Hold": 8,
+                "Mkt Perform": 2,
+                "Sector Weight": 1,
+                "In-line": 1,
+                "Special New Rating": 1,
+            },
+            "unlabeled_row_count": 0,
             "implied_upside_reference_price": 331.9,
             "implied_upside_unit": "decimal_ratio",
             "includes_previous_ratings": True,

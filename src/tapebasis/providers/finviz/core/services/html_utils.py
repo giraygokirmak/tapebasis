@@ -264,13 +264,18 @@ def _normalize_rating_row(row: dict[str, Any], last_close: Any) -> dict[str, Any
 def parse_analyst_ratings(html: str) -> Optional[dict[str, Any]]:
     """Return Finviz's analyst target and its distinct visible rating populations.
 
-    The source count is the number of distinct firm names in the SSR's visible
-    ``ratings`` entries, including entries marked as previous ratings. Repeated
-    actions from one firm are therefore not additional firms. The Buy, Hold,
+    The source firm count is the number of distinct non-empty firm names in the
+    SSR's visible ``ratings`` entries, including entries marked as previous
+    ratings. Repeated actions from one firm are therefore not additional firms.
+    A rating row needs no firm or analyst identity: missing names never discard
+    it from the row total or rating distributions. The Buy, Hold,
     Sell and No Rating distribution instead counts visible rows, after their
     final rating labels are classified. ``unclassified`` counts labels absent
-    from the audited dictionaries. Neither distribution is a target-estimate
-    population or a count of all contributing analysts.
+    from the audited dictionaries. ``rating_label_counts`` separately preserves
+    the exact final-label counts, including Overweight, In-line and Mkt Perform,
+    without institution or analyst identities. ``unlabeled_row_count`` keeps
+    empty labels visible. Neither distribution is a target-estimate population
+    or a count of all contributing analysts.
 
     Each source row retains its original strings and gains parsed rating and
     target transitions. ``price_target_to`` follows Finviz's frontend by using
@@ -278,7 +283,8 @@ def parse_analyst_ratings(html: str) -> Optional[dict[str, Any]]:
     relative to the same SSR block's ``lastClose`` and is expressed as a decimal
     ratio. ``implied_upside_reference_price`` exposes that same reference.
 
-    Returns ``None`` when the island or its rating rows are absent. Malformed
+    An observed empty rating list returns zeroed counts and distributions.
+    Returns ``None`` only when the island or its rating list is absent. Malformed
     individual rows are ignored rather than inventing a firm name or target.
     """
     props = extract_ssr_props(html, "ssr-island-analyst-ratings-0")
@@ -290,16 +296,20 @@ def parse_analyst_ratings(html: str) -> Optional[dict[str, Any]]:
         if not isinstance(row, dict):
             continue
         firm = _WS_RE.sub(" ", str(row.get("firm") or "")).strip()
-        if not firm:
-            continue
         ratings.append(_normalize_rating_row(row, props.get("lastClose")))
-        firm_names.add(firm.casefold())
-    if not ratings:
-        return None
+        if firm:
+            firm_names.add(firm.casefold())
     distribution = {"buy": 0, "hold": 0, "sell": 0, "no_rating": 0, "unclassified": 0}
+    label_counts: dict[str, int] = {}
+    unlabeled_row_count = 0
     for row in ratings:
         category = row["rating_category"]
         distribution["unclassified" if category is None else category.lower().replace(" ", "_")] += 1
+        label = row["rating_to"]
+        if label is None:
+            unlabeled_row_count += 1
+        else:
+            label_counts[label] = label_counts.get(label, 0) + 1
     return {
         "price_target_average": props.get("targetPrice"),
         "mean_recommendation": props.get("recom"),
@@ -307,6 +317,8 @@ def parse_analyst_ratings(html: str) -> Optional[dict[str, Any]]:
         "ratings_included": len(ratings),
         "rating_distribution": distribution,
         "rating_distribution_method": "visible_rating_rows_final_labels",
+        "rating_label_counts": dict(sorted(label_counts.items())),
+        "unlabeled_row_count": unlabeled_row_count,
         "implied_upside_reference_price": _positive_finite_number(props.get("lastClose")),
         "implied_upside_unit": "decimal_ratio",
         "includes_previous_ratings": True,

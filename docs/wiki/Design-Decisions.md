@@ -1501,6 +1501,17 @@ a price substitution. An auxiliary forecast failure removes only its estimate co
 range and distribution survive. These richer observations still do not prove cross-provider agreement,
 a shared analyst denominator or editorial consensus.
 
+Provider-prefixed `data` summaries expose those counts without requiring consumers to walk source
+rows or know institution or analyst names. `tradingview_rating_summary` supplies the three-month
+analyst-rating total and all five scanner classes. `finviz_rating_summary` supplies the visible-row
+total with Buy, Hold, Sell, No Rating and Unclassified counts, plus scalar Buy/Hold/Sell fields.
+Its `label_counts` retains exact values such as Overweight, In-line and Mkt Perform, and
+`unlabeled_row_count` retains blank last labels. Both map and sum invariants are testable without
+institution or analyst identity. Existing detail blocks stay intact. A Finviz total remains visible
+actions including previous or
+repeated actions, not a firm count. `combined_analysis.data` reuses the same neutral summary builder
+and single-source TradingView provenance; no recommendation total combines providers.
+
 ---
 
 ## Equibles stays isolated, authenticated and plan-gated

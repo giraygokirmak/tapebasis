@@ -28,6 +28,7 @@ from . import (
     tv_access,
     yh_access,
 )
+from .analyst import rating_summary as _rating_summary
 from .freshness import parse_market_timestamp
 from .health import MONITOR
 from .merge_helpers import (
@@ -582,9 +583,10 @@ def _analyst_target_blocks(
     Its source rows retain their original rating and target strings alongside
     parsed transitions. Each row's upside uses only the same SSR's lastClose.
 
-    The blocks live outside ``data``: ``data`` has one selected value and one
-    origin per compared field, while each analyst block belongs wholly to its
-    named provider. Counts are not compared or used as editorial corroboration.
+    The detail blocks live outside ``data``: ``data`` has one selected value
+    and one origin per compared field, while each analyst block belongs wholly
+    to its named provider. Provider-prefixed counts and summaries in ``data``
+    mirror those blocks without comparing populations or claiming corroboration.
     """
     blocks: dict[str, dict[str, Any]] = {}
     if pair.tv.payload is not None:
@@ -633,6 +635,8 @@ def _analyst_target_blocks(
             "rating_action_count": targets.get("ratings_included"),
             "rating_distribution": targets.get("rating_distribution"),
             "rating_distribution_method": targets.get("rating_distribution_method"),
+            "rating_label_counts": targets.get("rating_label_counts"),
+            "unlabeled_row_count": targets.get("unlabeled_row_count"),
             "implied_upside_reference_price": targets.get("implied_upside_reference_price"),
             "implied_upside_unit": targets.get("implied_upside_unit"),
             "includes_previous_ratings": targets.get("includes_previous_ratings"),
@@ -648,13 +652,14 @@ def _analyst_target_blocks(
 
 
 def _analyst_summary(blocks: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """Return provider-scoped analyst counts for direct reading under ``data``.
+    """Return provider-scoped analyst counts and name-free rating summaries.
 
     Each count keeps the population it describes. TradingView's one-year target
     contributors and its past-three-month rating contributors are separate;
-    Finviz's visible rating firms and action rows are separate again. A missing
-    observation stays null instead of becoming zero or another population's
-    total.
+    Finviz's visible rating firms and action rows are separate again. The two
+    summaries expose every supplied rating category directly under ``data``,
+    without needing institution or analyst names. A missing observation stays
+    null instead of becoming zero or another population's total.
     """
     tv = blocks.get(TRADINGVIEW) or {}
     fv = blocks.get(FINVIZ) or {}
@@ -664,8 +669,21 @@ def _analyst_summary(blocks: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "tradingview_rating_buy_count": tv.get("rating_buy_count"),
         "tradingview_rating_hold_count": tv.get("rating_hold_count"),
         "tradingview_rating_sell_count": tv.get("rating_sell_count"),
+        "tradingview_rating_summary": _rating_summary(
+            tv,
+            count_key="rating_analyst_count",
+            population="past_three_month_rating_analysts",
+        ),
         "finviz_rating_firm_count": fv.get("rating_firm_count"),
         "finviz_rating_action_count": fv.get("rating_action_count"),
+        "finviz_rating_summary": _rating_summary(
+            fv,
+            count_key="rating_action_count",
+            population="visible_rating_rows_final_labels",
+        ),
+        "finviz_rating_buy_count": (fv.get("rating_distribution") or {}).get("buy"),
+        "finviz_rating_hold_count": (fv.get("rating_distribution") or {}).get("hold"),
+        "finviz_rating_sell_count": (fv.get("rating_distribution") or {}).get("sell"),
     }
 
 
@@ -721,7 +739,10 @@ async def stock_quote(symbol: str) -> dict[str, Any]:
         records how each provider's ticker was derived. ``analyst_targets``
         retains each provider's own target, analyst-count scope, rating
         distribution and, for Finviz, the visible rating actions used to derive
-        its distinct firm count. Finviz row transitions and same-SSR implied
+        its distinct firm count. Name-free ``data`` summaries return TradingView's
+        three-month analyst total and Finviz's visible-action total with every
+        supplied rating class and exact final-label count, never one combined
+        cross-provider total. Finviz row transitions and same-SSR implied
         upside are retained. A failed forecast page adds a capability-tagged
         error without changing the primary quote's coverage. ``session`` names
         the window the served ``price`` printed in (``pre_market``, ``regular``,
