@@ -5,7 +5,23 @@ Registry availability is recorded separately where a tag was published only part
 
 ## [Unreleased]
 
+### Fixed
+
+- Corrected the `1.2.1` partial-publication record and withdrew the unsupported claim that its npm
+  stage-only secret was absent. Credential observations and log-based diagnoses are now distinct.
+  Repository publication and recovery use authenticated credential-backed REST calls and repository
+  scripts, never agent browser automation. Human deployment, account and two-factor approvals remain
+  direct user actions.
+
 ## [1.2.1] - 2026-11-19
+
+Publication is partial. Protected tag run `44525524919` published and verified the PyPI wheel and
+sdist on immutable commit `f1bf2ee0aa1154fcff4e23d44c2dd9e418d4ae69`, but Publish job
+`135568133543` failed at npm staging. The visible job page exposes only a generic exit code, not a
+missing-secret diagnosis. npm remains at `1.2.0`; GHCR, the MCP Registry and the GitHub Release steps
+remain incomplete. An earlier statement that the npm stage-only secret was absent during this run was
+unsupported and is withdrawn. The original tag and tested artifacts must not be replaced; protected
+package continuation remains the recovery path.
 
 ### Added
 

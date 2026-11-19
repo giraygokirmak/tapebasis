@@ -1302,6 +1302,19 @@ staging command's success message is not evidence, because npm can report a stag
 is live. Only the version and SHA-512 comparison counts. A stage-only token can still move dist-tags and
 deprecate versions, so it is not a complete security boundary, and a token-based staged publication has
 no trusted-publishing provenance attestation.
+A generic failed step is not evidence of a missing secret. Before assigning a cause, inspect the
+complete authenticated step log for the empty-secret guard, credential rejection or npm staging
+error without copying credential values. A GitHub secret list is a name-only current-state reading:
+it cannot expose an earlier run's injected value, prove revocation at the npm account, or disprove a
+maintainer's later restoration. Historical release cleanup records likewise are not current credential
+inventories. A mistaken removal or restoration must be recorded as an observed action separately from
+an inference. Registry read-back still determines whether an interrupted command changed remote state.
+Repository publication and recovery never use the browse automation plugin, including for settings or
+secret inspection, deployment approval, workflow dispatch or registry publication. Credential-backed
+GitHub REST calls and repository scripts are the only agent-operated publication interface. A human
+account or two-factor approval is handed off for direct user action through the protected registry
+control, never submitted through agent browser automation.
+
 Npm stages the tested archive with an explicit `./dist/` path. Without `./`, npm parses the argument as
 a GitHub repository shortcut and may fail over SSH before authentication starts. The CLI version,
 repository binding and OIDC identity remain unchanged when correcting this argument parsing. The source

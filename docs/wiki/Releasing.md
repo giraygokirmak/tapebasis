@@ -1,5 +1,26 @@
 # Releasing
 
+The `v1.2.1` publication remains partial on immutable tag commit
+`f1bf2ee0aa1154fcff4e23d44c2dd9e418d4ae69`. Protected tag run `44525524919` passed all supported
+Python versions and built the source artifacts. Its approved Publish job `135568133543` uploaded the
+PyPI wheel and sdist, independently verified PyPI `1.2.1`, then failed at npm staging. Live npm still
+reports `1.2.0`; GHCR, the MCP Registry and the GitHub Release steps did not run. The source artifact
+must not be rebuilt or the tag moved. Recovery remains `resume_source_run=44525524919` with
+`resume_tag=v1.2.1` after the missing npm prerequisite is corrected and the registry state is checked.
+
+The visible job page for `135568133543` shows only `Error: Process completed with exit code 1` after
+the collapsed npm-staging command. It does not name a failing shell line, distinguish an empty secret
+from an npm rejection, or prove that staging produced no server-side change. An earlier report here
+wrongly combined that generic failure with the `1.2.0` history below and a secret-page observation,
+then declared `TAPEBASIS_NPM_STAGE_TOKEN` absent during the tag job. That conclusion was unsupported.
+Read-only name-only inspection after the run found no secret with that name in the GitHub environment
+or repository secret lists, but it neither shows the job's injected value nor disproves that the
+maintainer re-added a token. No stage-token value was read, modified or deleted during these checks. Treat
+this as an unclassified staging failure until the complete authenticated log or a fresh protected
+continuation identifies the cause.
+
+## Completed v1.2.0 publication
+
 The `v1.2.0` publication is complete on immutable tag commit
 `539835d30611ce4f455bf55c64a337d10ff03bbe`. Protected tag run `44356014425` validated the source on
 all supported Python versions, built the tested artifacts, published the PyPI wheel and sdist, then
@@ -149,13 +170,11 @@ publishable registry content absent. Do not move the tag or rebuild replacement 
    `1` and `latest`, each after a second live match to the verified `1.1.4` root digest
    `sha256:c16423260ee6a777f2fa79e9b799da7e9552b136593d314e09243121b1397597`. Read-only GHCR
    inspection on 2026-11-18 found `1.1`, `1` and `latest` at that predecessor and both `1.2` and
-   `1.2.0` absent. The options are valid only for their hard-coded versions. Independently reviewed `1.2.1` normal
-    publication and its package continuation advance only `1.2`, `1` and `latest`, each after a
-    second live match to the verified `1.2.0` root digest
-    `sha256:91e9f419c8abff54ab9f35285e6306731df1736b8db43959f0d45b0805647c39`. Read-only GHCR
-    GHCR inspection on 2026-11-19 found `1.2`, `1`, `1.2.0` and `latest` at that predecessor and
-    `1.2.1` absent. The options are valid only for their hard-coded versions.
-    absent.
+   `1.2.0` absent. Independently reviewed `1.2.1` normal publication and its package continuation
+   advance only `1.2`, `1` and `latest`, each after a second live match to the verified `1.2.0`
+   root digest `sha256:91e9f419c8abff54ab9f35285e6306731df1736b8db43959f0d45b0805647c39`. Read-only
+   GHCR inspection on 2026-11-19 found `1.2`, `1`, `1.2.0` and `latest` at that predecessor and
+   `1.2.1` absent. The options are valid only for their hard-coded versions.
    An exact-version conflict, unrelated conflict, wrong predecessor, wrong version, authorization
    failure or transport failure cannot advance the affected alias. A successfully imported exact tag
    or an earlier approved alias is not retried unnecessarily. Other ordinary tag publications, other
@@ -274,10 +293,20 @@ OIDC publisher. This is a bootstrap limitation, not a permanent token requiremen
 1. Verify `npm view tapebasis version` reports that the package does not exist. If someone else has
    claimed it, choose another available unscoped name and update `package.json`, the lockfile,
    `server.json`, install examples and release checker together. Do not publish over another package.
-2. Run the full test and package gate from a clean checkout at the intended release commit. These
-   authenticated release actions use the configured `git credential` helper and the repository's release
-   scripts directly. Do not require sudo, install Homebrew, or reproduce a GitHub `workflow_dispatch`
-   through browser HTML forms. Pass human approvals only through the protected GitHub and npm controls.
+2. Run the full test and package gate from a clean checkout at the intended release commit. Before the
+   tag, inspect the authenticated GitHub `release` environment's secret **names** and confirm that
+   `TAPEBASIS_NPM_STAGE_TOKEN` is listed. Inspect Actions secret names only through the intended GitHub
+   settings controls; never print, retrieve or copy a secret value. The list proves only
+   current name presence, not token validity, scope, expiry or its value during an earlier run. Record
+   each read separately from the release result. If staging fails, inspect the full authenticated log and
+   read back npm before choosing a cause. A collapsed generic `exit code 1`, an old removal record or a
+   later secret list cannot by itself prove that a run received no token. These authenticated release
+   actions use the configured `git credential` helper and the repository's release scripts directly.
+   Do not require sudo or install Homebrew. Never use the browse automation plugin for repository
+   publication or recovery, including settings or secret inspection, deployment approval, workflow
+   dispatch or registry publication. Use the authenticated credential helper, REST endpoints and
+   repository scripts instead. Required human account and two-factor approvals belong to direct user
+   action through the protected GitHub and npm controls, not agent browser automation.
 3. With the npm account that will own the package, run `npm login` interactively. Then publish the
    already tested tarball with `npm publish ./tapebasis-1.0.0.tgz --access public --otp=<current-code>`.
    Complete interactive two-factor authentication as prompted. This is an explicit maintainer action,
